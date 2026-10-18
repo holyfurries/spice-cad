@@ -13,6 +13,10 @@ const EVALUATION_COUNT_MAX: usize = 512;
 
 #[derive(Clone, Copy)]
 enum Operation {
+    Extrude {
+        profile: usize,
+        height: f64,
+    },
     Cylinder {
         origin: [f64; 3],
         radius: f64,
@@ -44,8 +48,12 @@ enum Modification {
 pub(crate) struct Solid(pub(crate) usize);
 impl UserData for Solid {}
 
+struct Profile(usize);
+impl UserData for Profile {}
+
 #[derive(Default)]
 struct Recipe {
+    profiles: Vec<crate::profile::Polygon>,
     operations: Vec<Operation>,
     output: Option<(String, usize)>,
 }
@@ -92,6 +100,36 @@ pub fn compile(source: &str) -> Result<Model, String> {
     });
     let recipe = Rc::new(RefCell::new(Recipe::default()));
     let cad = lua.create_table().map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
+        "polygon",
+        lua.create_function(move |_, points: Table| {
+            let mut recipe = state.borrow_mut();
+            if recipe.profiles.len() >= OPERATION_COUNT_MAX {
+                return Err(mlua::Error::RuntimeError(
+                    "Model exceeds 256 profiles".into(),
+                ));
+            }
+            let polygon = crate::profile::Polygon::from_table(points)?;
+            let index = recipe.profiles.len();
+            recipe.profiles.push(polygon);
+            Ok(Profile(index))
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
+        "extrude",
+        lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
+            options_fields(&options, &["height"])?;
+            let height = dimension(&options, "height")?;
+            let profile = profile.borrow::<Profile>()?.0;
+            push_operation(&state, Operation::Extrude { profile, height })
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
         "box",
@@ -358,6 +396,14 @@ impl Model {
                 return Err("Model exceeds 512 evaluation steps; reduce repeated subtrees".into());
             }
             match self.recipe.operations[index] {
+                Operation::Extrude { profile, height } => {
+                    let polygon = self
+                        .recipe
+                        .profiles
+                        .get(profile)
+                        .ok_or("Missing extrusion profile")?;
+                    bodies.push(kernel.extrude(polygon, height)?);
+                }
                 Operation::Cylinder {
                     origin,
                     radius,

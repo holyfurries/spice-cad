@@ -2,7 +2,26 @@ fn main() {
     let root = std::env::var("SMLIB_ROOT")
         .expect("Enter nix develop to build the native SMLib application");
     let output = std::env::var("OUT_DIR").expect("Cargo provides OUT_DIR");
-    std::fs::write(format!("{output}/spice_smlib_types.h"), "#include <SmApiBrep.h>\n#include <SmVector3d.h>\n#include <cstddef>\nusing SmFailureArray = SmTArray<SmTessellationFailure>;\nstatic_assert(sizeof(SmVector3d) == 24);\nstatic_assert(offsetof(SmVector3d, x) == 0);\nstatic_assert(offsetof(SmVector3d, y) == 8);\nstatic_assert(offsetof(SmVector3d, z) == 16);\n").expect("Write generated ABI declarations");
+    std::fs::write(
+        format!("{output}/spice_smlib_types.h"),
+        r#"
+#include <SmApiBrep.h>
+#include <SmApiGeneral.h>
+#include <SmVector3d.h>
+#include <cstddef>
+#include <memory>
+using SmFailureArray = SmTArray<SmTessellationFailure>;
+using SmCurveArray = SmTArray<SmCurve*>;
+inline std::unique_ptr<SmCurveArray> spice_curve_array() {
+    return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());
+}
+static_assert(sizeof(SmVector3d) == 24);
+static_assert(offsetof(SmVector3d, x) == 0);
+static_assert(offsetof(SmVector3d, y) == 8);
+static_assert(offsetof(SmVector3d, z) == 16);
+"#,
+    )
+    .expect("Write generated ABI declarations");
     cxx_build::bridge("src/kernel.rs")
         .include(output)
         .include(format!("{root}/include"))

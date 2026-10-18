@@ -28,6 +28,7 @@ mod palette;
 mod parameters;
 mod performance;
 mod preview;
+mod profile;
 mod save;
 mod search;
 mod syntax;
@@ -977,6 +978,9 @@ impl eframe::App for Editor {
                         Navigation::Bracket => {
                             example_requested = Some(document::Example::MountingBracket)
                         }
+                        Navigation::ExtrudedBracket => {
+                            example_requested = Some(document::Example::ExtrudedBracket)
+                        }
                     }
                 }
             }
@@ -1043,6 +1047,7 @@ impl eframe::App for Editor {
                         ("Spice rack", document::Example::Rack),
                         ("Mounting bracket", document::Example::MountingBracket),
                         ("Measured block", document::Example::MeasuredBlock),
+                        ("Extruded bracket", document::Example::ExtrudedBracket),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -2327,6 +2332,11 @@ mod tests {
             (0, bracket, [100.0, 50.0, 40.0]),
             (1, changed.as_str(), [120.0, 50.0, 40.0]),
             (2, cavity, [10.0; 3]),
+            (
+                3,
+                include_str!("../../models/extruded-bracket.luau"),
+                [64.0, 42.0, 6.0],
+            ),
         ] {
             let folder =
                 std::env::temp_dir().join(format!("spice-cad-curved-{}", std::process::id()));

@@ -619,6 +619,14 @@ mod tests {
             panic!("Completion result");
         };
         assert!(items.iter().any(|item| item.label == "box"), "{items:?}");
+        assert!(
+            items.iter().any(|item| item.label == "polygon"),
+            "{items:?}"
+        );
+        assert!(
+            items.iter().any(|item| item.label == "extrude"),
+            "{items:?}"
+        );
         let source = Buffer::from(
             "--!strict\nlocal width: number = 'bad'\ncad.show('plate',cad.box({width=10,depth=10,height=10}))",
         );

@@ -39,6 +39,8 @@ mod ffi {
         include!("SmPoly.h");
         include!("SmApiGeneral.h");
         include!("SmApiPrimitives.h");
+        include!("SmApiCurves.h");
+        include!("SmLine.h");
         include!("SmApiBrep.h");
         include!("SmApiQueries.h");
         include!("SmFace.h");
@@ -72,6 +74,22 @@ mod ffi {
         type SmEdgeuse;
         type SmVertexuse;
         type SmEdge;
+        type SmLine;
+        type SmCurveArray;
+        fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
+        unsafe fn Add(self: Pin<&mut SmCurveArray>, curve: *mut SmCurve) -> Result<u64>;
+        unsafe fn SmApiCreateLineSegment(
+            start: &SmVector3d,
+            end: &SmVector3d,
+            result: &mut *mut SmLine,
+        ) -> Result<i64>;
+        unsafe fn SmApiCreateLinearSweep(
+            curves: &SmCurveArray,
+            direction: &SmVector3d,
+            distance: f64,
+            cap: i32,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
         type SmVertex;
         type SmSurfParamType = super::SurfaceParameter;
         type SmOrientType = super::Orientation;
@@ -216,6 +234,7 @@ mod ffi {
     }
     impl UniquePtr<SmBrep> {}
     impl UniquePtr<SmPolyBrep> {}
+    impl UniquePtr<SmLine> {}
 }
 
 static CONTEXT: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -257,6 +276,64 @@ impl Kernel {
         let shape = unsafe { UniquePtr::from_raw(result) };
         if status != 1000 || shape.is_null() {
             return Err(format!("SMLib box failed: {status}"));
+        }
+        Ok(Body {
+            shape,
+            _kernel: self,
+        })
+    }
+
+    pub fn extrude(
+        &self,
+        polygon: &crate::profile::Polygon,
+        height: f64,
+    ) -> Result<Body<'_>, String> {
+        assert!((3..=crate::profile::POINT_COUNT_MAX).contains(&polygon.points.len()));
+        assert!(height.is_finite() && height > 0.0);
+        let mut lines = Vec::with_capacity(polygon.points.len());
+        let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
+        for index in 0..polygon.points.len() {
+            let start = polygon.points[index];
+            let end = polygon.points[(index + 1) % polygon.points.len()];
+            let start = Vector {
+                x: start[0],
+                y: start[1],
+                z: 0.0,
+            };
+            let end = Vector {
+                x: end[0],
+                y: end[1],
+                z: 0.0,
+            };
+            let mut result = std::ptr::null_mut();
+            let status = unsafe { ffi::SmApiCreateLineSegment(&start, &end, &mut result) }
+                .map_err(|error| error.to_string())?;
+            let line = unsafe { UniquePtr::from_raw(result) };
+            if status != 1000 || line.is_null() {
+                return Err(format!("SMLib profile edge failed: {status}"));
+            }
+            unsafe { curves.pin_mut().Add(line.as_ptr().cast_mut().cast()) }
+                .map_err(|error| error.to_string())?;
+            lines.push(line);
+        }
+        let mut result = std::ptr::null_mut();
+        let status = unsafe {
+            ffi::SmApiCreateLinearSweep(
+                &curves,
+                &Vector {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                height,
+                1,
+                &mut result,
+            )
+        }
+        .map_err(|error| error.to_string())?;
+        let shape = unsafe { UniquePtr::from_raw(result) };
+        if status != 1000 || shape.is_null() {
+            return Err(format!("SMLib profile extrusion failed: {status}"));
         }
         Ok(Body {
             shape,

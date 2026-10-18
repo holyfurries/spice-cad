@@ -221,7 +221,7 @@ STEP to `output/native/`. Print parts are checked for closed, oriented meshes,
 P1S bounds, and above-bed overhangs before files are written. This export uses
 the existing OpenCascade implementation; the native SMLib viewport currently
 shows the unsplit rack blank. Joint clearance remains 0.2 mm in the native app.
-Native project files, sketches, feature history, and edge editing are future work.
+Native project files, interactive sketches, feature history, and edge editing are future work.
 
 `src/lib.rs` owns shared rack parameters and the OpenCascade reference model;
 `src/main.rs` remains the export CLI. `native/src/kernel.rs` contains the SMLib
@@ -353,7 +353,32 @@ rotates it about a global axis through the origin, in degrees. Translate after
 rotating when placing a hole. `cad.fillet(solid, { radius = 1 })` applies circular
 fillets to all eligible edges of that solid. Fillet a named feature before
 cutting holes when the hole rims should stay sharp. Selective edge references
-and sketch-profile extrusion are not implemented yet.
+are not implemented yet.
+
+**Examples → Extruded bracket** demonstrates a concave polygon profile, a diagonal
+web, and mounting holes. `cad.polygon(points)` snapshots a closed XY outline;
+list each vertex once, in either winding order. `cad.extrude(profile, { height })`
+creates a capped solid from Z=0 along +Z. Profiles can be reused at different
+heights; existing booleans, fillets, and transforms operate on the resulting solid.
+
+```lua
+local outline = cad.polygon({
+    { x = 0, y = 0 },
+    { x = 40, y = 0 },
+    { x = 40, y = 8 },
+    { x = 8, y = 8 },
+    { x = 8, y = 30 },
+    { x = 0, y = 30 },
+})
+cad.show("L plate", cad.extrude(outline, { height = 6 }))
+```
+
+Each profile accepts 3–128 vertices with finite coordinates within ±2000 mm,
+width/depth at most 1000 mm, and edges at least 0.01 mm long. Self-intersections,
+touching boundaries, repeated closing points, and overlapping edges are rejected.
+Extrusion height is 0.01–1000 mm; models may define at most 256 profiles.
+These profiles use straight segments. Cut holes with subtract; curved profiles,
+nested loops, revolve, and interactive sketch constraints remain future work.
 
 ```lua
 --!strict

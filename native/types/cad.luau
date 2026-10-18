@@ -1,5 +1,6 @@
 type Solid = { _solid: "Solid" }
 type Face = { _face: "Face" }
+type Profile = { _profile: "Profile" }
 type BoxOptions = {
 	width: number,
 	depth: number,
@@ -9,6 +10,8 @@ type BoxOptions = {
 	z: number?,
 }
 local cad: {
+	polygon: ({ { x: number, y: number } }) -> Profile,
+	extrude: (Profile, { height: number }) -> Solid,
 	cylinder: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
 	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
 	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,

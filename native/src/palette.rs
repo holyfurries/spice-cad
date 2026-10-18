@@ -41,6 +41,7 @@ pub enum Command {
     Top,
     Rack,
     Bracket,
+    ExtrudedBracket,
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
@@ -71,6 +72,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Top, "Camera: top view", ""),
     (Command::Rack, "Examples: spice rack", ""),
     (Command::Bracket, "Examples: mounting bracket", ""),
+    (Command::ExtrudedBracket, "Examples: extruded bracket", ""),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
