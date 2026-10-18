@@ -15,6 +15,7 @@ pub fn model_files(source: &str, folder: &Path) -> Result<(), String> {
         );
     }
     let mesh = body.mesh()?;
+    model.annotations(&mesh)?;
     let volume_before = body.volume()?;
     let step = body.step_data(&model.name)?;
     let volume_after = body.volume()?;

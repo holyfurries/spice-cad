@@ -13,6 +13,7 @@ use std::{
 mod analysis;
 mod code_editor;
 mod diagnostics;
+mod dimensions;
 mod document;
 mod export;
 mod files;
@@ -130,7 +131,7 @@ enum Command {
     Export { parameters: RackParameters },
 }
 enum Outcome {
-    Model(Snapshot),
+    Model(Box<Snapshot>),
     Exported(String),
 }
 enum WorkerState {
@@ -154,6 +155,8 @@ impl ModelRevision {
     }
 }
 struct Snapshot {
+    bounds: [glam::Vec3; 2],
+    annotations: dimensions::Annotations,
     editor_revision: Option<u64>,
     edges: Arc<Vec<mesh::EdgeSegment>>,
     saved_at: Option<std::time::SystemTime>,
@@ -190,14 +193,14 @@ impl Worker {
                         Command::ExportScript { source, folder } => export::model_files(&source, &folder).map(|()| Outcome::Exported(format!("Exported native STEP, STL, and source to {}", folder.display()))),
                         Command::Script { source, editor_revision, revision, saved_at } => {
                             let source = source.to_string();
-                            build_script_snapshot(&source, revision).map(|mut snapshot| { snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(snapshot) })
+                            build_script_snapshot(&source, revision).map(|mut snapshot| { snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot)) })
                         }
                         Command::Build {
                             parameters,
                             revision,
                         } => kernel::Kernel::new()
                             .and_then(|kernel| build_snapshot(&kernel, parameters, revision))
-                            .map(Outcome::Model),
+                            .map(|snapshot| Outcome::Model(Box::new(snapshot))),
                         #[cfg(feature = "rack-tools")]
                         Command::Export { parameters } => {
                             export_parts(parameters, std::path::Path::new("output/native"))
@@ -238,6 +241,8 @@ fn build_snapshot(
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        bounds: body.bounds(true)?.map(|point| point.as_vec3()),
+        annotations: dimensions::Annotations::default(),
         editor_revision: None,
         edges: Arc::new(edges),
         saved_at: None,
@@ -268,7 +273,10 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     mesh.smooth_normals();
     let edges = body.edge_segments()?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let annotations = model.annotations(&mesh)?;
     Ok(Snapshot {
+        bounds: body.bounds(true)?.map(|point| point.as_vec3()),
+        annotations,
         editor_revision: None,
         edges: Arc::new(edges),
         saved_at: None,
@@ -365,6 +373,7 @@ struct Editor {
     show_details: bool,
     show_diagnostics: bool,
     show_edges: bool,
+    show_dimensions: bool,
     show_inspector: bool,
     focus_editor: bool,
     show_performance: bool,
@@ -440,6 +449,7 @@ impl Editor {
             show_details: false,
             show_diagnostics: false,
             show_edges: true,
+            show_dimensions: false,
             show_inspector: false,
             focus_editor: false,
             show_performance: false,
@@ -701,7 +711,7 @@ impl Editor {
                                 self.frame_next_model = false;
                             }
                             self.message = "Preview ready".into();
-                            self.snapshot = Some(snapshot);
+                            self.snapshot = Some(*snapshot);
                             self.selected = None;
                         }
                         Ok(Outcome::Exported(message)) => self.message = message,
@@ -1023,6 +1033,7 @@ impl eframe::App for Editor {
                     for (label, example) in [
                         ("Spice rack", document::Example::Rack),
                         ("Mounting bracket", document::Example::MountingBracket),
+                        ("Measured block", document::Example::MeasuredBlock),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -1047,6 +1058,7 @@ impl eframe::App for Editor {
                     });
                     ui.checkbox(&mut self.show_inspector, "Parameters & properties");
                     ui.checkbox(&mut self.show_diagnostics, "Diagnostics");
+                    ui.checkbox(&mut self.show_dimensions, "Measurements & face names");
                 });
                 ui.menu_button("Debug", |ui| {
                     ui.checkbox(&mut self.show_performance, "Performance");
@@ -1324,7 +1336,25 @@ impl eframe::App for Editor {
                     ui.label(format!("Volume {:.3} mm³", snapshot.volume_mm3));
                     ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
                     interface::section(ui, "SELECTION");
-                    ui.label(self.selected.map_or("Click a model face".into(), |face| format!("Face {face}")));
+                    if let Some(face) = self.selected {
+                        ui.label(snapshot.annotations.faces.iter().find(|named| named.id == face).map_or("Unnamed face", |named| named.name.as_str()));
+                        if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
+                            match dimensions::selector(&snapshot.mesh, face) {
+                                Some(selector) => ui.ctx().copy_text(selector),
+                                None => self.message = "This face is not axis-aligned and planar; no selector was copied".into(),
+                            }
+                        }
+                    } else { ui.label("Click a model face"); }
+                    interface::section(ui, "DESIGN CHECKS");
+                    if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
+                        ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
+                    }
+                    let checked = snapshot.annotations.measurements.iter().filter(|measurement| measurement.checked).count();
+                    ui.label(if checked == 0 { "No explicit distance checks".into() } else { format!("{checked} distance checks passed") });
+                    ui.small("Code defines shape. Checks validate declared limits; no constraint solver is active.");
+                    for measurement in &snapshot.annotations.measurements {
+                        ui.label(format!("{} ≈{:.3} mm · {}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }));
+                    }
                 }
                 return;
             }
@@ -1634,6 +1664,9 @@ impl eframe::App for Editor {
                             selected: self.selected,
                         },
                     ));
+                    if self.show_dimensions {
+                        dimensions::draw(ui, rect, matrix, self.camera.eye(), snapshot.bounds, &snapshot.annotations, self.selected);
+                    }
                 }
                 ui.painter().text(
                     rect.left_bottom() + egui::vec2(12.0, -12.0),
@@ -1722,6 +1755,7 @@ impl eframe::App for Editor {
                                 {
                                     self.camera.pitch = 1.55;
                                 }
+                                ui.toggle_value(&mut self.show_dimensions, "Measures").on_hover_text("Show overall dimensions, named faces, and declared distance checks");
                             });
                         });
                 });
@@ -2128,13 +2162,7 @@ impl eframe::App for Editor {
 fn snapshot_camera(snapshot: &Snapshot, aspect: f32) -> viewport::Camera {
     assert!(aspect.is_finite());
     assert!(aspect > 0.0);
-    let mut minimum = glam::Vec3::splat(f32::INFINITY);
-    let mut maximum = glam::Vec3::splat(f32::NEG_INFINITY);
-    for vertex in &snapshot.mesh.vertices {
-        let point = glam::Vec3::from_array(vertex.position);
-        minimum = minimum.min(point);
-        maximum = maximum.max(point);
-    }
+    let [minimum, maximum] = snapshot.bounds;
     let mut camera = viewport::Camera::rack((maximum - minimum).as_dvec3().to_array());
     camera.target = (minimum + maximum) / 2.0;
     camera.distance /= aspect.min(1.0);

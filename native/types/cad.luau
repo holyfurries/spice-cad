@@ -1,4 +1,5 @@
 type Solid = { _solid: "Solid" }
+type Face = { _face: "Face" }
 type BoxOptions = {
 	width: number,
 	depth: number,
@@ -16,5 +17,7 @@ local cad: {
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
 	show: (string, Solid) -> (),
+	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number? }) -> Face,
+	measure: (string, { from: Face, to: Face, min: number?, max: number? }) -> (),
 } =
 	nil :: any

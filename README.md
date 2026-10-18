@@ -274,7 +274,7 @@ The header separates navigation from document actions. **Code**, **Split** and
 **Model** switch between editor focus, side-by-side editing and viewport focus
 (Ctrl+1 / Ctrl+2 / Ctrl+3). Drag the Code pane boundary to resize it.
 **View** controls Properties and Diagnostics. Diagnostics start collapsed;
-the footer shows checking progress or issue counts. Click that indicator or
+errors keep the workspace layout unchanged. The footer shows checking progress or issue counts. Click that indicator or
 press Ctrl+Shift+J to open the full list. The footer also shows the current Vim mode
 and cursor position. A viewport badge distinguishes a current preview from
 pending changes or errors. Run previews unsaved edits; Save writes the file
@@ -291,7 +291,8 @@ and the Auto Preview toggle, are available through the command palette.
 Vim-style modal keys are enabled by default and can be toggled in **Editor**.
 Escape enters Normal mode; `i`/`a` enter Insert, `v`/`V` select, and `h/j/k/l`,
 `w/b/e`, `0/^/$`, `gg/G` move with optional counts. Supported edits include
-`d/c/y` with motions, `dd/cc/yy`, `x`, `p/P`, `u` and Ctrl+R. Commands include
+`d/c/y` with motions, `dd/cc/yy`, `x`, `p/P`, `r` followed by a replacement character
+(including Visual and Visual Line selections), `u` and Ctrl+R. Commands include
 `:w`, `:q`, `:wq`, `:e [path]` and `:run`. These are native modal keys rather
 than embedded Neovim; plugins, macros and full Vim command compatibility are not provided.
 
@@ -460,6 +461,52 @@ The rope buffer, visible-text rendering path, and reproducible large-file
 benchmark are described in [editor performance](evaluation/editor-performance.md).
 Background checking, diagnostic navigation, and resource budgets are described
 in [the diagnostics workflow](evaluation/diagnostics.md).
+
+### Measurements and named faces
+
+Open **Examples → Measured block**, then click **Measures** in the viewport toolbar
+or enable **View → Measurements & face names**. The overlay shows overall X/Y/Z
+dimensions, named faces, and declared measurements. Selecting a face shows its
+name in Properties; **Copy face selector** copies a Luau expression for an
+axis-aligned planar face. Replace `part` with your final solid variable and choose
+a unique name.
+
+Dimension styling follows [Plasticity's Dimension demo](https://doc.plasticity.xyz/common/dimension):
+thin extension lines, small green values aligned with the projected edges, and
+blue text on a dark highlight when hovered or associated with a selected face.
+Overall dimensions sit along the near edges, and a declared measurement matching
+an overall extent shares its label. Names and check results appear in Properties
+and dimension tooltips; the selected face name appears on the model. Labels are
+read-only; edit the Luau source or parameter fields to change the model.
+
+```lua
+local part = cad.box({ width = 40, depth = 30, height = 20 })
+local top = cad.face(part, { name = "top", normal = "z+" })
+local bottom = cad.face(part, { name = "bottom", normal = "z-" })
+cad.measure("height", { from = bottom, to = top, min = 2, max = 25 })
+cad.show("Measured block", part)
+```
+
+Face references select the final output solid by outward normal (`x+`, `x-`,
+`y+`, `y-`, `z+`, `z-`), with optional `at` for the coordinate along that axis.
+Selectors must resolve to exactly one planar face. Missing or ambiguous faces
+fail the build; face indices are never persistent identifiers. Names and selectors
+are reevaluated after every rebuild. Intermediate solids, oblique/curved face
+selectors, and propagation of names through later operations are not supported.
+Face handles currently feed measurements; face-based modeling operations are not
+implemented.
+
+`cad.measure` reports perpendicular separation between parallel face planes.
+Without `min`/`max` it is a reference dimension; with either limit it becomes an
+explicit design check. Failed checks preserve the last valid preview and block
+export. Properties distinguishes reference dimensions from passed checks and
+marks measurements from an older preview. A code-defined shape is deterministic;
+that alone does not prove clearance, fit, or manufacturability. There is no sketch
+constraint solver or automatic fully-constrained classification.
+
+These measurements use the preview mesh, display `≈`, and allow 0.001 mm tolerance
+when resolving planes and checking limits. They are bounded preview checks, not
+exact kernel metrology. Up to 64 named faces and 64 measurements are supported.
 
 ### Startup and responsiveness
 

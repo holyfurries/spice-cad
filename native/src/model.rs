@@ -41,7 +41,7 @@ enum Modification {
 }
 
 #[derive(Clone, Copy)]
-struct Solid(usize);
+pub(crate) struct Solid(pub(crate) usize);
 impl UserData for Solid {}
 
 #[derive(Default)]
@@ -52,6 +52,7 @@ struct Recipe {
 
 pub struct Model {
     recipe: Recipe,
+    definitions: crate::dimensions::Definitions,
     pub name: String,
     pub analysis_ms: f64,
     pub script_ms: f64,
@@ -247,6 +248,7 @@ pub fn compile(source: &str) -> Result<Model, String> {
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    let definitions = crate::dimensions::register(&lua, &cad).map_err(|error| error.to_string())?;
     cad.set_readonly(true);
     lua.globals()
         .set("cad", cad)
@@ -277,13 +279,14 @@ pub fn compile(source: &str) -> Result<Model, String> {
         .clone();
     Ok(Model {
         recipe,
+        definitions: std::mem::take(&mut *definitions.borrow_mut()),
         name,
         analysis_ms,
         script_ms: started.elapsed().as_secs_f64() * 1000.0,
     })
 }
 
-fn options_fields(options: &Table, names: &[&str]) -> mlua::Result<()> {
+pub(crate) fn options_fields(options: &Table, names: &[&str]) -> mlua::Result<()> {
     for pair in options.clone().pairs::<String, mlua::Value>() {
         let (name, _) = pair?;
         if !names.contains(&name.as_str()) {
@@ -334,6 +337,15 @@ fn push_operation(recipe: &RefCell<Recipe>, operation: Operation) -> mlua::Resul
 }
 
 impl Model {
+    pub fn annotations(
+        &self,
+        mesh: &crate::mesh::Mesh,
+    ) -> Result<crate::dimensions::Annotations, String> {
+        self.definitions.resolve(
+            mesh,
+            self.recipe.output.as_ref().ok_or("Missing model output")?.1,
+        )
+    }
     pub fn build<'kernel>(&self, kernel: &'kernel Kernel) -> Result<Body<'kernel>, String> {
         let output = self.recipe.output.as_ref().ok_or("Missing model output")?.1;
         assert!(output < self.recipe.operations.len());
