@@ -8,6 +8,16 @@ The native workspace uses a charcoal palette, a resizable code pane, viewport ca
 
 The editor shapes only visible rows and columns. Its galley cache retains the current viewport, clears on edits, syntax results or scale changes, and bounds individual line slices to 4,096 characters. A pathological long line does not trigger whole-line layout. Dirty state and preview/export eligibility compare revision IDs in constant time. Background workers flatten their own source snapshots; ordinary editing does not flatten the document on the UI thread. Saving streams rope chunks to an atomic replacement file; external-edit checks remain in place. The watcher checks metadata before reading unchanged files.
 
+Horizontal clipping uses cumulative glyph advances rather than character count.
+The syntax worker indexes tab and non-ASCII positions. Visible lines cache prefix
+widths; binary searches locate both a prefix and its visible character window.
+While syntax is pending, a visible line builds its own temporary index, skipping
+plain ASCII rope chunks. That index is reused until the revision changes. Lines
+up to 256 characters keep their complete layout to preserve shaping context;
+longer lines retain viewport-sized slices. Missing glyphs use the rendered
+monospace replacement width. Pointer picking, selection, and cursor reveal share
+the same line origins. Width resets after source edits.
+
 Tree-sitter reads rope chunks directly on a separate worker. A single pending snapshot replaces superseded work, and parsing cancels when its revision becomes stale. An edit supplies Tree-sitter byte/point metadata for incremental parsing; undo and missed revisions fall back to a worker-side full parse. Highlight queries cover visible text only, with bounded matches and captures. Until a matching syntax tree arrives, the editor renders plain text. Native modal keys edit the same rope and history rather than maintaining a second editor buffer.
 
 Editing, saving, and execution accept sources up to 16 MiB of UTF-8. The former independent 32 KiB execution cap has been removed. The VM retains its 8 MiB memory limit and 250 ms script budget. Background checking is debounced and runs on a dedicated worker with a single pending rope snapshot; it does not copy the document on the UI thread or rebuild geometry. Analysis has separate time, address-space, and diagnostic-output budgets. Large-file editing does not imply that arbitrarily expensive programs can execute.
@@ -19,6 +29,11 @@ nix develop -c cargo run --release --locked -p spice-cad --example editor-benchm
 ```
 
 The benchmark constructs each rope from an existing string, performs 2,000 distributed single-character insertions, exercises bounded undo/redo, then measures 200 editor UI frames after edits with a 440 × 800 viewport. Five warm-up frames are excluded. These are CPU measurements without disk I/O, GPU drawing, presentation or native-window startup.
+
+A release run on 2026-10-18 after the scrolling fixes measured editor-frame p95
+at 0.104 ms for 100,000 lines and 0.144 ms for one million characters on one line.
+Insertion p95 was 6.03 µs and 3.09 µs respectively. Results are local CPU timings,
+not end-to-end input latency; the log is `output/native/dimensions-editor-benchmark.log`.
 
 One local release run on 2026-10-17, before the Tree-sitter/LSP additions, produced:
 

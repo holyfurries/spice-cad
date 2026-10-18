@@ -280,7 +280,7 @@ impl Session {
         });
         egui::ScrollArea::vertical()
             .id_salt("diagnostics_list")
-            .max_height(160.0)
+            .max_height(ui.available_height().max(0.0))
             .show(ui, |ui| {
                 match &self.phase {
                     Phase::Ready(Ok(report)) => {

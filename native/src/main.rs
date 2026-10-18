@@ -710,7 +710,6 @@ impl Editor {
                                 (&mut self.diagnostics, run_revision)
                             {
                                 diagnostics.run_failed(revision, &error);
-                                self.show_diagnostics = true;
                             }
                             self.message = error;
                         }

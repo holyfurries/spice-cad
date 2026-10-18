@@ -21,6 +21,7 @@ enum Pending {
     #[default]
     None,
     Go,
+    Replace,
     Operator(Operator, usize),
     Leader,
     LeaderFiles,
@@ -150,6 +151,43 @@ impl State {
                 return None;
             }
             self.error = None;
+            if matches!(self.pending, Pending::Replace) {
+                self.pending = Pending::None;
+                let visual = matches!(self.mode, Mode::Visual | Mode::VisualLine);
+                let range = if visual {
+                    self.selection(source, *cursor, *anchor)
+                } else {
+                    let (_, end) = line_bounds(source, *cursor);
+                    let count = self.count.max(1);
+                    if count > end.saturating_sub(*cursor) {
+                        self.count = 0;
+                        continue;
+                    }
+                    *cursor..*cursor + count
+                };
+                self.count = 0;
+                let mut replacement = String::with_capacity(range.len().min(SIZE_BYTES_MAX));
+                for original in source.rope.slice(range.clone()).chars() {
+                    replacement.push(if matches!(original, '\n' | '\r') {
+                        original
+                    } else {
+                        character
+                    });
+                    if replacement.len() > SIZE_BYTES_MAX {
+                        break;
+                    }
+                }
+                if replacement.len() <= SIZE_BYTES_MAX
+                    && source.replace(range.clone(), &replacement, *cursor)
+                {
+                    *cursor = range.start;
+                    *anchor = *cursor;
+                    self.mode = Mode::Normal;
+                } else {
+                    self.error = Some("Replacement exceeds the document limit");
+                }
+                continue;
+            }
             if character.is_ascii_digit() && (character != '0' || self.count > 0) {
                 self.count =
                     (self.count * 10 + character.to_digit(10).expect("Digit") as usize).min(10_000);
@@ -274,6 +312,10 @@ impl State {
                 continue;
             }
             match character {
+                'r' => {
+                    self.pending = Pending::Replace;
+                    self.count = count;
+                }
                 '/' | '?' => {
                     return Some(Action::Find {
                         backward: character == '?',
@@ -595,6 +637,35 @@ fn motion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replace_visual_unicode_lines_digits_and_cancel_without_touching_register() {
+        let mut source = Buffer::from("abλ\ncd\r\nef");
+        let mut state = State::default();
+        state.enable(true);
+        state.register = "saved yank".into();
+        let (mut cursor, mut anchor) = (0, 0);
+        state.text("vllr7", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "777\ncd\r\nef");
+        assert!(state.mode == Mode::Normal);
+        assert_eq!(state.register, "saved yank");
+        state.text("uVjrλ", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "λλλ\nλλ\r\nef");
+        state.text("u", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "abλ\ncd\r\nef");
+        cursor = 2;
+        anchor = cursor;
+        state.text("vhh", &mut source, &mut cursor, &mut anchor);
+        state.text("r", &mut source, &mut cursor, &mut anchor);
+        state.text("_", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "___\ncd\r\nef");
+        state.text("u3rX", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "XXX\ncd\r\nef");
+        state.text("vr", &mut source, &mut cursor, &mut anchor);
+        state.escape(&source, &mut cursor, &mut anchor);
+        state.text("l", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "XXX\ncd\r\nef");
+        assert!(state.mode == Mode::Normal);
+    }
     #[test]
     fn leader_keys_dispatch_native_actions_without_editing_source() {
         let mut source = Buffer::from("unchanged\n");

@@ -1,10 +1,31 @@
 use crate::text_buffer::{Buffer, Change};
 use eframe::egui::{self, Color32, FontId, TextFormat, text::LayoutJob};
+use std::collections::BTreeMap;
 use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator, Tree};
+
+pub fn collect_special_columns(line: ropey::RopeSlice<'_>) -> Vec<(u32, char)> {
+    assert!(line.len_bytes() <= crate::text_buffer::SIZE_BYTES_MAX);
+    let mut positions = Vec::new();
+    let mut column = 0_u32;
+    for chunk in line.chunks() {
+        if chunk.is_ascii() && !chunk.contains('\t') {
+            column += chunk.len() as u32;
+            continue;
+        }
+        for character in chunk.chars() {
+            if character == '\t' || !character.is_ascii() {
+                positions.push((column, character));
+            }
+            column += 1;
+        }
+    }
+    assert!(column as usize == line.len_chars());
+    positions
+}
 
 struct Job {
     revision: u64,
@@ -16,6 +37,7 @@ struct Snapshot {
     source: ropey::Rope,
     tree: Tree,
     parameters: Vec<crate::parameters::Parameter>,
+    special_columns: BTreeMap<usize, Vec<(u32, char)>>,
 }
 #[derive(Default)]
 struct Slots {
@@ -97,8 +119,19 @@ impl Worker {
                         source: job.source.clone(),
                         tree: tree.clone(),
                         parameters: Vec::new(),
+                        special_columns: BTreeMap::new(),
                     });
                     let parameters = crate::parameters::extract(&job.source, &tree);
+                    let mut special_columns = BTreeMap::new();
+                    for (line, text) in job.source.lines().enumerate() {
+                        if current.load(Ordering::Acquire) != job.revision {
+                            break;
+                        }
+                        let columns = collect_special_columns(text);
+                        if !columns.is_empty() {
+                            special_columns.insert(line, columns);
+                        }
+                    }
                     let mut slots = shared.0.lock().expect("Syntax slots");
                     if current.load(Ordering::Acquire) != job.revision {
                         continue;
@@ -108,6 +141,7 @@ impl Worker {
                         source: job.source,
                         tree,
                         parameters,
+                        special_columns,
                     });
                     drop(slots);
                     context.request_repaint();
@@ -143,6 +177,19 @@ pub struct State {
     pub error: Option<String>,
 }
 impl State {
+    pub fn special_columns(&self, revision: u64, line: usize) -> Option<&[(u32, char)]> {
+        self.snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.revision == revision)?
+            .special_columns
+            .get(&line)
+            .map(Vec::as_slice)
+    }
+    pub fn ready(&self, revision: u64) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.revision == revision)
+    }
     pub fn parameters(&self, revision: u64) -> Option<&[crate::parameters::Parameter]> {
         self.snapshot
             .as_ref()

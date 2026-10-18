@@ -40,6 +40,7 @@ pub struct State {
     composition: String,
     pub error: Option<&'static str>,
     lines: BTreeMap<(usize, usize, usize), Arc<egui::Galley>>,
+    advances: BTreeMap<usize, Vec<(u32, f32)>>,
 }
 
 impl State {
@@ -512,6 +513,10 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
         || state.pixels_per_point != ui.ctx().pixels_per_point()
     {
         state.lines.clear();
+        state.advances.clear();
+        if state.revision != source.revision {
+            state.width = available.width();
+        }
         state.revision = source.revision;
         state.pixels_per_point = ui.ctx().pixels_per_point();
     }
@@ -530,17 +535,43 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 .saturating_add(1)
                 .min(line_count)
                 .min(first.saturating_add(512));
-            let column_first = ((viewport.min.x - gutter).max(0.0) / char_width).floor() as usize;
             let columns = ((viewport.width() / char_width).ceil() as usize)
                 .saturating_add(8)
                 .min(4096);
             let mut visible_keys = Vec::new();
+            let mut origins = BTreeMap::new();
+            let mut cursor_x = None;
             for line in first..last {
                 let slice = source.rope.line(line);
-                let length = slice.len_chars();
-                let column_start = column_first.min(length);
-                let column_end = (column_start + columns.min(4096)).min(length);
-                state.width = state.width.max(gutter + length as f32 * char_width + 32.0);
+                let length = line_length(slice);
+                let advances = state.advances.entry(line).or_insert_with(|| {
+                    line_advances(ui, &font, char_width, &state.syntax, source, line)
+                });
+                let width = |column: usize| prefix_width(column, char_width, advances);
+                let column_start = if length <= 256 {
+                    0
+                } else {
+                    let left = (viewport.min.x - gutter).max(0.0);
+                    let mut first = 0;
+                    let mut last = length;
+                    while first < last {
+                        let middle = first + (last - first).div_ceil(2);
+                        if width(middle) <= left {
+                            first = middle;
+                        } else {
+                            last = middle - 1;
+                        }
+                    }
+                    first
+                };
+                let column_end = if length <= 256 {
+                    length
+                } else {
+                    (column_start + columns).min(length)
+                };
+                let origin = width(column_start);
+                origins.insert(line, origin);
+                state.width = state.width.max(gutter + width(length) + 32.0);
                 let key = (line, column_start, column_end);
                 visible_keys.push(key);
                 state.lines.entry(key).or_insert_with(|| {
@@ -565,10 +596,7 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                         {
                             let galley = &state.lines[&(line, column_start, column_end)];
                             let position = rect.min
-                                + egui::vec2(
-                                    gutter + column_start as f32 * char_width,
-                                    line as f32 * row_height,
-                                );
+                                + egui::vec2(gutter + origins[&line], line as f32 * row_height);
                             let column: usize =
                                 galley.cursor_from_pos(pointer - position).index.into();
                             let slice = source.rope.line(line);
@@ -603,11 +631,8 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
             for &(line, column_start, column_end) in &visible_keys {
                 let start = source.rope.line_to_char(line);
                 let galley = Arc::clone(&state.lines[&(line, column_start, column_end)]);
-                let position = rect.min
-                    + egui::vec2(
-                        gutter + column_start as f32 * char_width,
-                        line as f32 * row_height,
-                    );
+                let position =
+                    rect.min + egui::vec2(gutter + origins[&line], line as f32 * row_height);
                 let row = egui::Rect::from_min_size(
                     egui::pos2(rect.left() + viewport.min.x, position.y),
                     egui::vec2(viewport.width(), row_height),
@@ -669,6 +694,7 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                         let x = galley
                             .pos_from_cursor(egui::text::CCursor::new(column - column_start))
                             .left();
+                        cursor_x = Some(origins[&line] + x);
                         let block =
                             state.modal.enabled && state.modal.mode != crate::modal::Mode::Insert;
                         let caret = egui::Rect::from_min_size(
@@ -740,19 +766,21 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
             }
             if state.reveal {
                 let column = state.cursor - source.rope.line_to_char(cursor_line);
+                let x = cursor_x.unwrap_or_else(|| {
+                    let advances = state.advances.entry(cursor_line).or_insert_with(|| {
+                        line_advances(ui, &font, char_width, &state.syntax, source, cursor_line)
+                    });
+                    prefix_width(column, char_width, advances)
+                });
                 let caret = egui::Rect::from_min_size(
-                    rect.min
-                        + egui::vec2(
-                            gutter + column as f32 * char_width,
-                            cursor_line as f32 * row_height,
-                        ),
+                    rect.min + egui::vec2(gutter + x, cursor_line as f32 * row_height),
                     egui::vec2(2.0, row_height),
                 );
                 let margin = (SCROLL_MARGIN_LINES as f32 * row_height)
                     .min(viewport.height() / 2.0 - row_height / 2.0)
                     .max(0.0);
                 ui.scroll_to_rect(
-                    caret.expand2(egui::vec2(8.0, margin)),
+                    caret.expand2(egui::vec2(gutter + 8.0, margin)),
                     if state.center_cursor {
                         Some(egui::Align::Center)
                     } else {
@@ -771,8 +799,55 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 egui::Stroke::new(1.0, crate::interface::BORDER),
             );
             state.lines.retain(|key, _| visible_keys.contains(key));
+            state
+                .advances
+                .retain(|line, _| visible_keys.iter().any(|key| key.0 == *line));
         });
     source.revision != before
+}
+fn prefix_width(column: usize, character_width: f32, advances: &[(u32, f32)]) -> f32 {
+    assert!(character_width > 0.0);
+    assert!(column <= crate::text_buffer::SIZE_BYTES_MAX);
+    let index = advances.partition_point(|(position, _)| (*position as usize) < column);
+    column as f32 * character_width + index.checked_sub(1).map_or(0.0, |index| advances[index].1)
+}
+
+fn line_advances(
+    ui: &mut egui::Ui,
+    font: &FontId,
+    character_width: f32,
+    syntax: &crate::syntax::State,
+    source: &Buffer,
+    line: usize,
+) -> Vec<(u32, f32)> {
+    let pending;
+    let special = if syntax.ready(source.revision) {
+        syntax
+            .special_columns(source.revision, line)
+            .unwrap_or_default()
+    } else {
+        pending = crate::syntax::collect_special_columns(source.rope.line(line));
+        &pending
+    };
+    let mut widths = BTreeMap::new();
+    let mut extra = 0.0;
+    ui.fonts_mut(|fonts| {
+        special
+            .iter()
+            .map(|(column, character)| {
+                let width = widths.entry(*character).or_insert_with(|| {
+                    let width = fonts.glyph_width(font, *character);
+                    if width == 0.0 && !fonts.has_glyph(font, *character) {
+                        character_width
+                    } else {
+                        width
+                    }
+                });
+                extra += *width - character_width;
+                (*column, extra)
+            })
+            .collect()
+    })
 }
 fn line_length(line: ropey::RopeSlice<'_>) -> usize {
     let mut length = line.len_chars();
@@ -788,6 +863,84 @@ fn line_length(line: ropey::RopeSlice<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn horizontal_offsets_preserve_tabs_and_short_line_glyph_positions() {
+        assert_eq!(prefix_width(3, 8.0, &[(0, 24.0), (2, 48.0)]), 72.0);
+        assert_eq!(prefix_width(2, 8.0, &[(0, 24.0), (2, 48.0)]), 40.0);
+        let mut source = Buffer::from("\tfirst\n    second\n\t\tλ third");
+        let mut state = State::default();
+        let context = egui::Context::default();
+        for offset in [0.0, 40.0, 75.0, 0.0] {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![
+                            egui::Event::PointerMoved(egui::pos2(45.0, 60.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: egui::vec2(-offset, 0.0),
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_max_size(egui::vec2(80.0, 200.0));
+                        show(ui, &mut source, &mut state);
+                        for (key, galley) in &state.lines {
+                            assert_eq!(key.1, 0);
+                            assert_eq!(
+                                galley.job.text,
+                                source.rope.line(key.0).to_string().trim_end_matches('\n')
+                            );
+                        }
+                    },
+                )
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn virtualized_prefix_offsets_match_shaped_tabs_and_fallback_glyphs() {
+        let source = Buffer::from("\t A λ 😀 text ".repeat(400));
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                let font = FontId::monospace(14.0);
+                let galley = ui.fonts_mut(|fonts| {
+                    fonts.layout_job(crate::syntax::State::default().layout(
+                        &source,
+                        0..source.rope.len_bytes(),
+                        font.clone(),
+                    ))
+                });
+                let width = ui.fonts_mut(|fonts| fonts.glyph_width(&font, 'M'));
+                let advances = line_advances(
+                    ui,
+                    &font,
+                    width,
+                    &crate::syntax::State::default(),
+                    &source,
+                    0,
+                );
+                for column in [12, 80, 1000, 4000] {
+                    let expected: f64 = galley.rows[0]
+                        .row
+                        .glyphs
+                        .iter()
+                        .take(column)
+                        .map(|glyph| f64::from(glyph.advance_width))
+                        .sum();
+                    let actual = prefix_width(column, width, &advances);
+                    assert!(
+                        (f64::from(actual) - expected).abs() <= 0.1,
+                        "Column {column}: {actual} vs shaped {expected}"
+                    );
+                }
+            })
+            .drop_without_applying_deltas();
+    }
 
     #[test]
     fn focus_requests_wait_for_modals_and_restore_keyboard_editing_after_close() {
