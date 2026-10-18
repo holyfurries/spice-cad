@@ -486,6 +486,14 @@ rotated rectangles retain their actual side lengths. Curved faces report X/Y/Z
 extents, not surface lengths. Small dimensions use extended leaders so an 8 mm
 lip remains readable at the rack's overall scale.
 
+Click within 6 screen points of a visible edge to highlight and inspect it.
+Straight edges show their length; circular edges and arcs show **R** (radius)
+and **Ø** (diameter), both on the model and in Properties. Click inside a face
+to return to face inspection. Edge picking follows **Display → Surface edges**;
+Shift-click continues to select faces for separation measurements.
+These are approximate reference measurements from evaluated CAD curves. Other
+curve types remain selectable but do not report a length or radius.
+
 **Shift-click a second parallel planar face** to measure perpendicular separation.
 For lip height, select the lip top and its tread: the reference measurement is
 8 mm in the rack example. The first face is orange and the second blue.

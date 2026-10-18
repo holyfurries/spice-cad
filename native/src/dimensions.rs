@@ -339,15 +339,24 @@ pub fn draw(
     if let Some(selection) = selected {
         let spans = selection.spans();
         let ids = selection.ids();
-        let local = spans.iter().flatten().map(|span| DisplayDimension {
-            direction: span.direction,
-            points: span.points,
-            name: span.direction,
-            distance_mm: span.distance_mm,
-            checked: false,
-            selected: true,
-            offset_px: 24.0,
-        });
+        let local = spans
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(index, span)| DisplayDimension {
+                direction: span.direction,
+                points: span.points,
+                name: span.direction,
+                distance_mm: span.distance_mm,
+                checked: false,
+                selected: true,
+                offset_px: 24.0
+                    + if matches!(selection, crate::inspection::Selection::Edge(_)) {
+                        index as f32 * 28.0
+                    } else {
+                        0.0
+                    },
+            });
         let related = annotations
             .measurements
             .iter()
@@ -365,11 +374,11 @@ pub fn draw(
                 offset_px: 48.0,
             });
         draw_dimensions(ui, rect, matrix, selection.center(), local.chain(related));
-        if let Some(face) = annotations
-            .faces
-            .iter()
-            .find(|face| face.id == selection.latest().id)
-        {
+        if let Some(face) = annotations.faces.iter().find(|face| {
+            selection
+                .latest()
+                .is_some_and(|selected| face.id == selected.id)
+        }) {
             if let Some(position) = project(face.point) {
                 ui.painter().with_clip_rect(rect).text(
                     position + egui::vec2(5.0, -5.0),
@@ -503,7 +512,12 @@ fn draw_dimensions<'a>(
         if angle < -std::f32::consts::FRAC_PI_2 {
             angle += std::f32::consts::PI;
         }
-        let text = format!("≈{:.2} mm", dimension.distance_mm);
+        let prefix = match dimension.direction {
+            "Radius" => "R ",
+            "Diameter" => "Ø ",
+            _ => "",
+        };
+        let text = format!("{prefix}≈{:.2} mm", dimension.distance_mm);
         let galley =
             painter.layout_no_wrap(text, egui::FontId::monospace(15.0), egui::Color32::WHITE);
         let rotation = egui::emath::Rot2::from_angle(angle);

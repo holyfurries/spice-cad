@@ -20,6 +20,12 @@ pub struct Mesh {
     pub face_count: u32,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Hit {
+    pub face_id: u32,
+    pub position: Vec3,
+}
+
 impl Mesh {
     pub fn smooth_normals(&mut self) {
         let mut normals = std::collections::BTreeMap::new();
@@ -103,7 +109,7 @@ impl Mesh {
             .sum()
     }
 
-    pub fn pick(&self, matrix: Mat4, position: [f32; 2]) -> Option<u32> {
+    pub fn pick(&self, matrix: Mat4, position: [f32; 2]) -> Option<Hit> {
         let inverse = matrix.inverse();
         let origin = inverse.project_point3(Vec3::new(position[0], position[1], 0.0));
         let direction =
@@ -121,18 +127,21 @@ impl Mesh {
             }
             let offset = origin - points[0];
             let u = offset.dot(cross) / determinant;
-            if !(0.0..=1.0).contains(&u) {
+            if !(-1e-5..=1.0 + 1e-5).contains(&u) {
                 continue;
             }
             let other = offset.cross(edge1);
             let v = direction.dot(other) / determinant;
-            if v < 0.0 || u + v > 1.0 {
+            if v < -1e-5 || u + v > 1.0 + 1e-5 {
                 continue;
             }
             let distance = edge2.dot(other) / determinant;
             if distance >= 0.0 && distance < closest {
                 closest = distance;
-                selected = Some(triangle[0].face_id);
+                selected = Some(Hit {
+                    face_id: triangle[0].face_id,
+                    position: origin + direction * distance,
+                });
             }
         }
         selected

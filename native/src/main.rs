@@ -156,6 +156,7 @@ impl ModelRevision {
     }
 }
 struct Snapshot {
+    inspected_edges: Vec<inspection::Edge>,
     faces: std::collections::BTreeMap<u32, inspection::Face>,
     bounds: [glam::Vec3; 2],
     annotations: dimensions::Annotations,
@@ -239,16 +240,17 @@ fn build_snapshot(
     let start = Instant::now();
     let mut mesh = body.mesh()?;
     mesh.smooth_normals();
-    let edges = body.edge_segments()?;
+    let edges = body.edges()?;
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        inspected_edges: edges.items,
         faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
         annotations: dimensions::Annotations::default(),
         editor_revision: None,
-        edges: Arc::new(edges),
+        edges: Arc::new(edges.segments),
         saved_at: None,
         analysis_ms: 0.0,
         script_ms: 0.0,
@@ -275,16 +277,17 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let start = Instant::now();
     let mut mesh = body.mesh()?;
     mesh.smooth_normals();
-    let edges = body.edge_segments()?;
+    let edges = body.edges()?;
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let annotations = model.annotations(&mesh)?;
     Ok(Snapshot {
+        inspected_edges: edges.items,
         faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
         annotations,
         editor_revision: None,
-        edges: Arc::new(edges),
+        edges: Arc::new(edges.segments),
         saved_at: None,
         analysis_ms: model.analysis_ms,
         script_ms: model.script_ms,
@@ -1343,19 +1346,28 @@ impl eframe::App for Editor {
                     ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
                     interface::section(ui, "SELECTION");
                     if let Some(selection) = &self.selected {
-                        let face = selection.latest().id;
-                        ui.label(snapshot.annotations.faces.iter().find(|named| named.id == face).map_or("Unnamed face", |named| named.name.as_str()));
-                        ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
+                        if let Some(latest) = selection.latest() {
+                            ui.label(snapshot.annotations.faces.iter().find(|named| named.id == latest.id).map_or("Unnamed face", |named| named.name.as_str()));
+                            ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
+                        } else {
+                            ui.label("Selected edge");
+                            ui.small("Reference measurements · evaluated CAD curve");
+                            if selection.spans().iter().all(Option::is_none) {
+                                ui.small("This curve is neither straight nor circular; no length or radius is reported.");
+                            }
+                        }
                         for span in selection.spans().into_iter().flatten() {
                             ui.label(format!("{} ≈{:.3} mm", span.direction, span.distance_mm));
                         }
-                        if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
-                            match dimensions::selector(&snapshot.mesh, face) {
-                                Some(selector) => ui.ctx().copy_text(selector),
-                                None => self.message = "This face is not axis-aligned and planar; no selector was copied".into(),
+                        if let Some(face) = selection.latest() {
+                            if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
+                                match dimensions::selector(&snapshot.mesh, face.id) {
+                                    Some(selector) => ui.ctx().copy_text(selector),
+                                    None => self.message = "This face is not axis-aligned and planar; no selector was copied".into(),
+                                }
                             }
                         }
-                    } else { ui.label("Click a model face to see its dimensions"); }
+                    } else { ui.label("Click a model face or edge to see its dimensions"); }
                     ui.small("Shift-click a parallel planar face to measure separation. Click empty space to clear.");
                     interface::section(ui, "DESIGN CHECKS");
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
@@ -1397,7 +1409,7 @@ impl eframe::App for Editor {
                 ui.label(format!("Volume {:.0} mm³", snapshot.volume_mm3));
                 if snapshot.source != ModelSource::Rack(self.parameters) { ui.colored_label(interface::WARNING, "Showing the previous valid geometry"); }
             }
-            ui.separator(); ui.label(self.selected.as_ref().map_or("Click a face to select".into(), |selection| format!("Selected face {}", selection.latest().id)));
+            ui.separator(); ui.label(self.selected.as_ref().map_or("Click a face or edge to select".into(), |selection| selection.latest().map_or("Selected edge".into(), |face| format!("Selected face {}", face.id))));
             ui.separator(); ui.small("Preview: rack blank. Print export adds the splitting joints. Joint clearance: 0.2 mm.");
             ui.small("Export uses OpenCascade for STEP and verified print geometry. Print and dry-fit the samples first.");
         });
@@ -1649,16 +1661,19 @@ impl eframe::App for Editor {
                     );
                     if response.clicked() {
                         if let Some(position) = response.interact_pointer_pos() {
-                            let picked = snapshot.mesh.pick(
-                                matrix,
-                                [
-                                    (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
-                                    1.0 - (position.y - rect.top()) / rect.height() * 2.0,
-                                ],
-                            );
-                            if let Some(id) = picked {
-                                let face = *snapshot.faces.get(&id).expect("Mesh face inspection cache");
-                                match inspection::Selection::select(self.selected.as_ref(), face, ui.input(|input| input.modifiers.shift)) {
+                            let extend = ui.input(|input| input.modifiers.shift);
+                            let edge = if self.show_edges && !extend {
+                                inspection::pick_edge(&snapshot.inspected_edges, &snapshot.edges, &snapshot.mesh, matrix, [rect.width(), rect.height()], [position.x - rect.left(), position.y - rect.top()])
+                            } else { None };
+                            if let Some(edge) = edge {
+                                self.selected = Some(inspection::Selection::Edge(edge));
+                                self.message = "Edge dimensions · reference measurements".into();
+                            } else if let Some(hit) = snapshot.mesh.pick(matrix, [
+                                (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
+                                1.0 - (position.y - rect.top()) / rect.height() * 2.0,
+                            ]) {
+                                let face = *snapshot.faces.get(&hit.face_id).expect("Mesh face inspection cache");
+                                match inspection::Selection::select(self.selected.as_ref(), face, extend) {
                                     Ok(selection) => {
                                         self.message = if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement".into() } else { "Face dimensions · reference measurements".into() };
                                         self.selected = Some(selection);
@@ -1684,6 +1699,7 @@ impl eframe::App for Editor {
                             revision: snapshot.revision,
                             matrix,
                             selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
+                            selected_edge: match &self.selected { Some(inspection::Selection::Edge(edge)) => Some(edge.segments), _ => None },
                         },
                     ));
                     if self.show_dimensions || self.selected.is_some() {
@@ -2283,14 +2299,14 @@ mod tests {
     -> Result<(), String> {
         let kernel = kernel::Kernel::new()?;
         let mut body = kernel.box_shape([0.0; 3], [10.0, 20.0, 30.0])?;
-        assert_eq!(body.edge_segments()?.len(), 12);
+        assert_eq!(body.edges()?.segments.len(), 12);
         let mut mesh = body.mesh()?;
         mesh.smooth_normals();
         for vertex in &mesh.vertices {
             assert!((glam::Vec3::from_array(vertex.normal).abs().max_element() - 1.0).abs() < 1e-6);
         }
         let cylinder = kernel.cylinder([0.0; 3], 3.0, 8.0)?;
-        let edges = cylinder.edge_segments()?;
+        let edges = cylinder.edges()?.segments;
         assert!(edges.len() >= 32);
         assert!(edges.len() < 256);
         for edge in edges {

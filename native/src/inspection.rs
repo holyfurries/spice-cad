@@ -1,8 +1,181 @@
 use crate::mesh::Mesh;
-use glam::Vec3;
+use glam::{DVec3, Mat4, Vec3};
 use std::collections::BTreeMap;
 
 const TOLERANCE_MM: f32 = 0.001;
+
+pub struct Edges {
+    pub segments: Vec<crate::mesh::EdgeSegment>,
+    pub items: Vec<Edge>,
+}
+
+#[derive(Clone, Copy)]
+pub struct Edge {
+    pub segments: [u32; 2],
+    pub geometry: EdgeGeometry,
+}
+
+#[derive(Clone, Copy)]
+pub enum EdgeGeometry {
+    Line([Vec3; 2]),
+    Circle { center: Vec3, radial: Vec3 },
+    Other { center: Vec3 },
+}
+
+impl Edge {
+    pub fn from_samples(segments: [u32; 2], samples: [DVec3; 17]) -> Self {
+        assert!(segments[0] < segments[1]);
+        assert!(samples.iter().all(|point| point.is_finite()));
+        let [first, middle, last] = [samples[0], samples[8], samples[16]];
+        let direction = last - first;
+        let tolerance_mm = 1e-7;
+        let length_mm = direction.length();
+        let geometry = if length_mm > tolerance_mm
+            && samples.iter().all(|point| {
+                let along_mm = (*point - first).dot(direction) / length_mm;
+                (*point - first).cross(direction).length() / length_mm <= tolerance_mm
+                    && (-tolerance_mm..=length_mm + tolerance_mm).contains(&along_mm)
+            }) {
+            EdgeGeometry::Line([first.as_vec3(), last.as_vec3()])
+        } else {
+            let a = samples[5] - first;
+            let b = samples[11] - first;
+            let normal = a.cross(b);
+            let normal_squared = normal.length_squared();
+            let mut geometry = EdgeGeometry::Other {
+                center: middle.as_vec3(),
+            };
+            if normal_squared > 1e-20 {
+                let center = first
+                    + (b.cross(normal) * a.length_squared() + normal.cross(a) * b.length_squared())
+                        / (2.0 * normal_squared);
+                let radius_mm = first.distance(center);
+                let normal = normal.normalize();
+                if samples.iter().all(|point| {
+                    (point.distance(center) - radius_mm).abs() <= tolerance_mm
+                        && (*point - center).dot(normal).abs() <= tolerance_mm
+                }) {
+                    geometry = EdgeGeometry::Circle {
+                        center: center.as_vec3(),
+                        radial: (first - center).as_vec3(),
+                    };
+                }
+            }
+            geometry
+        };
+        Self { segments, geometry }
+    }
+
+    pub fn spans(&self) -> [Option<Span>; 3] {
+        match self.geometry {
+            EdgeGeometry::Line(points) => [
+                Some(Span {
+                    points,
+                    distance_mm: points[0].distance(points[1]),
+                    direction: "Edge length",
+                }),
+                None,
+                None,
+            ],
+            EdgeGeometry::Circle { center, radial } => [
+                Some(Span {
+                    points: [center, center + radial],
+                    distance_mm: radial.length(),
+                    direction: "Radius",
+                }),
+                Some(Span {
+                    points: [center - radial, center + radial],
+                    distance_mm: radial.length() * 2.0,
+                    direction: "Diameter",
+                }),
+                None,
+            ],
+            EdgeGeometry::Other { .. } => [None; 3],
+        }
+    }
+
+    pub fn center(&self) -> Vec3 {
+        match self.geometry {
+            EdgeGeometry::Line(points) => (points[0] + points[1]) * 0.5,
+            EdgeGeometry::Circle { center, .. } | EdgeGeometry::Other { center } => center,
+        }
+    }
+}
+
+pub fn pick_edge(
+    edges: &[Edge],
+    segments: &[crate::mesh::EdgeSegment],
+    mesh: &Mesh,
+    matrix: Mat4,
+    size: [f32; 2],
+    position: [f32; 2],
+) -> Option<Edge> {
+    assert!(edges.len() <= 10000);
+    assert!(segments.len() <= 131072);
+    assert!(
+        size.into_iter()
+            .all(|value| value.is_finite() && value > 0.0)
+    );
+    let project = |point: Vec3| {
+        let clip = matrix * point.extend(1.0);
+        if clip.w <= 0.1 || !(0.0..=clip.w).contains(&clip.z) {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        Some(Vec3::new(
+            (ndc.x + 1.0) * size[0] * 0.5,
+            (1.0 - ndc.y) * size[1] * 0.5,
+            ndc.z,
+        ))
+    };
+    let cursor = glam::Vec2::from_array(position);
+    let inverse = matrix.inverse();
+    let view_direction =
+        (inverse.project_point3(Vec3::Z) - inverse.project_point3(Vec3::ZERO)).normalize();
+    let mut closest = 6.0_f32;
+    let mut depth = f32::INFINITY;
+    let mut selected = None;
+    for edge in edges {
+        for segment in &segments[edge.segments[0] as usize..edge.segments[1] as usize] {
+            let (Some(first), Some(second)) = (
+                project(Vec3::from_array(segment.start)),
+                project(Vec3::from_array(segment.end)),
+            ) else {
+                continue;
+            };
+            let delta = second.truncate() - first.truncate();
+            let fraction = ((cursor - first.truncate()).dot(delta)
+                / delta.length_squared().max(1e-12))
+            .clamp(0.0, 1.0);
+            let point = first.lerp(second, fraction);
+            let distance = cursor.distance(point.truncate());
+            if distance > closest {
+                continue;
+            }
+            if (distance - closest).abs() < 0.25 && point.z >= depth {
+                continue;
+            }
+            let hit = mesh.pick(
+                matrix,
+                [point.x / size[0] * 2.0 - 1.0, 1.0 - point.y / size[1] * 2.0],
+            );
+            if let Some(hit) = hit {
+                let start = Vec3::from_array(segment.start);
+                let end = Vec3::from_array(segment.end);
+                let start_w = (matrix * start.extend(1.0)).w;
+                let end_w = (matrix * end.extend(1.0)).w;
+                let along = fraction * start_w / (end_w * (1.0 - fraction) + start_w * fraction);
+                if (start.lerp(end, along) - hit.position).dot(view_direction) > 0.02 {
+                    continue;
+                }
+            }
+            closest = distance;
+            depth = point.z;
+            selected = Some(*edge);
+        }
+    }
+    selected
+}
 
 #[derive(Clone, Copy)]
 pub struct Span {
@@ -21,6 +194,7 @@ pub struct Face {
 
 #[derive(Clone, Copy)]
 pub enum Selection {
+    Edge(Edge),
     Face(Face),
     Pair { first: Face, second: Face },
 }
@@ -35,6 +209,7 @@ impl Selection {
             return Ok(Self::Face(face));
         };
         let first = match previous {
+            Self::Edge(_) => return Ok(Self::Face(face)),
             Self::Face(first) => *first,
             Self::Pair { first, second } => {
                 if face.id == first.id {
@@ -63,20 +238,23 @@ impl Selection {
 
     pub fn ids(&self) -> [u32; 2] {
         match self {
+            Self::Edge(_) => [0; 2],
             Self::Face(face) => [face.id, 0],
             Self::Pair { first, second } => [first.id, second.id],
         }
     }
 
-    pub fn latest(&self) -> &Face {
+    pub fn latest(&self) -> Option<&Face> {
         match self {
-            Self::Face(face) => face,
-            Self::Pair { second, .. } => second,
+            Self::Edge(_) => None,
+            Self::Face(face) => Some(face),
+            Self::Pair { second, .. } => Some(second),
         }
     }
 
     pub fn spans(&self) -> [Option<Span>; 3] {
         match self {
+            Self::Edge(edge) => edge.spans(),
             Self::Face(face) => face.spans,
             Self::Pair { first, second } => {
                 let normal = first.normal.expect("Parallel planar selection");
@@ -98,13 +276,14 @@ impl Selection {
 
     pub fn center(&self) -> Vec3 {
         match self {
+            Self::Edge(edge) => edge.center(),
             Self::Face(face) => face.center,
             Self::Pair { first, second } => (first.center + second.center) * 0.5,
         }
     }
 
     pub fn planar(&self) -> bool {
-        self.latest().normal.is_some()
+        self.latest().is_some_and(|face| face.normal.is_some())
     }
 }
 
@@ -253,6 +432,158 @@ pub fn faces(mesh: &Mesh) -> Result<BTreeMap<u32, Face>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_edges_measure_lines_and_rotated_circles_without_seams() -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let edges = kernel.box_shape([0.0; 3], [10.0, 20.0, 30.0])?.edges()?;
+        assert_eq!(edges.items.len(), 12);
+        for length in [10.0, 20.0, 30.0] {
+            assert_eq!(
+                edges
+                    .items
+                    .iter()
+                    .filter(|edge| edge.spans()[0]
+                        .is_some_and(|span| (span.distance_mm - length).abs() < TOLERANCE_MM))
+                    .count(),
+                4
+            );
+        }
+        let mut cylinder = kernel.cylinder([0.0; 3], 3.0, 8.0)?;
+        cylinder.rotate([1.0, 0.0, 0.0], 37.0)?;
+        cylinder.translate([14.0, -25.0, 60.0])?;
+        let edges = cylinder.edges()?;
+        assert_eq!(edges.items.len(), 2);
+        for edge in &edges.items {
+            assert!(matches!(edge.geometry, EdgeGeometry::Circle { .. }));
+            let [Some(radius), Some(diameter), None] = edge.spans() else {
+                return Err("Missing circular dimensions".into());
+            };
+            assert!((radius.distance_mm - 3.0).abs() < TOLERANCE_MM);
+            assert!((diameter.distance_mm - 6.0).abs() < TOLERANCE_MM);
+            let selection = Selection::Edge(*edge);
+            assert_eq!(selection.ids(), [0; 2]);
+            assert!(selection.latest().is_none());
+            assert!(!selection.planar());
+        }
+        let selection = Selection::Edge(edges.items[0]);
+        let bounds = cylinder.bounds(true)?.map(|point| point.as_vec3());
+        let camera = crate::viewport::Camera {
+            target: (bounds[0] + bounds[1]) * 0.5,
+            distance: 40.0,
+            yaw: -0.95,
+            pitch: 0.55,
+        };
+        let output =
+            eframe::egui::Context::default().run_ui(eframe::egui::RawInput::default(), |ui| {
+                crate::dimensions::draw(
+                    ui,
+                    eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        eframe::egui::vec2(600.0, 600.0),
+                    ),
+                    camera.matrix(1.0),
+                    camera.eye(),
+                    bounds,
+                    &crate::dimensions::Annotations::default(),
+                    Some(&selection),
+                );
+            });
+        for expected in ["R ≈3.00 mm", "Ø ≈6.00 mm"] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, eframe::egui::Shape::Text(text) if text.galley.job.text == expected)));
+        }
+        output.drop_without_applying_deltas();
+        Ok(())
+    }
+
+    #[test]
+    fn partial_arcs_measure_the_supporting_circle_and_reject_ellipses_and_nonplanar_curves() {
+        let samples = std::array::from_fn(|index| {
+            let angle = index as f64 / 16.0 * 1.2;
+            DVec3::new(10.0 + 4.0 * angle.cos(), -7.0 + 4.0 * angle.sin(), 3.0)
+        });
+        let edge = Edge::from_samples([0, 16], samples);
+        assert!(matches!(edge.geometry, EdgeGeometry::Circle { .. }));
+        assert!((edge.spans()[0].expect("Radius").distance_mm - 4.0).abs() < TOLERANCE_MM);
+        for points in [
+            samples.map(|point| point * DVec3::new(2.0, 1.0, 1.0)),
+            std::array::from_fn(|index| samples[index] + DVec3::Z * index as f64 * 0.1),
+            [DVec3::ZERO; 17],
+        ] {
+            let unsupported = Edge::from_samples([0, 16], points);
+            assert!(matches!(unsupported.geometry, EdgeGeometry::Other { .. }));
+            assert!(unsupported.spans().iter().all(Option::is_none));
+        }
+    }
+
+    #[test]
+    fn edge_picking_uses_screen_distance_and_rejects_occluded_edges() -> Result<(), String> {
+        let snapshot = crate::build_script_snapshot(
+            "--!strict\ncad.show('box',cad.box({width=40,depth=20,height=8}))",
+            1,
+        )?;
+        let matrix = Mat4::orthographic_rh(-30.0, 30.0, -30.0, 30.0, 0.1, 100.0)
+            * Mat4::look_at_rh(
+                Vec3::new(20.0, 10.0, 60.0),
+                Vec3::new(20.0, 10.0, 0.0),
+                Vec3::Y,
+            );
+        let project = |point: Vec3| {
+            let point = matrix.project_point3(point);
+            [(point.x + 1.0) * 300.0, (1.0 - point.y) * 300.0]
+        };
+        let top = snapshot.inspected_edges.iter().find(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 8.0) && (points[0].y-points[1].y).abs()<TOLERANCE_MM)).ok_or("Top edge")?;
+        let position = project(top.center());
+        let pick = |edges: &[Edge], position| {
+            pick_edge(
+                edges,
+                &snapshot.edges,
+                &snapshot.mesh,
+                matrix,
+                [600.0; 2],
+                position,
+            )
+        };
+        let selected =
+            pick(&snapshot.inspected_edges, position).ok_or("Visible edge not picked")?;
+        assert!((selected.center().z - 8.0).abs() < TOLERANCE_MM);
+        assert!(pick(&snapshot.inspected_edges, [position[0], position[1] + 12.0]).is_none());
+        assert!(
+            pick(
+                &snapshot.inspected_edges,
+                project(Vec3::new(20.0, 10.0, 8.0))
+            )
+            .is_none()
+        );
+        let hidden = snapshot.inspected_edges.iter().copied().filter(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 0.0))).collect::<Vec<_>>();
+        assert_eq!(hidden.len(), 4);
+        for edge in &hidden {
+            assert!(pick(&hidden, project(edge.center())).is_none());
+        }
+        for distance in [100.0, 5000.0] {
+            let matrix = Mat4::perspective_rh(40_f32.to_radians(), 1.0, 0.1, 10000.0)
+                * Mat4::look_at_rh(
+                    Vec3::new(20.0, 10.0, distance),
+                    Vec3::new(20.0, 10.0, 0.0),
+                    Vec3::Y,
+                );
+            for edge in &hidden {
+                let point = matrix.project_point3(edge.center());
+                assert!(
+                    pick_edge(
+                        &hidden,
+                        &snapshot.edges,
+                        &snapshot.mesh,
+                        matrix,
+                        [6000.0; 2],
+                        [(point.x + 1.0) * 3000.0, (1.0 - point.y) * 3000.0]
+                    )
+                    .is_none()
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn rack_lips_have_local_eight_mm_spans_and_tread_separation() -> Result<(), String> {

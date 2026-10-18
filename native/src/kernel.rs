@@ -319,7 +319,7 @@ impl Kernel {
 }
 
 impl Body<'_> {
-    pub fn edge_segments(&self) -> Result<Vec<crate::mesh::EdgeSegment>, String> {
+    pub fn edges(&self) -> Result<crate::inspection::Edges, String> {
         let mut edges = std::collections::BTreeMap::new();
         for region in unsafe { topology_list(children(self.shape.as_ptr())) }? {
             let region_ref = unsafe { &*region.cast::<ffi::SmRegion>() };
@@ -361,6 +361,7 @@ impl Body<'_> {
             }
         }
         let mut segments = Vec::new();
+        let mut items = Vec::new();
         for (edge, (_, shared)) in edges {
             if !shared {
                 continue;
@@ -375,6 +376,11 @@ impl Body<'_> {
             }
             let start = curve_point(curve, minimum)?;
             let end = curve_point(curve, maximum)?;
+            let mut samples = [glam::DVec3::ZERO; 17];
+            for (index, sample) in samples.iter_mut().enumerate() {
+                *sample = curve_point(curve, minimum + (maximum - minimum) * index as f64 / 16.0)?;
+            }
+            let segment_start = segments.len() as u32;
             let mut pending = vec![(minimum, start, maximum, end, 0_u32)];
             for _ in 0..4096 {
                 let Some((minimum, start, maximum, end, depth)) = pending.pop() else {
@@ -418,8 +424,14 @@ impl Body<'_> {
             if !pending.is_empty() {
                 return Err("Display curve sampling budget exceeded".into());
             }
+            if segments.len() as u32 > segment_start {
+                items.push(crate::inspection::Edge::from_samples(
+                    [segment_start, segments.len() as u32],
+                    samples,
+                ));
+            }
         }
-        Ok(segments)
+        Ok(crate::inspection::Edges { segments, items })
     }
     pub fn translate(&mut self, offset: [f64; 3]) -> Result<(), String> {
         let offset = Vector {

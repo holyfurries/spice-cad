@@ -45,7 +45,7 @@ extended leaders instead of being suppressed by projected pixel length. New
 geometry clears selection; failed builds retain inspection of the last valid
 model. Interactive inspection remains read-only and does not add constraints.
 
-Validation: 76 workspace tests pass, Clippy passes with all targets/features and
+Validation: 79 workspace tests pass, Clippy passes with all targets/features and
 warnings denied, and the native release build succeeds. Tests cover rebuilds,
 ambiguity, missing faces, unsupported references, limits, failed export without
 file creation, reference dimensions, rotated labels and duplicate suppression.
@@ -60,3 +60,17 @@ Native checks verify the unannotated 8 mm lip with Measures off, 47 mm tread dep
 dimensions, and byte-for-byte unchanged source.
 Readability checks repeat face, paired, and overall measurements with larger
 labels; screenshots and logs are under `output/native/label-readability-*`.
+
+Edge inspection retains CAD edge identities and segment ranges in each snapshot.
+The kernel worker evaluates 17 points per edge and recognizes straight or planar
+circular geometry within 0.0000001 mm; values remain approximate references,
+not analytic type guarantees. Unsupported curves expose no measurements.
+Picking uses a 6-point screen tolerance and rejects occluded candidates against
+the preview mesh with 0.02 mm depth tolerance, matching display chord tolerance.
+GPU highlighting uses segment ranges in the existing edge buffer, so selection
+does not upload geometry or call the kernel. Shift-click retains face pairing.
+Tests cover box lengths, rotated circles, partial arcs, unsupported curves,
+radius/diameter labels, screen tolerance, and occlusion at normal and distant
+views. Native checks verify an 80 mm straight edge, an 8 mm hole radius with
+16 mm diameter, face selection, deselection, and unchanged source. Artifacts
+are under `output/native/edge-*`.

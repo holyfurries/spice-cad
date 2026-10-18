@@ -84,6 +84,7 @@ pub struct Draw {
     pub revision: u64,
     pub matrix: Mat4,
     pub selected: [u32; 2],
+    pub selected_edge: Option<[u32; 2]>,
 }
 struct Gpu {
     line_pipeline: wgpu::RenderPipeline,
@@ -109,7 +110,7 @@ pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
     let adapter = state.adapter.get_info();
     eprintln!("Graphics: {} ({:?})", adapter.name, adapter.backend);
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("CAD viewport"),source:wgpu::ShaderSource::Wgsl(r#"
-struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32> }
+struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32> }
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
 struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32> }
 @vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32)->Output {
@@ -127,8 +128,8 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
 }
-struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32 }
-@vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@builtin(vertex_index) index:u32)->LineOutput {
+struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32, @location(1) @interpolate(flat) selected:u32 }
+@vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@builtin(vertex_index) index:u32,@builtin(instance_index) segment:u32)->LineOutput {
  let a=uniforms.matrix*vec4<f32>(start,1.0);
  let b=uniforms.matrix*vec4<f32>(end,1.0);
  let viewport=max(uniforms.selection.yz,vec2<f32>(1.0));
@@ -136,11 +137,15 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
  let perpendicular=vec2<f32>(-delta.y,delta.x)/max(length(delta),0.001);
  let corner=array<vec2<f32>,6>(vec2<f32>(0.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(1.0,1.0),vec2<f32>(0.0,-1.0),vec2<f32>(1.0,1.0),vec2<f32>(0.0,1.0))[index];
  var clip=mix(a,b,corner.x);
- clip=vec4<f32>(clip.xy+perpendicular*corner.y*uniforms.selection.w*clip.w/viewport,clip.zw);
- var output:LineOutput; output.position=clip; output.side=corner.y; return output;
+ let selected=segment>=u32(uniforms.edges.x) && segment<u32(uniforms.edges.y);
+ let width=select(uniforms.selection.w,max(uniforms.selection.w,3.0),selected);
+ clip=vec4<f32>(clip.xy+perpendicular*corner.y*width*clip.w/viewport,clip.zw);
+ var output:LineOutput; output.position=clip; output.side=corner.y; output.selected=u32(selected); return output;
 }
 @fragment fn line_fragment(input:LineOutput)->@location(0) vec4<f32> {
- return vec4<f32>(0.07,0.08,0.10,1.0-smoothstep(0.65,1.0,abs(input.side)));
+ if uniforms.edges.z==0.0 && input.selected==0u { discard; }
+ let color=select(vec3<f32>(0.07,0.08,0.10),vec3<f32>(0.45,0.78,1.0),input.selected==1u);
+ return vec4<f32>(color,1.0-smoothstep(0.65,1.0,abs(input.side)));
 }
 "#.into()) });
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -197,7 +202,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
     });
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Camera"),
-        contents: &[0; 96],
+        contents: &[0; 112],
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -315,13 +320,18 @@ impl egui_wgpu::CallbackTrait for Draw {
                 .and_then(|saved| std::time::SystemTime::now().duration_since(saved).ok())
                 .map(|elapsed| elapsed.as_secs_f64() * 1000.0);
         }
-        let mut uniform = [0_f32; 24];
+        let mut uniform = [0_f32; 28];
         uniform[..16].copy_from_slice(&self.matrix.to_cols_array());
         uniform[16] = self.selected[0] as f32;
         uniform[17..19].copy_from_slice(&self.viewport_size);
         uniform[19] = self.edge_width_px;
         uniform[20..23].copy_from_slice(&self.eye.to_array());
         uniform[23] = self.selected[1] as f32;
+        if let Some([start, end]) = self.selected_edge {
+            uniform[24] = start as f32;
+            uniform[25] = end as f32;
+        }
+        uniform[26] = f32::from(self.edges_enabled);
         queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
         Vec::new()
     }
@@ -339,7 +349,7 @@ impl egui_wgpu::CallbackTrait for Draw {
         pass.set_bind_group(0, &gpu.group, &[]);
         pass.set_vertex_buffer(0, gpu.vertices.slice(..));
         pass.draw(0..gpu.count, 0..1);
-        if self.edges_enabled {
+        if self.edges_enabled || self.selected_edge.is_some() {
             pass.set_pipeline(&gpu.line_pipeline);
             pass.set_vertex_buffer(0, gpu.lines.slice(..));
             pass.draw(0..6, 0..gpu.line_count);
