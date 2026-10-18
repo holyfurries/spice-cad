@@ -21,9 +21,10 @@ and distinguishes reference dimensions from explicit checks. Ordinary code-defin
 geometry does not imply that clearance or fabrication requirements were checked.
 
 The presentation follows the [Plasticity Dimension demo](https://doc.plasticity.xyz/common/dimension):
-small green values aligned with projected edges, subtle extension lines, and blue
-active values on dark highlights. Near-facing bounding edges keep dimensions
-around the model. Matching declared dimensions share the overall label; names
+green values aligned with projected edges, subtle extension lines, and blue
+active values. Labels use 15-point monospace text, opaque dark backgrounds,
+contrasting borders, and pixel-snapped text anchors. Near-facing bounding edges
+keep dimensions around the model. Matching declared dimensions share the overall label; names
 and check status stay in Properties and hover tooltips. Labels remain upright
 and are read-only. Selected faces expose their names and a copyable selector.
 Rendering uses cached bounds and resolved annotations; kernel work stays off the
@@ -57,3 +58,5 @@ selection transitions. Inspection UI artifacts are under `output/native/inspecti
 Native checks verify the unannotated 8 mm lip with Measures off, 47 mm tread depth,
 8 mm paired separation, rejected nonparallel picks, deselection, restored overall
 dimensions, and byte-for-byte unchanged source.
+Readability checks repeat face, paired, and overall measurements with larger
+labels; screenshots and logs are under `output/native/label-readability-*`.

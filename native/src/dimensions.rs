@@ -505,17 +505,17 @@ fn draw_dimensions<'a>(
         }
         let text = format!("≈{:.2} mm", dimension.distance_mm);
         let galley =
-            painter.layout_no_wrap(text, egui::FontId::proportional(12.0), egui::Color32::WHITE);
+            painter.layout_no_wrap(text, egui::FontId::monospace(15.0), egui::Color32::WHITE);
         let rotation = egui::emath::Rot2::from_angle(angle);
         let short = length_px < galley.size().x + 12.0;
         let label_center = endpoints[0].lerp(endpoints[1], 0.5)
-            + outward * (galley.size().y * 0.5 + 3.0)
+            + outward * (galley.size().y * 0.5 + 6.0)
             + if short {
                 direction * (galley.size().x * 0.5 + 12.0)
             } else {
                 egui::Vec2::ZERO
             };
-        let half_size = galley.size() * 0.5 + egui::vec2(4.0, 2.0);
+        let half_size = galley.size() * 0.5 + egui::vec2(6.0, 3.0);
         let corners = [
             egui::vec2(-half_size.x, -half_size.y),
             egui::vec2(half_size.x, -half_size.y),
@@ -557,26 +557,37 @@ fn draw_dimensions<'a>(
                 egui::Stroke::new(1.0, line_color),
             );
         }
-        if active {
-            painter.add(egui::Shape::convex_polygon(
-                corners.to_vec(),
-                egui::Color32::from_rgb(53, 57, 61),
-                egui::Stroke::NONE,
-            ));
-        }
-        let color = if active {
-            egui::Color32::from_rgb(137, 184, 255)
-        } else {
-            egui::Color32::from_rgb(162, 209, 143)
-        };
-        painter.add(
-            egui::epaint::TextShape::new(
-                label_center - rotation * (galley.size() * 0.5),
-                galley,
-                color,
+        let (background, border) = if active {
+            (
+                egui::Color32::from_rgb(22, 36, 52),
+                egui::Color32::from_rgb(89, 135, 189),
             )
-            .with_override_text_color(color)
-            .with_angle(angle),
+        } else {
+            (
+                egui::Color32::from_rgb(18, 23, 29),
+                egui::Color32::from_rgb(66, 84, 73),
+            )
+        };
+        painter.add(egui::Shape::convex_polygon(
+            corners.to_vec(),
+            background,
+            egui::Stroke::new(1.0, border),
+        ));
+        let color = if active {
+            egui::Color32::from_rgb(194, 220, 255)
+        } else {
+            egui::Color32::from_rgb(196, 237, 180)
+        };
+        let text_position = label_center - rotation * (galley.size() * 0.5);
+        let pixels_per_point = ui.ctx().pixels_per_point();
+        let text_position = egui::pos2(
+            (text_position.x * pixels_per_point).round() / pixels_per_point,
+            (text_position.y * pixels_per_point).round() / pixels_per_point,
+        );
+        painter.add(
+            egui::epaint::TextShape::new(text_position, galley, color)
+                .with_override_text_color(color)
+                .with_angle(angle),
         );
     }
 }
@@ -649,7 +660,7 @@ mod tests {
             labels
                 .iter()
                 .all(|label| label.override_text_color
-                    == Some(egui::Color32::from_rgb(162, 209, 143)))
+                    == Some(egui::Color32::from_rgb(196, 237, 180)))
         );
         output.drop_without_applying_deltas();
     }

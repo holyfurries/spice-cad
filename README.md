@@ -472,8 +472,9 @@ axis-aligned planar face. Replace `part` with your final solid variable and choo
 a unique name.
 
 Dimension styling follows [Plasticity's Dimension demo](https://doc.plasticity.xyz/common/dimension):
-thin extension lines, small green values aligned with the projected edges, and
-blue text on a dark highlight when hovered or associated with a selected face.
+thin extension lines and green values aligned with the projected edges. Labels
+use 15-point monospace text on opaque dark backgrounds for contrast; hovered or
+selected dimensions turn light blue with a blue border.
 Overall dimensions sit along the near edges, and a declared measurement matching
 an overall extent shares its label. Names and check results appear in Properties
 and dimension tooltips; the selected face name appears on the model. Labels are
