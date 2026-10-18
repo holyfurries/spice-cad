@@ -83,7 +83,7 @@ pub struct Draw {
     pub mesh: Arc<Mesh>,
     pub revision: u64,
     pub matrix: Mat4,
-    pub selected: Option<u32>,
+    pub selected: [u32; 2],
 }
 struct Gpu {
     line_pipeline: wgpu::RenderPipeline,
@@ -124,6 +124,7 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  let specular=0.20*pow(max(dot(normal,normalize(key+view)),0.0),48.0);
  let rim=0.07*pow(1.0-max(dot(normal,view),0.0),3.0);
  var color=vec3<f32>(0.70,0.73,0.78); if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
+ if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
 }
 struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32 }
@@ -316,10 +317,11 @@ impl egui_wgpu::CallbackTrait for Draw {
         }
         let mut uniform = [0_f32; 24];
         uniform[..16].copy_from_slice(&self.matrix.to_cols_array());
-        uniform[16] = self.selected.unwrap_or(0) as f32;
+        uniform[16] = self.selected[0] as f32;
         uniform[17..19].copy_from_slice(&self.viewport_size);
         uniform[19] = self.edge_width_px;
         uniform[20..23].copy_from_slice(&self.eye.to_array());
+        uniform[23] = self.selected[1] as f32;
         queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
         Vec::new()
     }

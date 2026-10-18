@@ -54,7 +54,7 @@ struct Plane {
     maximum: Vec3,
 }
 struct DisplayDimension<'a> {
-    axis: usize,
+    direction: &'static str,
     points: [Vec3; 2],
     name: &'a str,
     distance_mm: f32,
@@ -321,7 +321,7 @@ pub fn draw(
     eye: Vec3,
     bounds: [Vec3; 2],
     annotations: &Annotations,
-    selected: Option<u32>,
+    selected: Option<&crate::inspection::Selection>,
 ) {
     let project = |point: Vec3| -> Option<egui::Pos2> {
         let point = matrix * point.extend(1.0);
@@ -336,13 +336,56 @@ pub fn draw(
                 ),
         )
     };
+    if let Some(selection) = selected {
+        let spans = selection.spans();
+        let ids = selection.ids();
+        let local = spans.iter().flatten().map(|span| DisplayDimension {
+            direction: span.direction,
+            points: span.points,
+            name: span.direction,
+            distance_mm: span.distance_mm,
+            checked: false,
+            selected: true,
+            offset_px: 24.0,
+        });
+        let related = annotations
+            .measurements
+            .iter()
+            .filter(|measurement| {
+                matches!(selection, crate::inspection::Selection::Face(_))
+                    && measurement.faces.iter().any(|id| ids.contains(id))
+            })
+            .map(|measurement| DisplayDimension {
+                direction: ["X", "Y", "Z"][measurement.axis],
+                points: measurement.points,
+                name: &measurement.name,
+                distance_mm: measurement.distance_mm,
+                checked: measurement.checked,
+                selected: true,
+                offset_px: 48.0,
+            });
+        draw_dimensions(ui, rect, matrix, selection.center(), local.chain(related));
+        if let Some(face) = annotations
+            .faces
+            .iter()
+            .find(|face| face.id == selection.latest().id)
+        {
+            if let Some(position) = project(face.point) {
+                ui.painter().with_clip_rect(rect).text(
+                    position + egui::vec2(5.0, -5.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    &face.name,
+                    egui::FontId::proportional(12.0),
+                    crate::interface::ACCENT,
+                );
+            }
+        }
+        return;
+    }
     let [minimum, maximum] = bounds;
     assert!(minimum.is_finite());
     assert!(maximum.is_finite());
     let center = (minimum + maximum) * 0.5;
-    let Some(center_screen) = project(center) else {
-        return;
-    };
     let corner = Vec3::new(
         if eye.x >= center.x {
             maximum.x
@@ -373,7 +416,7 @@ pub fn draw(
         })
     });
     let axes = (0..3).map(|axis| DisplayDimension {
-        axis,
+        direction: ["X", "Y", "Z"][axis],
         points: anchors(axis, [minimum[axis], maximum[axis]]),
         name: primary[axis].map_or(
             ["Overall X", "Overall Y", "Overall Z"][axis],
@@ -381,9 +424,7 @@ pub fn draw(
         ),
         distance_mm: maximum[axis] - minimum[axis],
         checked: primary[axis].is_some_and(|measurement| measurement.checked),
-        selected: primary[axis].is_some_and(|measurement| {
-            selected.is_some_and(|face| measurement.faces.contains(&face))
-        }),
+        selected: false,
         offset_px: if axis == 2 { 0.0 } else { 24.0 },
     });
     let mut lanes = [0_u32; 3];
@@ -399,7 +440,7 @@ pub fn draw(
         .map(|measurement| {
             lanes[measurement.axis] += 1;
             DisplayDimension {
-                axis: measurement.axis,
+                direction: ["X", "Y", "Z"][measurement.axis],
                 points: anchors(
                     measurement.axis,
                     measurement.points.map(|point| point[measurement.axis]),
@@ -407,20 +448,48 @@ pub fn draw(
                 name: &measurement.name,
                 distance_mm: measurement.distance_mm,
                 checked: measurement.checked,
-                selected: selected.is_some_and(|face| measurement.faces.contains(&face)),
+                selected: false,
                 offset_px: 24.0 + lanes[measurement.axis] as f32 * 18.0,
             }
         });
+    draw_dimensions(ui, rect, matrix, center, axes.chain(extra));
+}
+
+fn draw_dimensions<'a>(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    matrix: Mat4,
+    center: Vec3,
+    dimensions: impl Iterator<Item = DisplayDimension<'a>>,
+) {
+    let project = |point: Vec3| -> Option<egui::Pos2> {
+        let point = matrix * point.extend(1.0);
+        if point.w <= 0.1 || !(0.0..=point.w).contains(&point.z) {
+            return None;
+        }
+        Some(
+            rect.center()
+                + egui::vec2(
+                    point.x / point.w * rect.width() * 0.5,
+                    -point.y / point.w * rect.height() * 0.5,
+                ),
+        )
+    };
+    let Some(center_screen) = project(center) else {
+        return;
+    };
     let painter = ui.painter().with_clip_rect(rect);
     let line_color = egui::Color32::from_rgba_unmultiplied(140, 150, 145, 90);
-    for (index, dimension) in axes.chain(extra).enumerate() {
+    for (index, dimension) in dimensions.enumerate() {
         let [Some(first), Some(second)] = dimension.points.map(&project) else {
             continue;
         };
-        if first.distance(second) < 12.0 {
-            continue;
-        }
-        let direction = (second - first).normalized();
+        let length_px = first.distance(second);
+        let direction = if length_px > 0.01 {
+            (second - first) / length_px
+        } else {
+            egui::Vec2::X
+        };
         let mut outward = direction.rot90();
         if outward.dot(first.lerp(second, 0.5) - center_screen) < 0.0 {
             outward = -outward;
@@ -438,8 +507,14 @@ pub fn draw(
         let galley =
             painter.layout_no_wrap(text, egui::FontId::proportional(12.0), egui::Color32::WHITE);
         let rotation = egui::emath::Rot2::from_angle(angle);
-        let label_center =
-            endpoints[0].lerp(endpoints[1], 0.5) + outward * (galley.size().y * 0.5 + 3.0);
+        let short = length_px < galley.size().x + 12.0;
+        let label_center = endpoints[0].lerp(endpoints[1], 0.5)
+            + outward * (galley.size().y * 0.5 + 3.0)
+            + if short {
+                direction * (galley.size().x * 0.5 + 12.0)
+            } else {
+                egui::Vec2::ZERO
+            };
         let half_size = galley.size() * 0.5 + egui::vec2(4.0, 2.0);
         let corners = [
             egui::vec2(-half_size.x, -half_size.y),
@@ -457,7 +532,7 @@ pub fn draw(
         response.on_hover_text(format!(
             "{} · {} · {}",
             dimension.name,
-            ["X", "Y", "Z"][dimension.axis],
+            dimension.direction,
             if dimension.checked {
                 "distance check passed"
             } else {
@@ -473,6 +548,15 @@ pub fn draw(
             }
         }
         painter.line_segment(endpoints, egui::Stroke::new(1.0, line_color));
+        if short {
+            painter.line_segment(
+                [
+                    endpoints[1],
+                    endpoints[1] + direction * (galley.size().x + 12.0),
+                ],
+                egui::Stroke::new(1.0, line_color),
+            );
+        }
         if active {
             painter.add(egui::Shape::convex_polygon(
                 corners.to_vec(),
@@ -494,21 +578,6 @@ pub fn draw(
             .with_override_text_color(color)
             .with_angle(angle),
         );
-    }
-    for face in &annotations.faces {
-        if selected != Some(face.id) {
-            continue;
-        }
-        if let Some(position) = project(face.point) {
-            painter.circle_filled(position, 2.5, crate::interface::ACCENT);
-            painter.text(
-                position + egui::vec2(5.0, -5.0),
-                egui::Align2::LEFT_BOTTOM,
-                &face.name,
-                egui::FontId::proportional(12.0),
-                crate::interface::ACCENT,
-            );
-        }
     }
 }
 

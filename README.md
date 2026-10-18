@@ -479,6 +479,19 @@ an overall extent shares its label. Names and check results appear in Properties
 and dimension tooltips; the selected face name appears on the model. Labels are
 read-only; edit the Luau source or parameter fields to change the model.
 
+Click any face to show its own dimensions immediately, even with **Measures**
+off. A selected planar face shows in-plane spans aligned with its boundary;
+rotated rectangles retain their actual side lengths. Curved faces report X/Y/Z
+extents, not surface lengths. Small dimensions use extended leaders so an 8 mm
+lip remains readable at the rack's overall scale.
+
+**Shift-click a second parallel planar face** to measure perpendicular separation.
+For lip height, select the lip top and its tread: the reference measurement is
+8 mm in the rack example. The first face is orange and the second blue.
+For a pair, Shift-click either face to remove it; click empty space to clear the
+selection. Invalid pairs keep the previous selection. Properties shows the same
+measurements. Inspection does not edit source or add design checks.
+
 ```lua
 local part = cad.box({ width = 40, depth = 30, height = 20 })
 local top = cad.face(part, { name = "top", normal = "z+" })
@@ -506,7 +519,7 @@ constraint solver or automatic fully-constrained classification.
 
 These measurements use the preview mesh, display `≈`, and allow 0.001 mm tolerance
 when resolving planes and checking limits. They are bounded preview checks, not
-exact kernel metrology. Up to 64 named faces and 64 measurements are supported.
+exact kernel metrology. Up to 64 named faces and 64 scripted measurements are supported.
 
 ### Startup and responsiveness
 

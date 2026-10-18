@@ -17,6 +17,7 @@ mod dimensions;
 mod document;
 mod export;
 mod files;
+mod inspection;
 mod interface;
 mod kernel;
 mod lsp;
@@ -155,6 +156,7 @@ impl ModelRevision {
     }
 }
 struct Snapshot {
+    faces: std::collections::BTreeMap<u32, inspection::Face>,
     bounds: [glam::Vec3; 2],
     annotations: dimensions::Annotations,
     editor_revision: Option<u64>,
@@ -238,9 +240,11 @@ fn build_snapshot(
     let mut mesh = body.mesh()?;
     mesh.smooth_normals();
     let edges = body.edge_segments()?;
+    let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
         annotations: dimensions::Annotations::default(),
         editor_revision: None,
@@ -272,9 +276,11 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let mut mesh = body.mesh()?;
     mesh.smooth_normals();
     let edges = body.edge_segments()?;
+    let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let annotations = model.annotations(&mesh)?;
     Ok(Snapshot {
+        faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
         annotations,
         editor_revision: None,
@@ -387,7 +393,7 @@ struct Editor {
     revision: u64,
     camera: viewport::Camera,
     viewport_aspect: f32,
-    selected: Option<u32>,
+    selected: Option<inspection::Selection>,
     message: String,
     ui_ms: f64,
 }
@@ -1336,15 +1342,21 @@ impl eframe::App for Editor {
                     ui.label(format!("Volume {:.3} mm³", snapshot.volume_mm3));
                     ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
                     interface::section(ui, "SELECTION");
-                    if let Some(face) = self.selected {
+                    if let Some(selection) = &self.selected {
+                        let face = selection.latest().id;
                         ui.label(snapshot.annotations.faces.iter().find(|named| named.id == face).map_or("Unnamed face", |named| named.name.as_str()));
+                        ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
+                        for span in selection.spans().into_iter().flatten() {
+                            ui.label(format!("{} ≈{:.3} mm", span.direction, span.distance_mm));
+                        }
                         if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
                             match dimensions::selector(&snapshot.mesh, face) {
                                 Some(selector) => ui.ctx().copy_text(selector),
                                 None => self.message = "This face is not axis-aligned and planar; no selector was copied".into(),
                             }
                         }
-                    } else { ui.label("Click a model face"); }
+                    } else { ui.label("Click a model face to see its dimensions"); }
+                    ui.small("Shift-click a parallel planar face to measure separation. Click empty space to clear.");
                     interface::section(ui, "DESIGN CHECKS");
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
                         ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
@@ -1385,7 +1397,7 @@ impl eframe::App for Editor {
                 ui.label(format!("Volume {:.0} mm³", snapshot.volume_mm3));
                 if snapshot.source != ModelSource::Rack(self.parameters) { ui.colored_label(interface::WARNING, "Showing the previous valid geometry"); }
             }
-            ui.separator(); ui.label(self.selected.map_or("Click a face to select".into(), |face| format!("Selected face {face}")));
+            ui.separator(); ui.label(self.selected.as_ref().map_or("Click a face to select".into(), |selection| format!("Selected face {}", selection.latest().id)));
             ui.separator(); ui.small("Preview: rack blank. Print export adds the splitting joints. Joint clearance: 0.2 mm.");
             ui.small("Export uses OpenCascade for STEP and verified print geometry. Print and dry-fit the samples first.");
         });
@@ -1637,13 +1649,23 @@ impl eframe::App for Editor {
                     );
                     if response.clicked() {
                         if let Some(position) = response.interact_pointer_pos() {
-                            self.selected = snapshot.mesh.pick(
+                            let picked = snapshot.mesh.pick(
                                 matrix,
                                 [
                                     (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
                                     1.0 - (position.y - rect.top()) / rect.height() * 2.0,
                                 ],
                             );
+                            if let Some(id) = picked {
+                                let face = *snapshot.faces.get(&id).expect("Mesh face inspection cache");
+                                match inspection::Selection::select(self.selected.as_ref(), face, ui.input(|input| input.modifiers.shift)) {
+                                    Ok(selection) => {
+                                        self.message = if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement".into() } else { "Face dimensions · reference measurements".into() };
+                                        self.selected = Some(selection);
+                                    }
+                                    Err(error) => self.message = error,
+                                }
+                            } else { self.selected = None; self.message = "Selection cleared".into(); }
                         }
                     }
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -1661,11 +1683,11 @@ impl eframe::App for Editor {
                             mesh: Arc::clone(&snapshot.mesh),
                             revision: snapshot.revision,
                             matrix,
-                            selected: self.selected,
+                            selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
                         },
                     ));
-                    if self.show_dimensions {
-                        dimensions::draw(ui, rect, matrix, self.camera.eye(), snapshot.bounds, &snapshot.annotations, self.selected);
+                    if self.show_dimensions || self.selected.is_some() {
+                        dimensions::draw(ui, rect, matrix, self.camera.eye(), snapshot.bounds, &snapshot.annotations, self.selected.as_ref());
                     }
                 }
                 ui.painter().text(
@@ -1755,7 +1777,7 @@ impl eframe::App for Editor {
                                 {
                                     self.camera.pitch = 1.55;
                                 }
-                                ui.toggle_value(&mut self.show_dimensions, "Measures").on_hover_text("Show overall dimensions, named faces, and declared distance checks");
+                                ui.toggle_value(&mut self.show_dimensions, "Measures").on_hover_text("Show overall dimensions and declared checks. Selecting a face always shows local dimensions; Shift-click a parallel face for separation.");
                             });
                         });
                 });
