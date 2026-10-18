@@ -1,0 +1,139 @@
+{
+  "milestone": "Native startup, idle behavior, resize profiling, and Nix application packaging",
+  "renderer": "Native wgpu, automatic backend selection retained; no renderer replacement",
+  "changes": [
+    "Cached editor syntax layout and line numbers",
+    "Background source watcher with a bounded notification channel; unchanged source does not redraw the UI",
+    "Removed 60 Hz geometry-worker polling; worker completion requests repaint",
+    "Removed initial model debounce delay; retained debounce for external edits",
+    "Embedded starter source with a personal XDG data copy; no checkout dependency",
+    "Added --profile CPU markers and a repeatable Linux X11 profiling harness",
+    "Added Nix application package with analyzer, runtime library paths, and desktop entry"
+  ],
+  "verification": {
+    "workspace_tests_passed": 23,
+    "native_tests_passed": 15,
+    "reference_tests_passed": 8,
+    "clippy_workspace_all_targets_deny_warnings": true,
+    "rustfmt": true,
+    "nixfmt": true,
+    "locked_release_build": true,
+    "nix_package_build": true,
+    "native_window_checks_passed": 16,
+    "editor_evidence": "output/native/performance-editor-qa/editor-ui-checks.json",
+    "test_log": "output/native/performance-tests.log"
+  },
+  "packaging": {
+    "package": "spice-cad",
+    "launch": "nix run .#spice-cad",
+    "install": "nix profile install .#spice-cad",
+    "verified_store_path": "/nix/store/c6na9bfbdkra05y6l9lhqj278hils61l-spice-cad-0.1.0",
+    "closure_mib": 353.3,
+    "executable_size_approx_mib": 33,
+    "removed_environment_for_install_test": [
+      "LD_LIBRARY_PATH",
+      "DEP_OCCT_ROOT",
+      "SMLIB_ROOT",
+      "WGPU_BACKEND"
+    ],
+    "source_checkout_required": false,
+    "fully_static": false,
+    "portable_non_nix_release": false
+  },
+  "installed_profile": {
+    "method": "Three sequential launches; OS caches not flushed. Spawn through observed stderr marker, sampled every 10 ms. Model marker follows CPU GPU-buffer creation. Resize is X11 windowsize requests during a rebuild. UI CPU excludes renderer, GPU completion and presentation. RSS includes mapped graphics-driver pages; excludes child processes and GPU allocations. Idle CPU is one logical core over two seconds after a 500 ms settling interval. Compare runs only with matching adapters.",
+    "samples": [
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 518.632,
+        "model_upload_observed_ms": 1181.885,
+        "rss_kib": 302008,
+        "idle_cpu_percent": 0,
+        "resize_frames": 15,
+        "resize_frames_before_rebuild_upload": 11,
+        "resize_ui_cpu_p95_ms": 1.191,
+        "geometry_uploads_max": 2
+      },
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 876.584,
+        "model_upload_observed_ms": 1872.742,
+        "rss_kib": 302020,
+        "idle_cpu_percent": 0,
+        "resize_frames": 12,
+        "resize_frames_before_rebuild_upload": 5,
+        "resize_ui_cpu_p95_ms": 0.262,
+        "geometry_uploads_max": 2
+      },
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 454.016,
+        "model_upload_observed_ms": 837.269,
+        "rss_kib": 300644,
+        "idle_cpu_percent": 0,
+        "resize_frames": 5,
+        "resize_frames_before_rebuild_upload": 5,
+        "resize_ui_cpu_p95_ms": 0.541,
+        "geometry_uploads_max": 1
+      }
+    ]
+  },
+  "development_release_vulkan_profile": {
+    "method": "Three sequential launches; OS caches not flushed. Spawn through observed stderr marker, sampled every 10 ms. Model marker follows CPU GPU-buffer creation. Resize is X11 windowsize requests during a rebuild. UI CPU excludes renderer, GPU completion and presentation. RSS includes mapped graphics-driver pages; excludes child processes and GPU allocations. Idle CPU is one logical core over two seconds after a 500 ms settling interval. Compare runs only with matching adapters.",
+    "samples": [
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 524.643,
+        "model_upload_observed_ms": 949.814,
+        "rss_kib": 260724,
+        "idle_cpu_percent": 0,
+        "resize_frames": 14,
+        "resize_frames_before_rebuild_upload": 7,
+        "resize_ui_cpu_p95_ms": 2.078,
+        "geometry_uploads_max": 2
+      },
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 413.108,
+        "model_upload_observed_ms": 785.886,
+        "rss_kib": 260040,
+        "idle_cpu_percent": 0,
+        "resize_frames": 22,
+        "resize_frames_before_rebuild_upload": 10,
+        "resize_ui_cpu_p95_ms": 0.294,
+        "geometry_uploads_max": 2
+      },
+      {
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "first_ui_observed_ms": 392.718,
+        "model_upload_observed_ms": 817.507,
+        "rss_kib": 259932,
+        "idle_cpu_percent": 0,
+        "resize_frames": 6,
+        "resize_frames_before_rebuild_upload": 2,
+        "resize_ui_cpu_p95_ms": 0.41,
+        "geometry_uploads_max": 2
+      }
+    ]
+  },
+  "excluded_comparison": {
+    "description": "Xvfb OpenGL selected llvmpipe software rendering, while Vulkan used the RTX 3070. These results were rejected as evidence for a hardware backend switch.",
+    "default_backend_changed": false,
+    "evidence": "output/native/performance-gl-only"
+  },
+  "limits": [
+    "Three local launches are observations, not a statistically controlled benchmark",
+    "X11 resize requests verify UI updates during rebuilds; native compositor drag and presentation still need real-desktop testing",
+    "CPU markers exclude GPU completion and input-to-photon latency",
+    "RSS includes graphics-driver mappings and excludes analyzer child peaks and GPU allocations",
+    "Startup and model readiness remain above the stated targets; process memory is not yet minimal",
+    "OpenCascade exporter/reference code and external analyzer remain distribution dependencies"
+  ],
+  "next": [
+    "Profile hardware graphics initialization on the real desktop",
+    "Separate OpenCascade reference/export tooling from the everyday CAD binary",
+    "Embed analysis or bundle it in a portable release",
+    "Measure allocation breakdown and larger models on identical physical adapters",
+    "Produce and verify non-Nix distribution artifacts on clean supported systems"
+  ]
+}

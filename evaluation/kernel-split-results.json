@@ -1,0 +1,304 @@
+{
+  "milestone": "OpenCascade separated from the ordinary CAD build; startup phase profiling",
+  "changes": {
+    "normal_build": "spice-cad depends on shared rack parameters without OpenCascade; native SMLib and typed Luau modeling and export remain available",
+    "optional_build": "rack-tools enables the older configurator, P1S split-part export and kernel comparison",
+    "reference_library": "spice-rack/reference makes the OpenCascade dependency explicit; its export CLI still enables this by default",
+    "tests": "Native development dependencies retain OpenCascade for independent geometry and STEP roundtrip checks",
+    "startup_markers": [
+      "before_event_loop",
+      "adapter_selected",
+      "device_and_egui_ready",
+      "viewport_ready",
+      "first_ui"
+    ],
+    "graphics_defaults_changed": false
+  },
+  "packaging": {
+    "normal_store_path": "/nix/store/xj55w2sd7vm5aqcwgglyxnc64prc925h-spice-cad-0.1.0",
+    "rack_tools_store_path": "/nix/store/3rqf9x8kpzjs23df92bg69d6nhlmblqn-spice-cad-rack-tools-0.1.0",
+    "closure_with_rack_tools_mib": 353.3,
+    "closure_lean_mib": 116.7,
+    "reduction_mib": 236.6,
+    "normal_direct_shared_libraries": [
+      "libtbb.so.12",
+      "libstdc++.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "opencascade_in_normal_dependency_graph": false,
+    "opencascade_in_normal_runtime_closure": false,
+    "normal_launch": "nix run .#spice-cad",
+    "rack_tools_launch": "nix run .#spice-cad-rack-tools -- --rack",
+    "portable_static_release": false
+  },
+  "verification": {
+    "workspace_default_tests_passed": 23,
+    "workspace_all_features_tests_passed": 23,
+    "clippy_workspace_all_targets_default_and_all_features": true,
+    "rustfmt": true,
+    "nixfmt": true,
+    "lean_and_optional_release_builds": true,
+    "lean_and_optional_nix_packages_built": true,
+    "lean_editor_window_checks_passed": 16,
+    "rack_tools_window_load_and_export_files_count": 17,
+    "native_bracket_volume_mm3": 49560.026,
+    "native_bracket_display_triangles": 2564,
+    "reference_kernel_benchmark_completed": true,
+    "installed_profile_without_development_library_environment": true,
+    "staged_package_sources_match_repository": true,
+    "test_logs": [
+      "output/native/kernel-split-tests.log",
+      "output/native/kernel-split-full-tests.log"
+    ],
+    "editor_evidence": "output/native/performance-editor-qa/editor-ui-checks.json",
+    "rack_tools_window_evidence": "output/native/kernel-split-rack-ui/checks.json"
+  },
+  "comparison": {
+    "variant_0": "Packaged rack-tools build, ordinary Luau workspace",
+    "variant_1": "Packaged lean build, ordinary Luau workspace",
+    "backend": "Vulkan selected for both; NVIDIA RTX 3070; development library variables removed",
+    "summaries": [
+      {
+        "variant": 0,
+        "first_ui_observed_median_ms": 383.444,
+        "model_upload_observed_median_ms": 747.378,
+        "rss_median_kib": 259700,
+        "idle_cpu_percent": [
+          0,
+          0,
+          0.5
+        ],
+        "phase_duration_medians_ms": {
+          "through_adapter_selection": 100.628,
+          "device_and_egui": 217.48900000000003,
+          "cad_viewport": 15.961000000000013,
+          "first_ui_pass": 6.400999999999954
+        }
+      },
+      {
+        "variant": 1,
+        "first_ui_observed_median_ms": 362.851,
+        "model_upload_observed_median_ms": 725.433,
+        "rss_median_kib": 237736,
+        "idle_cpu_percent": [
+          0,
+          0,
+          0
+        ],
+        "phase_duration_medians_ms": {
+          "through_adapter_selection": 106.85600000000001,
+          "device_and_egui": 219.327,
+          "cad_viewport": 16.29000000000002,
+          "first_ui_pass": 6.168000000000006
+        }
+      }
+    ],
+    "observations": {
+      "method": "Three launches per executable, alternating variants when comparing two builds; OS caches not flushed. Spawn through observed stderr marker, sampled every 10 ms. Model marker follows CPU GPU-buffer creation. Resize is X11 windowsize requests during a rebuild. UI CPU excludes renderer, GPU completion and presentation. RSS includes mapped graphics-driver pages; excludes child processes and GPU allocations. Idle CPU is one logical core over two seconds after a 500 ms settling interval. Adapter identity is checked across all runs. Startup phases are milliseconds since main entry.",
+      "samples": [
+        {
+          "sample": 0,
+          "variant": 0,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.174,
+            "adapter_selected": 103.427,
+            "device_and_egui_ready": 335.885,
+            "viewport_ready": 351.846,
+            "first_ui": 358.931
+          },
+          "first_ui_observed_ms": 412.909,
+          "model_upload_observed_ms": 765.4,
+          "rss_kib": 259700,
+          "idle_cpu_percent": 0,
+          "resize_frames": 28,
+          "resize_frames_before_rebuild_upload": 12,
+          "resize_ui_cpu_p95_ms": 0.212,
+          "geometry_uploads_max": 2
+        },
+        {
+          "sample": 0,
+          "variant": 1,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.067,
+            "adapter_selected": 106.923,
+            "device_and_egui_ready": 326.25,
+            "viewport_ready": 341.848,
+            "first_ui": 348.538
+          },
+          "first_ui_observed_ms": 362.851,
+          "model_upload_observed_ms": 725.433,
+          "rss_kib": 238136,
+          "idle_cpu_percent": 0,
+          "resize_frames": 28,
+          "resize_frames_before_rebuild_upload": 12,
+          "resize_ui_cpu_p95_ms": 0.226,
+          "geometry_uploads_max": 2
+        },
+        {
+          "sample": 1,
+          "variant": 0,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.048,
+            "adapter_selected": 91.281,
+            "device_and_egui_ready": 292.553,
+            "viewport_ready": 308.16,
+            "first_ui": 314.561
+          },
+          "first_ui_observed_ms": 362.859,
+          "model_upload_observed_ms": 715.389,
+          "rss_kib": 259496,
+          "idle_cpu_percent": 0,
+          "resize_frames": 20,
+          "resize_frames_before_rebuild_upload": 10,
+          "resize_ui_cpu_p95_ms": 0.315,
+          "geometry_uploads_max": 2
+        },
+        {
+          "sample": 1,
+          "variant": 1,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.054,
+            "adapter_selected": 131.378,
+            "device_and_egui_ready": 357.188,
+            "viewport_ready": 374.867,
+            "first_ui": 381.035
+          },
+          "first_ui_observed_ms": 393.511,
+          "model_upload_observed_ms": 756.348,
+          "rss_kib": 237736,
+          "idle_cpu_percent": 0,
+          "resize_frames": 20,
+          "resize_frames_before_rebuild_upload": 10,
+          "resize_ui_cpu_p95_ms": 0.198,
+          "geometry_uploads_max": 2
+        },
+        {
+          "sample": 2,
+          "variant": 0,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.055,
+            "adapter_selected": 100.683,
+            "device_and_egui_ready": 318.172,
+            "viewport_ready": 335.059,
+            "first_ui": 341.452
+          },
+          "first_ui_observed_ms": 383.444,
+          "model_upload_observed_ms": 747.378,
+          "rss_kib": 259700,
+          "idle_cpu_percent": 0.5,
+          "resize_frames": 25,
+          "resize_frames_before_rebuild_upload": 11,
+          "resize_ui_cpu_p95_ms": 0.209,
+          "geometry_uploads_max": 2
+        },
+        {
+          "sample": 2,
+          "variant": 1,
+          "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+          "startup_ms": {
+            "before_event_loop": 0.05,
+            "adapter_selected": 105.672,
+            "device_and_egui_ready": 320.611,
+            "viewport_ready": 336.901,
+            "first_ui": 342.915
+          },
+          "first_ui_observed_ms": 352.619,
+          "model_upload_observed_ms": 705.145,
+          "rss_kib": 237664,
+          "idle_cpu_percent": 0,
+          "resize_frames": 28,
+          "resize_frames_before_rebuild_upload": 14,
+          "resize_ui_cpu_p95_ms": 0.214,
+          "geometry_uploads_max": 2
+        }
+      ]
+    }
+  },
+  "installed_automatic_backend": {
+    "method": "Three launches per executable, alternating variants when comparing two builds; OS caches not flushed. Spawn through observed stderr marker, sampled every 10 ms. Model marker follows CPU GPU-buffer creation. Resize is X11 windowsize requests during a rebuild. UI CPU excludes renderer, GPU completion and presentation. RSS includes mapped graphics-driver pages; excludes child processes and GPU allocations. Idle CPU is one logical core over two seconds after a 500 ms settling interval. Adapter identity is checked across all runs. Startup phases are milliseconds since main entry.",
+    "samples": [
+      {
+        "sample": 0,
+        "variant": 0,
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "startup_ms": {
+          "before_event_loop": 0.184,
+          "adapter_selected": 170.147,
+          "device_and_egui_ready": 396.563,
+          "viewport_ready": 413.778,
+          "first_ui": 420.565
+        },
+        "first_ui_observed_ms": 433.735,
+        "model_upload_observed_ms": 796.361,
+        "rss_kib": 279672,
+        "idle_cpu_percent": 0,
+        "resize_frames": 26,
+        "resize_frames_before_rebuild_upload": 10,
+        "resize_ui_cpu_p95_ms": 0.22,
+        "geometry_uploads_max": 2
+      },
+      {
+        "sample": 1,
+        "variant": 0,
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "startup_ms": {
+          "before_event_loop": 0.048,
+          "adapter_selected": 130.265,
+          "device_and_egui_ready": 348.487,
+          "viewport_ready": 364.15,
+          "first_ui": 370.215
+        },
+        "first_ui_observed_ms": 383.056,
+        "model_upload_observed_ms": 745.576,
+        "rss_kib": 279400,
+        "idle_cpu_percent": 0,
+        "resize_frames": 18,
+        "resize_frames_before_rebuild_upload": 9,
+        "resize_ui_cpu_p95_ms": 0.225,
+        "geometry_uploads_max": 2
+      },
+      {
+        "sample": 2,
+        "variant": 0,
+        "adapter": "NVIDIA GeForce RTX 3070 (Vulkan)",
+        "startup_ms": {
+          "before_event_loop": 0.046,
+          "adapter_selected": 143.669,
+          "device_and_egui_ready": 375.488,
+          "viewport_ready": 391.739,
+          "first_ui": 398.14
+        },
+        "first_ui_observed_ms": 403.893,
+        "model_upload_observed_ms": 787.282,
+        "rss_kib": 279856,
+        "idle_cpu_percent": 0,
+        "resize_frames": 22,
+        "resize_frames_before_rebuild_upload": 9,
+        "resize_ui_cpu_p95_ms": 0.315,
+        "geometry_uploads_max": 2
+      }
+    ]
+  },
+  "interpretation": [
+    "Removing the legacy dependency cuts the runtime closure by about two thirds",
+    "The local median first-UI improvement is about 20 ms across three alternating samples per variant; this is not a statistically controlled benchmark",
+    "Measured median process RSS falls by about 21 MiB on the same adapter",
+    "Device and egui initialization remains the largest measured pre-frame interval; CAD viewport pipelines account for a smaller interval",
+    "Current instrumentation groups device creation, surface setup and egui renderer setup; it does not identify which alone is responsible",
+    "Startup targets remain unmet; native desktop/compositor presentation has not been measured"
+  ],
+  "diagnostic_trace": {
+    "directory": "output/native/startup-trace",
+    "purpose": "Driver library loading and initialization investigation; content reads were not traced",
+    "included_in_timing_comparison": false
+  },
+  "next": "Profile device creation and egui renderer construction separately on the real desktop before attempting graphics startup changes"
+}

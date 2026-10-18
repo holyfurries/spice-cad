@@ -1,0 +1,111 @@
+{
+  "date": "2026-10-14",
+  "scope": "Default front-left rack part, including both integral dovetail directions, in print orientation",
+  "machine": "AMD Ryzen 9 5900X; Linux x86_64",
+  "candidate": {
+    "package": "@classcad/smlibwasm",
+    "version": "0.3.0",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "archive_sha256": "a0b960e783b3f5e33fe46c584fea828df2356a10595316780574c92ab455f9bc"
+  },
+  "reference": {
+    "wrapper": "opencascade 0.3.0",
+    "kernel": "OCCT 7.8 from pinned Nix environment",
+    "build_profile": "release",
+    "main_sha256": "317b5687d456d85ce653a7b6fae97580fc3d69c90ddadbb9c44a0af343c89a11",
+    "printing_sha256": "554a3b08263008c33fef15c4f4101b243b628885406aba749b2db1f9850a1fce",
+    "cargo_lock_sha256": "9dbd7aaa0a778b041ea272c76d12cacf4032073159c60a66e36df70edc366a74"
+  },
+  "checks": {
+    "dimensions_mm": [95, 174, 161],
+    "volume_mm3": 203856,
+    "stl_closed_and_oriented": true,
+    "stl_overhang_count": 0,
+    "step_roundtrip_passed": true,
+    "cross_kernel_step_import_passed": true,
+    "extra_volume_mm3": 0,
+    "missing_volume_mm3": 0,
+    "preview_pngs_byte_identical": true
+  },
+  "timing": {
+    "method": "Five separate builds per backend, discard first build, median of remaining four. Equivalent box/Boolean/dovetail construction and print positioning. Excludes module import, export, reference import, rendering, compilation, and process startup.",
+    "smlib_warm_median_ms": 149.49999999254942,
+    "opencascade_release_warm_median_ms": 317.55623049999997,
+    "ratio_opencascade_to_smlib": 2.124121943249672,
+    "smlib_module_import_ms": 294.5
+  },
+  "exports": {
+    "smlib_step_size_bytes": 57078,
+    "reference_step_size_bytes": 187550,
+    "smlib_stl_size_bytes": 10084,
+    "smlib_stl_encoding": "binary",
+    "reference_stl_size_bytes": 50616,
+    "reference_stl_encoding": "ASCII",
+    "note": "STL size difference reflects encoding, not better geometric compression."
+  },
+  "assessment": "Pass for this planar rack part. A browser prototype is justified; a production kernel migration is not established by this evaluation.",
+  "limitations": [
+    "One fixed part and one machine; five builds per backend, not a statistical benchmark.",
+    "Curved geometry, G2/G3 fillets, female-joint fit samples, the full four-part assembly, parameter sweeps, and MCP were not tested.",
+    "Physical printer fit and strength were not tested.",
+    "The browser evaluator duplicates the default model dimensions; update it when the Rust design changes."
+  ],
+  "raw_browser": {
+    "package": "@classcad/smlibwasm",
+    "version": "0.3.0",
+    "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "part": "front-left",
+    "expected_dimensions_mm": [95, 174, 161],
+    "module_import_ms": 294.5,
+    "generation_ms_samples": [
+      272.09999999403954, 162.3999999910593, 150.09999999403954,
+      147.79999999701977, 148.8999999910593
+    ],
+    "step_export_ms": 20,
+    "stl_export_ms": 15.400000005960464,
+    "generated": {
+      "valid": true,
+      "dimensions_mm": [95.00000000000001, 174, 161],
+      "volume_mm3": 203856.00000000047,
+      "stl": {
+        "triangle_count": 200,
+        "closed_and_oriented": true,
+        "volume_mm3": 203855.99981120703,
+        "overhang_count": 0,
+        "dimensions_mm": [95, 174, 161]
+      }
+    },
+    "reference": {
+      "valid": true,
+      "dimensions_mm": [95, 174, 161],
+      "volume_mm3": 203855.9999999968,
+      "stl": {
+        "triangle_count": 200,
+        "closed_and_oriented": true,
+        "volume_mm3": 203855.99910000036,
+        "overhang_count": 0,
+        "dimensions_mm": [95, 174, 161]
+      }
+    },
+    "step_roundtrip": {
+      "valid": true,
+      "volume_mm3": 203855.99999999988,
+      "dimensions_mm": [95.00000000000001, 174, 161]
+    },
+    "exports": {
+      "step_bytes": 57078,
+      "stl_bytes": 10084
+    }
+  },
+  "raw_native": {
+    "native_generation_ms_samples": [
+      318.45729900000003, 316.66245, 316.43960599999997, 322.48625499999997,
+      318.45001099999996
+    ],
+    "reference_volume_mm3": 203855.99999999942,
+    "candidate_volume_mm3": 203855.99999999985,
+    "extra_volume_mm3": 0,
+    "missing_volume_mm3": 0,
+    "step_import_into_opencascade_passed": true
+  }
+}

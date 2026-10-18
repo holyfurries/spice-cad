@@ -1,0 +1,56 @@
+{
+  "runtime": {
+    "mlua": "0.12.2",
+    "embedded_luau": "0.740",
+    "analyzer_luau": "0.740",
+    "analyzer_source_sha256": "sha256-rb0BpRsAyN37ZlrkLpaiyk3yfoIQDU7YnXpkb8vEyzY=",
+    "geometry": "native SMLib; existing pinned kernel"
+  },
+  "checks": {
+    "workspace_tests_passed": 14,
+    "clippy_workspace_all_targets_deny_warnings": true,
+    "rustfmt": true,
+    "stylua": true,
+    "nixfmt": true,
+    "release_build": true,
+    "bracket_volume_mm3": 64080,
+    "scripted_rack_volume_mm3": 972678,
+    "reused_operands_volume_mm3": 1050,
+    "rejects_type_errors_before_geometry": true,
+    "rejects_nonpositive_and_nonfinite_dimensions": true,
+    "rejects_unbounded_script_loop": true,
+    "rejects_operation_budget_overflow": true,
+    "rejects_disabled_type_checking": true,
+    "worker_recovers_after_type_error_and_empty_subtraction": true,
+    "diagnostics_preserve_model_line_numbers": true
+  },
+  "native_window": {
+    "environment": "Xvfb, native egui/wgpu, NVIDIA RTX 3070 Vulkan",
+    "checks_passed": [
+      "initial typed model renders",
+      "saved dimension edit changes volume and uploads one mesh",
+      "type error preserves previous geometry and reports source line",
+      "invalid dimension preserves previous geometry",
+      "valid edit recovers after errors",
+      "deleted source preserves previous geometry and displays error",
+      "restored source rebuilds successfully",
+      "camera orbit reuses the uploaded mesh"
+    ],
+    "evidence": "output/native/luau-ui-checks.json",
+    "preview": "output/native/luau-restored.png",
+    "owned_qa_processes_stopped": true
+  },
+  "scope": {
+    "operations": ["cad.box", "cad.union", "cad.subtract", "cad.show"],
+    "output_solids_max": 1,
+    "source_size_bytes_max": 32768,
+    "vm_memory_size_bytes_max": 8388608,
+    "script_time_ms_max": 250,
+    "recipe_operation_count_max": 256,
+    "evaluation_step_count_max": 512,
+    "kernel_wall_clock_timeout": false,
+    "incremental_geometry_cache": false,
+    "editor_type_completion_integration": false,
+    "script_model_export": false
+  }
+}

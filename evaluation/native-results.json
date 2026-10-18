@@ -1,0 +1,105 @@
+{
+  "checked_on": "2026-10-17",
+  "scope": "First native rack-editor slice: SMLib rack blank, persistent wgpu viewport, face selection, dimension editing and OpenCascade print exports.",
+  "environment": {
+    "architecture": "x64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 3070",
+    "graphics_backend": "Vulkan",
+    "window_test": "X11 under Xvfb; native input events and inspected screenshots",
+    "rust": "1.98.1",
+    "smlib_wrapper_source": "735403a40b261b71967a59d670cd7970f032d04e",
+    "usd_brep_source": "c9c5979f04cea8c38213004d4f04df0dcfb40d05",
+    "kernel_build": "Release, TBB enabled; serialized public API calls",
+    "ui": "eframe 0.37.0"
+  },
+  "source_sha256": {
+    "native/Cargo.toml": "b6400ee4227997d3b955b7e1fa034394f04fe9fd0e3aade60fa980dcb1b76de1",
+    "native/build.rs": "78bd07c79a2bf1b93f94cbea8478dbd61d3c3b8bd4fc63fc4a31fe2ece97dc4c",
+    "native/src/main.rs": "4413d7677c681d0161c22a3b3f89b71f3fdc5f866bbfd7cfb5abab506963dbcd",
+    "native/src/kernel.rs": "947ebaa4bb591f9332d87cad840f064dcceb9c6a5de3d8060cee100821c04b76",
+    "native/src/mesh.rs": "b56985cdd33d0f0d8fd651a769c1a9bd4095f056df89fbc6f4c60e5908e03277",
+    "native/src/viewport.rs": "d75ed740f5762496bf7c3fdd169b2df05d02f1a24c34d316d2d0195d55681998",
+    "src/lib.rs": "ff3544b67054bcd1a8b6cc26276c2154a21239412fc4f3dcbc285ad7ff11baa8",
+    "src/main.rs": "d546da7245e238e036faf9c2343976456958ea7300029ecbdb3dfcec19ae8369",
+    "src/printing.rs": "554a3b08263008c33fef15c4f4101b243b628885406aba749b2db1f9850a1fce",
+    "Cargo.toml": "6b1d061c808beffa69192e4879851393793d515db73c94874613cf033aa565ff",
+    "Cargo.lock": "e1cfdbc45f20a0768c9f9a6631f40eef67c801b3c5debc2534aa911725a07fa7",
+    "flake.nix": "5b5d4fb0a9e96374f70ecaa20b32815f048e082e1393b68723365889d14522b1",
+    "flake.lock": "61b76331da51e94eb5efe1b00a88bbe4bf0cb49a3e1b2aed6c5f396bb1ad0d2c"
+  },
+  "benchmark": {
+    "profile": "release",
+    "workload": "default rack blank, identical ordered box unions; OCCT clean included",
+    "warm_samples": 6,
+    "smlib_build_median_ms": 62.07968700000001,
+    "occt_build_median_ms": 202.95374950000001,
+    "smlib_mesh_and_audit_median_ms": 4.227468999999999,
+    "volume_mm3": 972678.0000000019,
+    "occt_over_smlib_ratio": 3.2692456954559064,
+    "method": "Seven paired native builds; discard first, median of remaining six. Both native kernels built in release mode. Tessellation, audit, and exact-volume verification excluded from build timings and recorded separately for SMLib. OCCT clean included. Run after compilation and UI interactions completed.",
+    "limits": "One planar box-union rack blank. Does not characterize curves, fillets, large assemblies, GPU frame time, or input latency."
+  },
+  "verification": {
+    "native_tests_passed": 3,
+    "reference_tests_passed": 8,
+    "clippy_passed": true,
+    "rustfmt_passed": true,
+    "nixfmt_passed": true,
+    "regressions": [
+      "All cavity shells included with finite-void winding correction",
+      "Closed and consistently oriented mesh",
+      "Mesh volume agrees with exact SMLib body and OCCT reference",
+      "Default and fractional-width three-step configurations",
+      "CPU face picking",
+      "Worker recovers after invalid request",
+      "Print overhangs rejected before writing",
+      "All seventeen print exports written"
+    ],
+    "ui_checks": [
+      {
+        "name": "native window rendered with cached mesh",
+        "passed": true,
+        "uploads": 5
+      },
+      {
+        "name": "dimension edit rebuilds and uploads once",
+        "passed": true
+      },
+      {
+        "name": "clearance-only edit reuses geometry and GPU buffers",
+        "passed": true
+      },
+      {
+        "name": "invalid edit retains previous mesh without uploading",
+        "passed": true
+      },
+      {
+        "name": "reset rebuilds valid default geometry",
+        "passed": true
+      },
+      {
+        "name": "face picking and highlighting reuse GPU buffers",
+        "passed": true
+      },
+      {
+        "name": "orbit reuses geometry and GPU buffers",
+        "passed": true
+      },
+      {
+        "name": "pan and zoom reuse geometry and GPU buffers",
+        "passed": true
+      },
+      {
+        "name": "native export action writes seventeen STEP/STL files",
+        "passed": true
+      }
+    ]
+  },
+  "limitations": [
+    "Viewport displays unsplit rack blank; printing export generates joints using OpenCascade.",
+    "Native joint clearance is fixed at 0.2 mm.",
+    "Native project persistence, sketches, edge editing and feature history are not implemented.",
+    "Physical joint fit, load capacity and hinge clearance require print trials."
+  ]
+}

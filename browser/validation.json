@@ -1,0 +1,547 @@
+{
+  "checked_on": "2026-10-15",
+  "scope": "Local rack configurator and CAD workspace; software checks only.",
+  "dependencies": {
+    "smlibwasm": "0.3.0",
+    "three": "0.170.0",
+    "native_reference": "opencascade 0.3.0 / OCCT 7.8",
+    "qa_browser": "Chromium 154.0.8037.57, headless SwiftShader"
+  },
+  "source_sha256": {
+    "browser/index.html": "076c8707255ff3048fc52d239579700f68ae660b711687accf83d1279a828a58",
+    "src/main.rs": "317b5687d456d85ce653a7b6fae97580fc3d69c90ddadbb9c44a0af343c89a11",
+    "src/printing.rs": "554a3b08263008c33fef15c4f4101b243b628885406aba749b2db1f9850a1fce",
+    "Cargo.lock": "9dbd7aaa0a778b041ea272c76d12cacf4032073159c60a66e36df70edc366a74"
+  },
+  "geometry_validation": {
+    "method": "Browser-generated STEP files imported into OpenCascade, compared with Rust-built parts by bidirectional Boolean differences. Assembled bodies checked individually in world coordinates, pairwise overlap and jar lifting-volume collisions checked.",
+    "configurations": [
+      {
+        "parameters": {
+          "rack_width_mm": 310,
+          "step_count": 5,
+          "step_rise_mm": 42,
+          "thickness_mm": 3,
+          "joint_clearance_mm": 0.2
+        },
+        "configuration": "default",
+        "parts": [
+          {
+            "name": "front-left",
+            "volume_mm3": 203855.99999999985,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "rear-left",
+            "volume_mm3": 284490.1961904766,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "front-right",
+            "volume_mm3": 201519.70476190478,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "rear-right",
+            "volume_mm3": 282621.16000000027,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-width-male",
+            "volume_mm3": 1090.2857142857142,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-width-female",
+            "volume_mm3": 623.0266666666666,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-depth-male",
+            "volume_mm3": 1090.285714285714,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-depth-female",
+            "volume_mm3": 623.0266666666666,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          }
+        ],
+        "assembly_geometry_matches": true,
+        "jar_positions_checked": 25
+      },
+      {
+        "parameters": {
+          "rack_width_mm": 300,
+          "step_count": 3,
+          "step_rise_mm": 70,
+          "thickness_mm": 4,
+          "joint_clearance_mm": 0.3
+        },
+        "configuration": "variant",
+        "parts": [
+          {
+            "name": "front-left",
+            "volume_mm3": 170692.5714285717,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "rear-left",
+            "volume_mm3": 237924.7721330725,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "front-right",
+            "volume_mm3": 168793.4439138943,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "rear-right",
+            "volume_mm3": 236658.6871232879,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-width-male",
+            "volume_mm3": 1453.7142857142858,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-width-female",
+            "volume_mm3": 820.6717808219178,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-depth-male",
+            "volume_mm3": 1453.7142857142858,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          },
+          {
+            "name": "fit-depth-female",
+            "volume_mm3": 820.6717808219177,
+            "extra_volume_mm3": 0,
+            "missing_volume_mm3": 0
+          }
+        ],
+        "assembly_geometry_matches": true,
+        "jar_positions_checked": 15
+      }
+    ],
+    "exports_per_configuration": 17,
+    "assembly_pairwise_overlap_mm3": 0,
+    "mesh_checks": [
+      "Closed welded edges",
+      "Consistent orientation",
+      "Positive volume",
+      "P1S bounds with margins",
+      "No downward faces steeper than 45 degrees above the bed"
+    ],
+    "mesh_check_scope": "Runtime checks on every rack part and fit sample before enabling exports."
+  },
+  "browser_validation": {
+    "method": "Chrome DevTools Protocol automation; desktop 1440x1000 and mobile 390x1000; rendered screenshots inspected.",
+    "checks": [
+      {
+        "name": "default model and seventeen exports",
+        "passed": true
+      },
+      {
+        "name": "camera front",
+        "passed": true
+      },
+      {
+        "name": "camera right",
+        "passed": true
+      },
+      {
+        "name": "camera top",
+        "passed": true
+      },
+      {
+        "name": "camera left",
+        "passed": true
+      },
+      {
+        "name": "camera iso",
+        "passed": true
+      },
+      {
+        "name": "part browser exploded",
+        "passed": true
+      },
+      {
+        "name": "part browser 0",
+        "passed": true
+      },
+      {
+        "name": "part browser 1",
+        "passed": true
+      },
+      {
+        "name": "part browser 2",
+        "passed": true
+      },
+      {
+        "name": "part browser 3",
+        "passed": true
+      },
+      {
+        "name": "part browser assembly",
+        "passed": true
+      },
+      {
+        "name": "theme light",
+        "passed": true
+      },
+      {
+        "name": "theme system",
+        "passed": true
+      },
+      {
+        "name": "theme dark",
+        "passed": true
+      },
+      {
+        "name": "viewport maximization",
+        "passed": true
+      },
+      {
+        "name": "keyboard command search",
+        "passed": true
+      },
+      {
+        "name": "command execution",
+        "passed": true
+      },
+      {
+        "name": "invalid jar clearance disables exports",
+        "passed": true
+      },
+      {
+        "name": "download failure disables stale exports",
+        "passed": true
+      },
+      {
+        "name": "recovery after failed download",
+        "passed": true
+      },
+      {
+        "name": "desktop fits viewport",
+        "passed": true
+      },
+      {
+        "name": "mobile no horizontal overflow",
+        "passed": true
+      },
+      {
+        "name": "mobile browser initially collapsed",
+        "passed": true
+      },
+      {
+        "name": "fractional steps",
+        "passed": true,
+        "kind": "invalid",
+        "message": "Steps must be a whole number.",
+        "exports": 0
+      },
+      {
+        "name": "cabinet depth",
+        "passed": true,
+        "kind": "invalid",
+        "message": "The rack exceeds the cabinet space including its gap.",
+        "exports": 0
+      },
+      {
+        "name": "small joints",
+        "passed": true,
+        "kind": "invalid",
+        "message": "The front side panel must be at least 36 mm tall for its joints.",
+        "exports": 0
+      },
+      {
+        "name": "P1S envelope",
+        "passed": true,
+        "kind": "invalid",
+        "message": "A part exceeds the P1S build volume with plate margins.",
+        "exports": 0
+      },
+      {
+        "name": "unsupported short variant",
+        "passed": true,
+        "kind": "invalid",
+        "message": "rear left: A part needs support in this print orientation",
+        "exports": 0
+      },
+      {
+        "name": "printable variant",
+        "passed": true,
+        "kind": "ready",
+        "message": "Four parts checked · 179 ms",
+        "exports": 17
+      },
+      {
+        "name": "command reset",
+        "passed": true
+      }
+    ],
+    "source_sha256": "74b46b1e2ead38c951381b1320594b1b954a86191fe57d833b6c31dd4b792ca8"
+  },
+  "limitations": [
+    "Physical printer fit, dovetail fit, cabinet hinge clearance, and strength require printed checks.",
+    "Conservative overhang checks reject some shorter step configurations.",
+    "This is a rack configurator; general sketch editing, feature history, drawings, and collaboration are outside this prototype."
+  ],
+  "dimension_history_validation": {
+    "checked_on": "2026-10-15",
+    "source_sha256": "8643cb329ef37bd6a54f2023685a083dbee290b322ca6ac1d029b2d21c736147",
+    "method": "Chrome DevTools Protocol; 34 accepted edits followed by 31 undo operations, redo, branching, pending/invalid/error recovery, keyboard, command search, reset and page reload. Final source smoke checked separately.",
+    "retained_configuration_count_max": 32,
+    "checks": [
+      {
+        "name": "initial revision disables undo and redo",
+        "passed": true
+      },
+      {
+        "name": "valid edits create revisions",
+        "passed": true
+      },
+      {
+        "name": "undo restores dimensions",
+        "passed": true
+      },
+      {
+        "name": "redo restores dimensions",
+        "passed": true
+      },
+      {
+        "name": "invalid edit is not recorded and disables exports",
+        "passed": true
+      },
+      {
+        "name": "undo recovers last valid configuration",
+        "passed": true
+      },
+      {
+        "name": "new valid edit clears redo branch",
+        "passed": true
+      },
+      {
+        "name": "undo cancels pending edit without recording it",
+        "passed": true
+      },
+      {
+        "name": "keyboard undo outside input",
+        "passed": true
+      },
+      {
+        "name": "keyboard redo outside input",
+        "passed": true
+      },
+      {
+        "name": "input keeps native text undo",
+        "passed": true
+      },
+      {
+        "name": "command palette undo",
+        "passed": true
+      },
+      {
+        "name": "reset is undoable",
+        "passed": true
+      },
+      {
+        "name": "undo reset restores previous parameters",
+        "passed": true
+      },
+      {
+        "name": "history is bounded to thirty-two revisions",
+        "passed": true
+      },
+      {
+        "name": "oldest retained revision cannot undo further",
+        "passed": true
+      },
+      {
+        "name": "redo works at history bound",
+        "passed": true
+      },
+      {
+        "name": "history toolbar fits mobile width",
+        "passed": true
+      },
+      {
+        "name": "exports remain available after history navigation",
+        "passed": true
+      },
+      {
+        "name": "reload clears history on final source",
+        "passed": true
+      },
+      {
+        "name": "empty input retains recovery without exports",
+        "passed": true
+      },
+      {
+        "name": "undo restores empty input",
+        "passed": true
+      },
+      {
+        "name": "export failure enables history recovery",
+        "passed": true
+      },
+      {
+        "name": "history recovers export error without changing revision",
+        "passed": true
+      },
+      {
+        "name": "final mobile layout fits screen",
+        "passed": true
+      }
+    ]
+  },
+  "project_and_print_pack_validation": {
+    "checked_on": "2026-10-16",
+    "source_sha256": "076c8707255ff3048fc52d239579700f68ae660b711687accf83d1279a828a58",
+    "method": "Chrome DevTools Protocol using actual project file inputs and downloads, isolated browser storage, and desktop/mobile screenshots. Downloaded ZIPs independently read with Python zipfile; CRCs, file counts, project round trips, STL triangle lengths, orientations above the bed, and manifest bounds checked.",
+    "project_format": {
+      "format": "spice-rack-project",
+      "version": 1,
+      "units": "mm",
+      "size_bytes_max": 16384
+    },
+    "browser_checks": [
+      {
+        "name": "validated project autosaves locally",
+        "passed": true
+      },
+      {
+        "name": "save and print-pack actions report success",
+        "passed": true
+      },
+      {
+        "name": "reload restores name and dimensions",
+        "passed": true
+      },
+      {
+        "name": "invalid dimensions disable save and pack and do not replace autosave",
+        "passed": true
+      },
+      {
+        "name": "reload recovers last valid dimensions",
+        "passed": true
+      },
+      {
+        "name": "reject malformed JSON without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject future schema without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject wrong units without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject missing dimension without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject extra dimension without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject nonnumeric dimension without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject invalid cabinet geometry without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject unsupported print geometry without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject empty name without replacing work",
+        "passed": true
+      },
+      {
+        "name": "reject oversized file without replacing work",
+        "passed": true
+      },
+      {
+        "name": "valid file restores dimensions and records undo revision",
+        "passed": true
+      },
+      {
+        "name": "project open can be undone",
+        "passed": true
+      },
+      {
+        "name": "alternate configuration exports a pack",
+        "passed": true
+      },
+      {
+        "name": "blocked autosave preserves usable exports",
+        "passed": true
+      },
+      {
+        "name": "corrupt autosave recovers defaults visibly",
+        "passed": true
+      },
+      {
+        "name": "unicode project names remain text",
+        "passed": true
+      },
+      {
+        "name": "empty name produces actionable error without breaking model",
+        "passed": true
+      },
+      {
+        "name": "project controls fit mobile without horizontal overflow",
+        "passed": true
+      }
+    ],
+    "print_packs": [
+      {
+        "name": "kitchen-rack",
+        "passed": true,
+        "files": 11,
+        "meshes_checked": 8,
+        "crc_verified": true,
+        "manifest_bounds_verified": true,
+        "archive_sha256": "1ed54dc4b5a67fa920b6a9942d0176dde80df31a3a8c2e1fc9dc26ffc61ac4d1"
+      },
+      {
+        "name": "pantry-variant",
+        "passed": true,
+        "files": 11,
+        "meshes_checked": 8,
+        "crc_verified": true,
+        "manifest_bounds_verified": true,
+        "archive_sha256": "946d613ee69e01c97d2ffbbaf6340842c6a1a730db6bdc2b157a25afeee362f8"
+      }
+    ],
+    "native_checks": {
+      "command": "nix develop -c cargo test --locked",
+      "tests_passed": 8,
+      "clippy": "nix develop -c cargo clippy --locked --all-targets -- -D warnings",
+      "clippy_passed": true
+    }
+  }
+}
