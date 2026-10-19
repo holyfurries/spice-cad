@@ -673,6 +673,7 @@ struct Editor {
     preview: preview::Schedule,
     palette: palette::State,
     parameter_state: parameters::State,
+    parameter_editor: Option<parameters::DimensionEditor>,
     show_display_settings: bool,
     picker: Option<files::Picker>,
     pending_document: Option<document::Document>,
@@ -763,6 +764,7 @@ impl Editor {
             preview: preview::Schedule::default(),
             palette,
             parameter_state: parameters::State::default(),
+            parameter_editor: None,
             show_display_settings: false,
             picker: None,
             pending_document: None,
@@ -813,6 +815,7 @@ impl Editor {
         self.code_state.focus();
         self.palette.remember(document.path.clone());
         self.parameter_state = parameters::State::default();
+        self.parameter_editor = None;
         if let Some(location) = self.pending_location.take() {
             self.code_state
                 .jump_to(location.range(&document.buffer.rope));
@@ -943,7 +946,7 @@ impl Editor {
         Ok(())
     }
 
-    fn select_measurement(&mut self, name: &str) -> Result<(), String> {
+    fn open_measurement(&mut self, name: &str) -> Result<(), String> {
         let snapshot = self.snapshot.as_ref().ok_or("No model preview")?;
         let script = self.script.as_ref().ok_or("No source document")?;
         if snapshot.editor_revision != Some(script.buffer.revision) {
@@ -988,7 +991,20 @@ impl Editor {
         };
         assert!(range.start <= range.end);
         assert!(range.end <= script.buffer.rope.len_chars());
-        self.code_state.jump_to(range);
+        self.parameter_editor = measurement.parameter.as_ref().map(|parameter| {
+            parameters::DimensionEditor::new(
+                script.buffer.revision,
+                parameter.clone(),
+                &measurement.name,
+                measurement.distance_mm,
+            )
+        });
+        self.language_popup = None;
+        if self.parameter_editor.is_some() {
+            self.code_state.reveal_source(range);
+        } else {
+            self.code_state.jump_to(range);
+        }
         self.selected = Some(selection);
         self.show_code = true;
         self.show_inspector = true;
@@ -1250,7 +1266,18 @@ impl eframe::App for Editor {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let started = Instant::now();
         self.poll(ui.ctx());
+        if self.parameter_editor.as_ref().is_some_and(|editor| {
+            !self
+                .script
+                .as_ref()
+                .is_some_and(|script| editor.current(script.buffer.revision))
+                || ui.input(|input| input.viewport().close_requested())
+        }) {
+            self.parameter_editor = None;
+            self.message = "Source changed or window closing · parameter edit cancelled".into();
+        }
         let navigation_allowed = self.pending_document.is_none()
+            && self.parameter_editor.is_none()
             && self.save_dialog.is_none()
             && !self.picker.as_ref().is_some_and(|picker| picker.open)
             && matches!(self.exit, ExitState::Open);
@@ -1906,6 +1933,27 @@ impl eframe::App for Editor {
             }
         }
         let mut parameter_edit = None;
+        if let Some(editor) = &mut self.parameter_editor {
+            let ready = matches!(self.work, WorkerState::Idle)
+                && self
+                    .script
+                    .as_ref()
+                    .is_some_and(|script| self.parameter_state.ready(script.buffer.revision));
+            let close = match editor.show(ui.ctx(), ready) {
+                Ok((edit, close)) => {
+                    parameter_edit = edit;
+                    close
+                }
+                Err(error) => {
+                    self.message = error.into();
+                    true
+                }
+            };
+            if close {
+                self.parameter_editor = None;
+                self.code_state.focus();
+            }
+        }
         if self.show_inspector && !self.focus_editor {
             egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(14.0)).show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt("properties_scroll").show(ui, |ui| {
@@ -1975,7 +2023,7 @@ impl eframe::App for Editor {
                 }
                 if let Some(script) = &self.script {
                     let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
-                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), !matches!(self.work, WorkerState::Busy(_) | WorkerState::Export));
+                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), !matches!(self.work, WorkerState::Busy(_) | WorkerState::Export)).or(parameter_edit.take());
                 }
                 if let Some(snapshot) = &self.snapshot {
                     interface::section(ui, "GEOMETRY");
@@ -1993,7 +2041,7 @@ impl eframe::App for Editor {
                         let selected = self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection));
                         let linked = measurement.parameter.as_ref().map_or(String::new(), |parameter| format!(" · {}", parameter.name));
                         if ui.add_enabled(current, egui::Button::new(format!("{} ≈{:.3} mm · {}{}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }, linked)).selected(selected))
-                            .on_hover_text("Select measurement and reveal its linked parameter or measurement source").clicked() {
+                            .on_hover_text("Open linked parameter editor or reveal measurement source").clicked() {
                             measurement_requested = Some(measurement.name.clone());
                         }
                     }
@@ -2860,7 +2908,7 @@ impl eframe::App for Editor {
                 });
         }
         if let Some(name) = measurement_requested {
-            if let Err(error) = self.select_measurement(&name) {
+            if let Err(error) = self.open_measurement(&name) {
                 self.message = error;
             }
             ui.ctx().request_repaint();

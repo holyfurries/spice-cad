@@ -676,7 +676,7 @@ fn draw_dimensions<'a>(
                 .measurement
                 .and_then(|measurement| measurement.parameter.as_ref())
                 .map_or(String::new(), |parameter| format!(
-                    " · linked to {} · click to reveal control and source",
+                    " · linked to {} · click to edit linked parameter",
                     parameter.name
                 ))
         ));

@@ -758,16 +758,25 @@ sketch constraint solver or automatic fully-constrained classification.
 `parameter = "height"` explicitly links a measurement to one top-level numeric
 `cad.number` control. Unknown, duplicate and nonnumeric declarations fail validation.
 Click a named dimension label or its row under **Properties → Measurements** to
-select its two faces and reveal the linked control and source literal. The
-control is highlighted and scrolled into view; its usual edit, bounds, preview
-and undo behavior applies. Unlinked measurements reveal their `cad.measure`
-source instead. Source navigation requires a preview of the current revision.
-The bundled `models/measured-block.luau` demonstrates the link.
+select its two faces, reveal the linked control and source literal, and open an
+**Edit linked parameter** dialog. The field starts with the parameter's current
+value; the measured distance is shown separately. Enter or **Apply** makes one
+undoable source edit and schedules the usual preview. Escape, **Cancel**, or a
+click outside the dialog leaves the source unchanged. Invalid numbers and
+out-of-range values stay in the dialog without changing the model. Apply waits
+for the preview worker and current source controls to be ready.
+
+The Properties control is highlighted and scrolled into view. Unlinked
+measurements reveal their `cad.measure` source without opening an editor. Opening
+an editor requires a preview of the current source revision; an external source
+reload cancels any open edit. The bundled `models/measured-block.luau`
+demonstrates the link.
 
 A link is an authored association, not proof that the parameter drives the
 measurement or equals its displayed value. Formulas may connect them. Dimension
-labels remain measured values; edit the parameter control or code to change the
-model. `min`/`max` checks remain independent of this association.
+labels remain measured values; the dialog edits the linked parameter directly
+without inverting formulas. The Properties control and code remain editable too.
+`min`/`max` checks remain independent of this association.
 
 These measurements use the preview mesh, display `≈`, and allow 0.001 mm
 tolerance when resolving planes and checking limits. They are bounded preview

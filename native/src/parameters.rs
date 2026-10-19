@@ -172,6 +172,18 @@ impl Parameter {
     pub fn is_numeric(&self) -> bool {
         matches!(self.property.control, Control::Number { .. })
     }
+
+    fn edit(&self, revision: u64, literal: String) -> Result<Edit, &'static str> {
+        self.property.validate(&literal)?;
+        Ok(Edit {
+            input_at: None,
+            revision,
+            range: self.range.clone(),
+            literal,
+            property: self.property.clone(),
+            group_revision: None,
+        })
+    }
 }
 
 pub fn analysis_key(source: &str) -> Option<String> {
@@ -366,6 +378,117 @@ impl Edit {
     }
 }
 
+pub struct DimensionEditor {
+    revision: u64,
+    parameter: Parameter,
+    measurement: String,
+    measured_mm: f32,
+    draft: String,
+    focus: bool,
+}
+
+impl DimensionEditor {
+    pub fn new(revision: u64, parameter: Parameter, measurement: &str, measured_mm: f32) -> Self {
+        assert!(parameter.is_numeric());
+        assert!(measured_mm.is_finite());
+        let draft = parameter.literal.clone();
+        Self {
+            revision,
+            parameter,
+            measurement: measurement.into(),
+            measured_mm,
+            draft,
+            focus: true,
+        }
+    }
+
+    pub fn current(&self, revision: u64) -> bool {
+        self.revision == revision
+    }
+
+    fn commit(&self, revision: u64) -> Result<Option<Edit>, &'static str> {
+        if !self.current(revision) {
+            return Err("Source changed; reopen the measurement");
+        }
+        if self.draft == self.parameter.literal {
+            return Ok(None);
+        }
+        self.parameter.edit(revision, self.draft.clone()).map(Some)
+    }
+
+    pub fn show(
+        &mut self,
+        context: &egui::Context,
+        ready: bool,
+    ) -> Result<(Option<Edit>, bool), &'static str> {
+        let mut edit = Ok(None);
+        let mut close = false;
+        let response =
+            egui::Modal::new(egui::Id::unique("dimension_parameter_editor")).show(context, |ui| {
+                ui.set_width(320.0);
+                let enter = ui
+                    .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                ui.heading("Edit linked parameter");
+                ui.label(format!(
+                    "Measured {}: ≈{:.3} mm",
+                    self.measurement, self.measured_mm
+                ));
+                ui.small(format!("Parameter: {}", self.parameter.name));
+                ui.horizontal(|ui| {
+                    let mut field = egui::TextEdit::singleline(&mut self.draft)
+                        .id(egui::Id::unique("dimension_parameter_value"))
+                        .char_limit(LITERAL_BYTES_MAX)
+                        .desired_width(220.0)
+                        .min_size(egui::vec2(220.0, crate::interface::CONTROL_HEIGHT))
+                        .margin(egui::vec2(10.0, 8.0))
+                        .show(ui);
+                    if self.focus {
+                        field.response.request_focus();
+                        field
+                            .state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(0),
+                                egui::text::CCursor::new(self.draft.chars().count()),
+                            )));
+                        field.state.store(context, field.response.id);
+                        self.focus = false;
+                    }
+                    ui.label(&self.parameter.property.unit);
+                });
+                let validation = self.parameter.property.validate(&self.draft);
+                let status = validation.err().unwrap_or(if ready {
+                    "Enter to apply · Esc to cancel"
+                } else {
+                    "Waiting for preview and source controls…"
+                });
+                ui.add_sized(
+                    egui::vec2(320.0, 36.0),
+                    egui::Label::new(egui::RichText::new(status).color(if validation.is_err() {
+                        crate::interface::WARNING
+                    } else {
+                        crate::interface::MUTED
+                    }))
+                    .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    let apply = ui
+                        .add_enabled(
+                            ready && validation.is_ok() && self.draft != self.parameter.literal,
+                            egui::Button::new("Apply"),
+                        )
+                        .clicked();
+                    if ready && validation.is_ok() && (apply || enter) {
+                        edit = self.commit(self.revision);
+                        close = edit.is_ok();
+                    }
+                    close |= ui.button("Cancel").clicked();
+                });
+            });
+        edit.map(|edit| (edit, close || response.should_close()))
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     revision: u64,
@@ -380,6 +503,10 @@ pub struct State {
 }
 
 impl State {
+    pub fn ready(&self, revision: u64) -> bool {
+        self.revision == revision && !self.parameters.is_empty()
+    }
+
     pub fn reveal(&mut self, name: Option<&str>) {
         self.highlighted = name.map(str::to_owned);
         self.reveal_highlight = name.is_some();
@@ -400,24 +527,18 @@ impl State {
             .position(|parameter| parameter.name == name)
             .ok_or("Parameter does not exist")?;
         let parameter = &self.parameters[index];
-        parameter.property.validate(&literal)?;
-        self.drafts[index].clone_from(&literal);
-        Ok(Some(Edit {
-            input_at: None,
-            revision,
-            range: parameter.range.clone(),
-            literal,
-            property: parameter.property.clone(),
-            group_revision: None,
-        }))
+        let edit = parameter.edit(revision, literal)?;
+        self.drafts[index].clone_from(&edit.literal);
+        Ok(Some(edit))
     }
 
     pub fn applied(&mut self, edit: &Edit, revision: u64) {
         assert_eq!(self.revision, edit.revision);
         assert_ne!(self.revision, revision);
         let end = edit.range.start + edit.literal.chars().count();
-        for parameter in &mut self.parameters {
+        for (index, parameter) in self.parameters.iter_mut().enumerate() {
             if parameter.range == edit.range {
+                self.drafts[index].clone_from(&edit.literal);
                 parameter.range.end = end;
                 parameter.literal.clone_from(&edit.literal);
             } else if parameter.range.start >= edit.range.end {
@@ -666,6 +787,132 @@ mod tests {
             })
             .drop_without_applying_deltas();
         edit
+    }
+
+    fn dimension_frame(
+        context: &egui::Context,
+        editor: &mut DimensionEditor,
+        events: Vec<egui::Event>,
+        ready: bool,
+    ) -> (Option<Edit>, bool) {
+        let mut result = None;
+        let mut source = Buffer::from("local height=cad.number(20,{min=1,max=25})");
+        let mut code = crate::code_editor::State::default();
+        code.modal.enable(true);
+        code.jump_to(0..5);
+        code.reveal_source(0..5);
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    result = Some(editor.show(ui.ctx(), ready));
+                    crate::code_editor::show(ui, &mut source, &mut code);
+                },
+            )
+            .drop_without_applying_deltas();
+        result.unwrap().unwrap()
+    }
+
+    #[test]
+    fn dimension_editor_keyboard_apply_cancel_and_busy_state_preserve_source_controls() {
+        let text = "local height=cad.number(20,{min=1,max=25})";
+        for (ready, value, key, apply, close) in [
+            (true, "24", egui::Key::Enter, true, true),
+            (true, "26", egui::Key::Enter, false, false),
+            (false, "24", egui::Key::Enter, false, false),
+            (true, "24", egui::Key::Escape, false, true),
+        ] {
+            let mut source = Buffer::from(text);
+            let mut state = State::default();
+            controls(&mut state, &source, Some(&parse(text)), true);
+            let context = egui::Context::default();
+            let mut editor =
+                DimensionEditor::new(source.revision, parse(text).remove(0), "height", 20.0);
+            for _ in 0..3 {
+                assert!(
+                    dimension_frame(&context, &mut editor, Vec::new(), ready)
+                        .0
+                        .is_none()
+                );
+            }
+            dimension_frame(
+                &context,
+                &mut editor,
+                vec![egui::Event::Text(value.into())],
+                ready,
+            );
+            assert_eq!(editor.draft, value);
+            let (edit, closed) = dimension_frame(
+                &context,
+                &mut editor,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ready,
+            );
+            assert_eq!(closed, close);
+            assert_eq!(edit.is_some(), apply);
+            if let Some(edit) = edit {
+                edit.apply(&mut source, 0).unwrap();
+                state.applied(&edit, source.revision);
+                assert_eq!(state.drafts[0], value);
+                assert_eq!(state.parameters[0].literal, value);
+                assert!(state.ready(source.revision));
+                assert_eq!(source.to_string(), text.replace("(20,", "(24,"));
+                assert!(source.undo(false).is_some());
+            }
+            assert_eq!(source.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn dimension_editor_edits_parameter_once_and_rejects_invalid_or_stale_input() {
+        let text = "-- λ\nlocal height=cad.number(20,{min=1,max=25,unit='mm'})";
+        let mut source = Buffer::from(text);
+        let mut editor =
+            DimensionEditor::new(source.revision, parse(text).remove(0), "height", 20.0);
+        assert!(editor.commit(source.revision).unwrap().is_none());
+        for literal in ["26", "0", "NaN", "inf", "1+2", ""] {
+            editor.draft = literal.into();
+            assert!(editor.commit(source.revision).is_err(), "{literal}");
+            assert_eq!(source.to_string(), text);
+        }
+        editor.draft = "24".into();
+        let edit = editor
+            .commit(source.revision)
+            .unwrap()
+            .expect("Changed parameter");
+        edit.apply(&mut source, 0).unwrap();
+        assert_eq!(
+            source.to_string(),
+            text.replace("cad.number(20,", "cad.number(24,")
+        );
+        assert!(editor.commit(source.revision).is_err());
+        assert!(edit.apply(&mut source, 0).is_err());
+        assert!(source.undo(false).is_some());
+        assert_eq!(source.to_string(), text);
+        assert!(source.undo(false).is_none());
+    }
+
+    #[test]
+    fn dimension_editor_starts_from_parameter_value_instead_of_measured_formula_result() {
+        let parameter = parse("local height=cad.number(20,{unit='mm'})").remove(0);
+        let editor = DimensionEditor::new(1, parameter, "height doubled", 40.0);
+        assert_eq!(editor.measured_mm, 40.0);
+        assert_eq!(editor.draft, "20");
+        assert!(editor.current(1));
+        assert!(!editor.current(2));
     }
 
     #[test]

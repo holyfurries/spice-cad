@@ -147,11 +147,16 @@ impl State {
         self.insert(source, &format!("\n{}", " ".repeat(indentation.min(256))));
     }
     pub fn jump_to(&mut self, range: std::ops::Range<usize>) {
+        self.reveal_source(range);
+        self.focus_request = FocusRequest::Ready;
+    }
+
+    pub fn reveal_source(&mut self, range: std::ops::Range<usize>) {
         assert!(range.start <= range.end);
         self.anchor = range.start;
         self.cursor = range.end;
         self.reveal = true;
-        self.focus_request = FocusRequest::Ready;
+        self.focus_request = FocusRequest::None;
     }
 
     pub fn cursor(&self) -> usize {
