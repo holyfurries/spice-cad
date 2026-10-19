@@ -349,8 +349,8 @@ levels; generated and hidden directories and symlinks are skipped. The most
 recent 20 files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
 (default `~/.local/state/spice-cad/`).
 
-**Properties** in the toolbar opens editable source values in the properties
-pane. Declare the values you want to expose; ordinary locals remain private:
+The properties pane opens by default; **Properties** in the toolbar toggles it.
+Declare the values you want to expose; ordinary locals remain private:
 
 ```lua
 local width: number = cad.number(310, { label = "Rack width", min = 100, max = 480, step = 1, unit = "mm" })
@@ -368,11 +368,14 @@ code.
 Only top-level declarations with literal values and literal option tables become
 controls. Up to 64 properties are shown from the first 4,096 top-level syntax
 nodes; each declaration is limited to 4 KiB. Controls edit only the value
-literal, preserving the declaration and comments. A slider drag commits on
-release as one normal editor undo; checkboxes commit immediately. Enter or
-leaving a numeric field applies it; Escape cancels. Save and Run also commit the
-active field. Auto Preview rebuilds committed edits after a pause. Existing
-personal example files are preserved; the new startup file is
+literal, preserving the declaration and comments. With Auto Preview enabled,
+sliders update the model during a drag, at the geometry worker's pace. Only the
+latest pending values are kept; the final value is retained after release. Each drag
+is one editor undo. Checkboxes commit immediately. Enter or leaving a numeric
+field applies it; Escape cancels the pending field edit. Save and Run also commit
+the active field. Parameter edits bypass the typing debounce; code edits still
+wait for a pause. Disable Auto Preview to edit values and rebuild with Run or
+Save. Existing personal example files are preserved; the new startup file is
 `spice-rack-layouts.luau`, leaving older rack copies intact. See
 [navigation and parameter notes](evaluation/navigation.md).
 

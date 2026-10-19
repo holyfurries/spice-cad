@@ -141,6 +141,25 @@ impl Buffer {
         true
     }
 
+    pub fn merge_undo(&mut self, revision: u64) {
+        if self.history_index != self.history.len() || self.history.len() < 2 {
+            return;
+        }
+        let previous = &self.history[self.history.len() - 2];
+        let latest = self.history.back().expect("Latest edit");
+        if previous.before_revision != revision || previous.after_revision != latest.before_revision
+        {
+            return;
+        }
+        let latest = self.history.pop_back().expect("Latest edit");
+        let previous = self.history.back_mut().expect("Previous edit");
+        previous.after = latest.after;
+        previous.after_revision = latest.after_revision;
+        previous.after_cursor = latest.after_cursor;
+        previous.size_bytes += latest.size_bytes;
+        self.history_index = self.history.len();
+    }
+
     fn record(
         &mut self,
         before: Rope,

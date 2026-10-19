@@ -136,6 +136,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct Parameter {
     name: String,
     literal: String,
@@ -297,6 +298,7 @@ pub struct Edit {
     range: Range<usize>,
     literal: String,
     property: Property,
+    group_revision: Option<u64>,
 }
 
 impl Edit {
@@ -310,6 +312,9 @@ impl Edit {
         if !source.replace(self.range.clone(), &self.literal, cursor) {
             return Err("Parameter edit exceeds the document limit");
         }
+        if let Some(revision) = self.group_revision {
+            source.merge_undo(revision);
+        }
         Ok(self.range.start..self.range.start + self.literal.chars().count())
     }
 }
@@ -317,11 +322,30 @@ impl Edit {
 #[derive(Default)]
 pub struct State {
     revision: u64,
+    parameters: Vec<Parameter>,
     drafts: Vec<String>,
     error: Option<&'static str>,
+    groups: Vec<Option<u64>>,
+    dragging: Option<usize>,
 }
 
 impl State {
+    pub fn applied(&mut self, edit: &Edit, revision: u64) {
+        assert_eq!(self.revision, edit.revision);
+        assert_ne!(self.revision, revision);
+        let end = edit.range.start + edit.literal.chars().count();
+        for parameter in &mut self.parameters {
+            if parameter.range == edit.range {
+                parameter.range.end = end;
+                parameter.literal.clone_from(&edit.literal);
+            } else if parameter.range.start >= edit.range.end {
+                parameter.range = (parameter.range.start - edit.range.end + end)
+                    ..(parameter.range.end - edit.range.end + end);
+            }
+        }
+        self.revision = revision;
+    }
+
     pub fn error(&self) -> Option<&'static str> {
         self.error
     }
@@ -332,22 +356,32 @@ impl State {
         revision: u64,
         parameters: Option<&[Parameter]>,
         commit: bool,
+        apply_pending: bool,
     ) -> Option<Edit> {
         crate::interface::section(ui, "PARAMETERS");
         if self.revision != revision {
             self.error = None;
         }
-        let Some(parameters) = parameters else {
-            ui.colored_label(crate::interface::MUTED, "Reading source parameters…");
-            return None;
-        };
         if self.revision != revision {
+            let Some(parameters) = parameters else {
+                ui.colored_label(crate::interface::MUTED, "Reading source parameters…");
+                return None;
+            };
             self.revision = revision;
+            self.parameters.clear();
+            self.parameters.extend_from_slice(parameters);
             self.drafts = parameters
                 .iter()
                 .map(|parameter| parameter.literal.clone())
                 .collect();
             self.error = None;
+            self.groups.clear();
+            self.groups.resize(parameters.len(), None);
+            self.dragging = None;
+        }
+        let parameters = &self.parameters;
+        if !ui.input(|input| input.pointer.any_down()) {
+            self.dragging = None;
         }
         assert_eq!(self.drafts.len(), parameters.len());
         if parameters.is_empty() {
@@ -415,9 +449,16 @@ impl State {
                             );
                             if response.changed() {
                                 *draft = value.to_string();
+                                if response.is_pointer_button_down_on() {
+                                    if self.dragging != Some(index) {
+                                        self.groups[index] = Some(revision);
+                                        self.dragging = Some(index);
+                                    }
+                                } else if !response.drag_stopped() {
+                                    self.groups[index] = None;
+                                }
                             }
-                            immediate = response.drag_stopped()
-                                || response.changed() && !response.dragged();
+                            immediate = apply_pending || commit;
                             response
                         }
                         Control::Number { .. } => {
@@ -453,7 +494,16 @@ impl State {
                     }
                     let enter = response.lost_focus()
                         && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    let slider = matches!(
+                        parameter.property.control,
+                        Control::Number {
+                            minimum: Some(_),
+                            maximum: Some(_),
+                            ..
+                        }
+                    );
                     if !cancel
+                        && (!slider || apply_pending || commit)
                         && (immediate
                             || enter
                             || response.lost_focus()
@@ -469,6 +519,7 @@ impl State {
                                     range: parameter.range.clone(),
                                     literal: draft.trim().to_owned(),
                                     property: parameter.property.clone(),
+                                    group_revision: self.groups[index],
                                 })
                             }
                             Err(error) => self.error = Some(error),
@@ -502,6 +553,63 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn controls(
+        state: &mut State,
+        source: &Buffer,
+        parameters: Option<&[Parameter]>,
+        idle: bool,
+    ) -> Option<Edit> {
+        let mut edit = None;
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                edit = state.show(ui, source.revision, parameters, false, idle);
+            })
+            .drop_without_applying_deltas();
+        edit
+    }
+
+    #[test]
+    fn slider_samples_coalesce_preserve_ranges_and_undo_the_whole_drag() {
+        let text = "-- λ\nlocal width = cad.number(9, {min=0,max=2000})\nlocal gap = cad.number(2, {min=0,max=2000})";
+        let mut source = Buffer::from(text);
+        let revision = source.revision;
+        let mut state = State::default();
+        assert!(controls(&mut state, &source, Some(&parse(text)), true).is_none());
+        state.groups[0] = Some(revision);
+        for value in ["10", "99", "1000"] {
+            state.drafts[0] = value.into();
+            assert!(controls(&mut state, &source, None, false).is_none());
+        }
+        assert_eq!(source.to_string(), text);
+        let edit = controls(&mut state, &source, None, true).expect("Latest pending value");
+        assert_eq!(edit.literal, "1000");
+        edit.apply(&mut source, 0).expect("First live sample");
+        state.applied(&edit, source.revision);
+        state.drafts[0] = "12".into();
+        state.drafts[1] = "150".into();
+        let edit = controls(&mut state, &source, None, true).expect("Second live sample");
+        edit.apply(&mut source, 0).expect("Second live sample");
+        state.applied(&edit, source.revision);
+        let edit = controls(&mut state, &source, None, true).expect("Other pending slider");
+        edit.apply(&mut source, 0).expect("Rebased later literal");
+        state.applied(&edit, source.revision);
+        assert_eq!(
+            source.to_string(),
+            text.replacen("(9,", "(12,", 1).replacen("(2,", "(150,", 1)
+        );
+        assert!(controls(&mut state, &source, None, true).is_none());
+        source.undo(false).expect("Other slider undo");
+        assert_eq!(source.to_string(), text.replacen("(9,", "(12,", 1));
+        assert_eq!(source.undo(false), Some(0));
+        assert_eq!(source.revision, revision);
+        assert_eq!(source.to_string(), text);
+        source.undo(true).expect("Whole drag redo");
+        assert_eq!(source.to_string(), text.replacen("(9,", "(12,", 1));
+        assert!(controls(&mut state, &source, None, true).is_none());
+        assert!(controls(&mut state, &source, Some(&parse(&source.to_string())), true).is_none());
+        assert_eq!(state.drafts, ["12", "2"]);
+    }
 
     fn parse(text: &str) -> Vec<Parameter> {
         let mut parser = tree_sitter::Parser::new();
@@ -543,6 +651,7 @@ mod tests {
             range: parameter.range,
             literal: "325.5".into(),
             property: parameter.property,
+            group_revision: None,
         };
         assert!(edit.apply(&mut source, 0).is_ok());
         assert_eq!(source.to_string(), text.replacen("310", "325.5", 1));
@@ -569,6 +678,7 @@ mod tests {
             range: 0..1,
             literal: "12".into(),
             property: parse("local width = cad.number(1,{})").remove(0).property,
+            group_revision: None,
         };
         assert!(edit.apply(&mut source, 0).is_err());
         assert_eq!(source.revision, revision);
@@ -587,6 +697,7 @@ mod tests {
             range: parameter.range,
             literal: "true".into(),
             property: parameter.property,
+            group_revision: None,
         };
         edit.apply(&mut source, 0).expect("Toggle edit");
         assert_eq!(source.to_string(), text.replace("false", "true"));
@@ -654,6 +765,7 @@ mod tests {
             range: parameter.range,
             literal: "4".into(),
             property: parameter.property,
+            group_revision: None,
         };
         assert!(edit.apply(&mut source, 0).is_err());
         assert_eq!(source.revision, revision);

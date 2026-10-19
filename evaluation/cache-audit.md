@@ -142,6 +142,34 @@ worker to finish. An in-flight native call completes before teardown.
 The latest release also closed cleanly through the native editor's `:q` command
 after loading the default rack and populating its persistent cache.
 
+## Interactive parameter updates
+
+Sliders previously committed only on release, then waited for the 250 ms typing
+debounce. Parameter edits now request an immediate preview. While the worker is
+busy, controls retain their latest draft values and apply the next source edit
+when it becomes idle. No queue of intermediate positions accumulates. Existing
+revision checks remain intact; obsolete builds are not adopted to animate a drag.
+Code typing retains its debounce, and disabling Auto Preview still requires Run
+or Save to rebuild.
+
+The inspector keeps bounded parameter metadata across its own literal edits,
+rebasing subsequent character ranges without waiting for asynchronous syntax
+results. External edits and undo require matching parsed metadata again. A drag
+merges its source edits into one bounded undo entry. The properties pane opens
+by default.
+
+Release Vulkan/RTX 3070 validation recorded 20 additional scene uploads during a
+held separation drag, with GPU buffer allocations unchanged at two. A sampled
+cached build took 36.4 ms (26.0 ms analysis, 1.3 ms script, 2.9 ms kernel,
+6.1 ms scenes). Changing rack width also produced several uploads before release;
+its final full rebuild took 200.9 ms, with all four canonical parts rebuilt.
+These are individual CPU pipeline samples, not input-to-presentation latency or
+frame-rate guarantees. Final saved values matched the controls; one Undo restored
+the original separation. Manual mode retained the preview until Run, and an
+invalid step rise preserved the previous geometry and recovered on a valid value.
+Controls remained visible throughout. All 129 workspace tests, Clippy with all
+targets/features and warnings denied, formatting and release build passed.
+
 ## Remaining work
 
 1. Profile interactive heap allocation counts and p95 editing latency on large

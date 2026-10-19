@@ -31,6 +31,17 @@ impl Default for Schedule {
 }
 
 impl Schedule {
+    pub fn parameter(&mut self, revision: u64, now: Instant) {
+        self.observe(revision, now);
+        if self.automatic {
+            self.pending = Some(Request {
+                revision,
+                ready_at: now,
+                trigger: Trigger::Automatic,
+            });
+        }
+    }
+
     pub fn automatic(&self) -> bool {
         self.automatic
     }
@@ -118,6 +129,24 @@ impl Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_changes_run_immediately_and_respect_manual_mode() {
+        let now = Instant::now();
+        let mut schedule = Schedule::default();
+        schedule.parameter(1, now);
+        assert_eq!(schedule.ready(now), Some(1));
+        schedule.parameter(2, now);
+        schedule.complete(1);
+        assert_eq!(schedule.ready(now), Some(2));
+        assert!(!schedule.observe(2, now));
+        assert_eq!(schedule.ready(now), Some(2));
+        schedule.set_automatic(false, 2, now);
+        schedule.parameter(3, now);
+        assert!(!schedule.pending());
+        schedule.run(3, now);
+        assert_eq!(schedule.ready(now), Some(3));
+    }
 
     #[test]
     fn typing_coalesces_to_one_latest_revision_after_a_pause() {

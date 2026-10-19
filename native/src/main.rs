@@ -700,7 +700,7 @@ impl Editor {
             show_diagnostics: false,
             show_edges: true,
             show_dimensions: false,
-            show_inspector: false,
+            show_inspector: true,
             focus_editor: false,
             show_performance: false,
             edge_width_px: 1.5,
@@ -1767,7 +1767,7 @@ impl eframe::App for Editor {
                 }
                 if let Some(script) = &self.script {
                     let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
-                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some());
+                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), !matches!(self.work, WorkerState::Busy(_) | WorkerState::Export));
                 }
                 if let Some(snapshot) = &self.snapshot {
                     interface::section(ui, "GEOMETRY");
@@ -1823,7 +1823,9 @@ impl eframe::App for Editor {
             if let Some(script) = &mut self.script {
                 match self.code_state.replace_parameter(&mut script.buffer, &edit) {
                     Ok(()) => {
-                        self.parameter_state = parameters::State::default();
+                        self.parameter_state.applied(&edit, script.buffer.revision);
+                        self.preview
+                            .parameter(script.buffer.revision, Instant::now());
                         self.message = if self.preview.automatic() {
                             "Parameter changed · Auto Preview pending"
                         } else {
