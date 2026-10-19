@@ -46,18 +46,27 @@ mod viewport;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let mut arguments: Vec<String> = std::env::args().skip(1).take(7).collect();
-    let profile = arguments
+    let mut profile = arguments
         .iter()
         .position(|argument| argument == "--profile")
         .map(|index| {
             arguments.remove(index);
             started
         });
+    let benchmarking = arguments.as_slice() == ["--profile-preview"];
+    if benchmarking {
+        profile = Some(started);
+    }
+    let completed = benchmarking.then(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let sweep = completed
+        .as_ref()
+        .map(|completed| performance::Sweep::new(started, Arc::clone(completed)));
     #[cfg(feature = "rack-tools")]
     if arguments.as_slice() == ["--benchmark"] {
         return benchmark().map_err(Into::into);
     }
     let model_path = match arguments.as_slice() {
+        [flag] if flag == "--profile-preview" => None,
         [] => Some(document::example_model(document::Example::RackParts)?),
         #[cfg(feature = "rack-tools")]
         [flag] if flag == "--rack" => None,
@@ -92,9 +101,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]"
+                    "Usage: spice-cad [--profile-preview | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
                 } else {
-                    "Usage: spice-cad [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]"
+                    "Usage: spice-cad [--profile-preview | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
                 })
                     .into(),
             );
@@ -108,7 +117,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
+            .with_active(!benchmarking)
+            .with_resizable(!benchmarking)
+            .with_inner_size(if benchmarking {
+                [1200.0, 650.0]
+            } else {
+                [1400.0, 900.0]
+            })
             .with_min_inner_size([1100.0, 650.0]),
         renderer: eframe::Renderer::Wgpu,
         depth_buffer: 32,
@@ -123,8 +138,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Spice CAD · native SMLib",
         options,
-        Box::new(move |context| Ok(Box::new(Editor::new(context, model_path, profile)?))),
+        Box::new(move |context| Ok(Box::new(Editor::new(context, model_path, profile, sweep)?))),
     )?;
+    if completed.is_some_and(|completed| !completed.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err("Preview benchmark did not complete".into());
+    }
     Ok(())
 }
 
@@ -621,6 +639,7 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
 }
 
 struct Editor {
+    sweep: Option<performance::Sweep>,
     preview_input: Option<performance::Input>,
     save_dialog: Option<save::Dialog>,
     preview: preview::Schedule,
@@ -672,6 +691,7 @@ impl Editor {
         context: &eframe::CreationContext<'_>,
         model_path: Option<std::path::PathBuf>,
         profile: Option<Instant>,
+        sweep: Option<performance::Sweep>,
     ) -> Result<Self, String> {
         performance::stage(profile, "device_and_egui_ready");
         viewport::initialize(context)?;
@@ -679,13 +699,21 @@ impl Editor {
         interface::configure(&context.egui_ctx);
         let layout = PARAMETERS.layout()?;
         let worker = Worker::new(context.egui_ctx.clone())?;
-        let script = model_path.map(document::Document::new);
+        let script = if sweep.is_some() {
+            Some(document::Document::loaded(
+                std::env::temp_dir().join(format!("spice-cad-profile-{}.luau", std::process::id())),
+                include_str!("../../models/rack-parts.luau").into(),
+            ))
+        } else {
+            model_path.map(document::Document::new)
+        };
         let diagnostics = script
             .as_ref()
             .map(|script| diagnostics::Session::new(script.path.clone(), context.egui_ctx.clone()))
             .transpose()?;
         let watcher = script
             .as_ref()
+            .filter(|_| sweep.is_none())
             .map(|script| document::Watcher::new(script.path.clone(), context.egui_ctx.clone()))
             .transpose()?;
         let mut code_state = code_editor::State::default();
@@ -694,10 +722,13 @@ impl Editor {
         let dirty_since = script
             .is_none()
             .then_some(Instant::now() - Duration::from_secs(1));
-        if let Some(script) = &script {
-            palette.remember(script.path.clone());
+        if sweep.is_none() {
+            if let Some(script) = &script {
+                palette.remember(script.path.clone());
+            }
         }
         Ok(Self {
+            sweep,
             preview_input: None,
             save_dialog: None,
             preview: preview::Schedule::default(),
@@ -1085,6 +1116,31 @@ impl Editor {
 }
 
 impl eframe::App for Editor {
+    fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(sweep) = &self.sweep {
+            let now = Instant::now();
+            let closing = context.input(|input| input.viewport().close_requested());
+            if closing || sweep.expired(now) {
+                if closing {
+                    eprintln!("Profile: preview_sweep status=cancelled");
+                } else {
+                    sweep.finish(None, now);
+                }
+                self.sweep = None;
+                self.exit = ExitState::Closing;
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                context.request_repaint_after(sweep.delay(now));
+            }
+        }
+    }
+
+    fn raw_input_hook(&mut self, _context: &egui::Context, input: &mut egui::RawInput) {
+        if self.sweep.is_some() {
+            input.events.clear();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let started = Instant::now();
         self.poll(ui.ctx());
@@ -1864,11 +1920,39 @@ impl eframe::App for Editor {
         });
         });
         }
+        let mut sweep_index = None;
+        if let (Some(sweep), Some(script)) = (&mut self.sweep, &self.script) {
+            if matches!(self.work, WorkerState::Idle)
+                && self.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.editor_revision == Some(script.buffer.revision)
+                })
+            {
+                let at = Instant::now();
+                if let Some((index, value)) = sweep.next(at) {
+                    match self.parameter_state.edit_literal(
+                        script.buffer.revision,
+                        "separation",
+                        value.to_string(),
+                    ) {
+                        Ok(Some(mut edit)) => {
+                            edit.input_at = Some(at);
+                            parameter_edit = Some(edit);
+                            sweep_index = Some(index);
+                        }
+                        Ok(None) => {}
+                        Err(error) => self.message = error.into(),
+                    }
+                }
+            }
+        }
         if let Some(edit) = parameter_edit {
             if let Some(script) = &mut self.script {
                 match self.code_state.replace_parameter(&mut script.buffer, &edit) {
                     Ok(()) => {
                         self.parameter_state.applied(&edit, script.buffer.revision);
+                        if let (Some(sweep), Some(index)) = (&mut self.sweep, sweep_index) {
+                            sweep.applied(index, script.buffer.revision);
+                        }
                         self.preview_input = edit
                             .input_at
                             .filter(|_| self.profile.is_some())
@@ -2675,6 +2759,24 @@ impl eframe::App for Editor {
                 ui.ctx().request_repaint_after(
                     Duration::from_millis(150).saturating_sub(changed.elapsed()),
                 );
+            }
+        }
+        if let Some(sweep) = &self.sweep {
+            let now = Instant::now();
+            let metrics = viewport::metrics(frame);
+            if sweep.finish(metrics.input_latency.map(|latency| latency.revision), now) {
+                eprintln!(
+                    "Profile: preview_sweep_gpu uploads={} geometry_allocations={} geometry_bytes={} placement_uploads={}",
+                    metrics.uploads,
+                    metrics.buffer_allocations,
+                    metrics.geometry_bytes,
+                    metrics.placement_writes
+                );
+                self.sweep = None;
+                self.exit = ExitState::Closing;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ui.ctx().request_repaint_after(sweep.delay(now));
             }
         }
     }

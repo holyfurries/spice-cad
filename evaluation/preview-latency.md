@@ -1,5 +1,10 @@
 # Preview scheduling investigation
 
+The [native Wayland follow-up](wayland-preview.md) measures the same display
+paths at matching framebuffer sizes with a self-running workload. Native Wayland
+measured 9.163 ms p95 through GPU preparation; the larger headless delivery delay
+below should not drive a rendering-architecture change.
+
 ## What changed
 
 `--profile` now partitions slider control-to-GPU-prepare latency into dispatch,

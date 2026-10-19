@@ -1,4 +1,87 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+pub const SWEEP_CHANGE_COUNT: u32 = 300;
+const SWEEP_INTERVAL: Duration = Duration::from_millis(20);
+const SWEEP_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct Sweep {
+    deadline: Instant,
+    started: Option<Instant>,
+    last: Option<(u32, u64)>,
+    changes: u32,
+    completed: Arc<AtomicBool>,
+}
+
+impl Sweep {
+    pub fn new(now: Instant, completed: Arc<AtomicBool>) -> Self {
+        Self {
+            deadline: now + SWEEP_TIMEOUT,
+            started: None,
+            last: None,
+            changes: 0,
+            completed,
+        }
+    }
+
+    pub fn next(&mut self, now: Instant) -> Option<(u32, f64)> {
+        let started = *self.started.get_or_insert(now);
+        let index = (now.duration_since(started).as_millis() / SWEEP_INTERVAL.as_millis())
+            .min(u128::from(SWEEP_CHANGE_COUNT - 1)) as u32;
+        if self.last.is_some_and(|(last, _)| index <= last) {
+            return None;
+        }
+        let phase = index % 100;
+        let value = if phase <= 50 {
+            phase * 2
+        } else {
+            (100 - phase) * 2
+        };
+        Some((index, f64::from(value)))
+    }
+
+    pub fn applied(&mut self, index: u32, revision: u64) {
+        assert!(index < SWEEP_CHANGE_COUNT);
+        assert!(self.last.is_none_or(|(previous, _)| index > previous));
+        self.last = Some((index, revision));
+        self.changes += 1;
+    }
+
+    pub fn finish(&self, prepared_revision: Option<u64>, now: Instant) -> bool {
+        let complete = self.last.is_some_and(|(index, revision)| {
+            index == SWEEP_CHANGE_COUNT - 1 && Some(revision) == prepared_revision
+        });
+        if complete || now >= self.deadline {
+            self.completed.store(complete, Ordering::Release);
+            eprintln!(
+                "Profile: preview_sweep status={} scheduled_changes={} applied_changes={} elapsed_ms={:.3}",
+                if complete { "complete" } else { "timeout" },
+                SWEEP_CHANGE_COUNT,
+                self.changes,
+                self.started
+                    .map_or(0.0, |started| now.duration_since(started).as_secs_f64()
+                        * 1000.0)
+            );
+            return true;
+        }
+        false
+    }
+
+    pub fn delay(&self, now: Instant) -> Duration {
+        self.deadline
+            .saturating_duration_since(now)
+            .min(SWEEP_INTERVAL)
+    }
+
+    pub fn expired(&self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Input {
@@ -192,6 +275,27 @@ impl Drop for Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sweep_coalesces_ticks_and_waits_for_the_final_renderer_revision() {
+        let at = Instant::now();
+        let completed = Arc::new(AtomicBool::new(false));
+        let mut sweep = Sweep::new(at, Arc::clone(&completed));
+        assert_eq!(sweep.next(at), Some((0, 0.0)));
+        sweep.applied(0, 10);
+        assert_eq!(sweep.next(at), None);
+        assert_eq!(sweep.next(at + Duration::from_millis(60)), Some((3, 6.0)));
+        sweep.applied(3, 11);
+        assert_eq!(sweep.next(at + Duration::from_secs(8)), Some((299, 2.0)));
+        sweep.applied(299, 12);
+        assert!(!sweep.finish(Some(11), at + Duration::from_secs(8)));
+        assert!(!completed.load(Ordering::Acquire));
+        assert!(sweep.finish(Some(12), at + Duration::from_secs(8)));
+        assert!(completed.load(Ordering::Acquire));
+        let stalled = Sweep::new(at, Arc::new(AtomicBool::new(false)));
+        assert!(stalled.finish(None, at + SWEEP_TIMEOUT));
+        assert!(!stalled.completed.load(Ordering::Acquire));
+    }
+
     #[test]
     fn percentiles_are_bounded_and_duplicate_frames_do_not_add_samples() {
         let mut samples = Samples::default();

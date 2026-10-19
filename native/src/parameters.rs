@@ -363,6 +363,33 @@ pub struct State {
 }
 
 impl State {
+    pub fn edit_literal(
+        &mut self,
+        revision: u64,
+        name: &str,
+        literal: String,
+    ) -> Result<Option<Edit>, &'static str> {
+        if self.revision != revision || self.parameters.is_empty() {
+            return Ok(None);
+        }
+        let index = self
+            .parameters
+            .iter()
+            .position(|parameter| parameter.name == name)
+            .ok_or("Parameter does not exist")?;
+        let parameter = &self.parameters[index];
+        parameter.property.validate(&literal)?;
+        self.drafts[index].clone_from(&literal);
+        Ok(Some(Edit {
+            input_at: None,
+            revision,
+            range: parameter.range.clone(),
+            literal,
+            property: parameter.property.clone(),
+            group_revision: None,
+        }))
+    }
+
     pub fn applied(&mut self, edit: &Edit, revision: u64) {
         assert_eq!(self.revision, edit.revision);
         assert_ne!(self.revision, revision);
@@ -604,6 +631,45 @@ mod tests {
             })
             .drop_without_applying_deltas();
         edit
+    }
+
+    #[test]
+    fn programmatic_edits_validate_revisions_and_keep_controls_in_sync() {
+        let text = "local separation=cad.number(12,{min=0,max=100,step=1})";
+        let mut source = Buffer::from(text);
+        let mut state = State::default();
+        assert!(
+            state
+                .edit_literal(source.revision, "separation", "20".into())
+                .unwrap()
+                .is_none()
+        );
+        assert!(controls(&mut state, &source, Some(&parse(text)), true).is_none());
+        assert!(
+            state
+                .edit_literal(source.revision, "separation", "101".into())
+                .is_err()
+        );
+        assert!(
+            state
+                .edit_literal(source.revision, "missing", "20".into())
+                .is_err()
+        );
+        assert_eq!(source.to_string(), text);
+        let edit = state
+            .edit_literal(source.revision, "separation", "20".into())
+            .unwrap()
+            .unwrap();
+        edit.apply(&mut source, 0).unwrap();
+        assert!(
+            state
+                .edit_literal(source.revision, "separation", "30".into())
+                .unwrap()
+                .is_none()
+        );
+        state.applied(&edit, source.revision);
+        assert!(controls(&mut state, &source, None, true).is_none());
+        assert_eq!(source.to_string(), text.replace("(12,", "(20,"));
     }
 
     #[test]

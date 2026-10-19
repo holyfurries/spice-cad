@@ -786,6 +786,11 @@ presentation. Profiling also breaks that interval into dispatch, worker queueing
 build time, result delivery and UI-to-prepare; see the
 [preview scheduling investigation](evaluation/preview-latency.md). The native
 renderer explicitly requests eframe's one-frame, low-latency vsync configuration.
+For an automatic, bounded test without desktop input, run
+`spice-cad --profile-preview`. It sweeps the bundled rack's separation in memory
+and closes after the final preview, leaving model files unchanged. The
+[native Wayland baseline](evaluation/wayland-preview.md) describes the workload
+and why headless display timings can differ substantially from the desktop.
 See [canonical picking measurements](evaluation/canonical-picking.md)
 for allocation checks and sustained drag results.
 Numeric property edits reuse a successful type check when every other source

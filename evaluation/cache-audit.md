@@ -230,6 +230,10 @@ a diagnostic baseline spent 2.4 ms median building the preview and 27.7 ms waiti
 for the UI to receive it. Sampling points into the native Vulkan presentation
 path in the Xvfb environment. The worker already wakes the UI immediately; queue
 and presentation-mode experiments did not establish a latency improvement.
+The [native Wayland follow-up](wayland-preview.md) measured 9.163 ms p95 through
+GPU preparation with an automatic, fixed-size sweep. Its matched Xvfb run measured
+22.561 ms p95; worker time was nearly identical. Profile the native display path
+before attributing headless delivery delays to the application's command queue.
 
 ## Remaining work
 
