@@ -168,6 +168,8 @@ impl ModelRevision {
     }
 }
 struct Scene {
+    display: Arc<viewport::Geometry>,
+    instances: Arc<Vec<viewport::Instance>>,
     part_segments: Vec<std::ops::Range<u32>>,
     layout: placement::Layout,
     outputs: Arc<Vec<inline_output::Entry>>,
@@ -179,6 +181,35 @@ struct Scene {
     annotations: dimensions::Annotations,
     edges: Arc<Vec<mesh::EdgeSegment>>,
     mesh: Arc<mesh::Mesh>,
+}
+
+impl Scene {
+    fn selection(&self, selection: &inspection::Selection) -> Option<inspection::Selection> {
+        use inspection::Selection;
+        Some(match selection {
+            Selection::Face(face) => Selection::Face(*self.faces.get(&face.id)?),
+            Selection::Pair { first, second } => {
+                let first = *self.faces.get(&first.id)?;
+                let second = *self.faces.get(&second.id)?;
+                Selection::select(Some(&Selection::Face(first)), second, true)
+                    .unwrap_or(Selection::Face(second))
+            }
+            Selection::Edge(edge) => Selection::Edge(
+                *self
+                    .inspected_edges
+                    .iter()
+                    .find(|candidate| candidate.segments == edge.segments)?,
+            ),
+            Selection::Part { index, .. } => {
+                let range = self.part_faces.get(*index as usize)?;
+                Selection::Part {
+                    index: *index,
+                    faces: [*range.start(), *range.end()],
+                    bounds: *self.part_bounds.get(*index as usize)?,
+                }
+            }
+        })
+    }
 }
 struct Snapshot {
     cached_parts: usize,
@@ -328,9 +359,15 @@ fn build_snapshot(
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
+    let display = Arc::new(viewport::Geometry::new(&[(&mesh, &edges.segments)])?);
     Ok(Snapshot {
         cached_parts: 0,
         scene: Scene {
+            display,
+            instances: Arc::new(vec![viewport::Instance::new(
+                glam::Mat4::IDENTITY,
+                mesh::DEFAULT_COLOR,
+            )]),
             part_segments: Vec::new(),
             layout: placement::Layout::Assembly,
             outputs: Arc::new(Vec::new()),
@@ -372,10 +409,10 @@ fn build_script_snapshot_cached(
 ) -> Result<Snapshot, String> {
     assert!(revision > 0);
     let total = Instant::now();
-    let model = model::compile(&source)?;
+    let model = cache.compile(&source)?;
     let prepared = cache.prepare(&model)?;
-    let mut bodies = prepared.bodies;
     let geometry = prepared.geometry;
+    let display = cache.display(&geometry)?;
     let build_ms = prepared.build_ms;
     let start = Instant::now();
     let meshes: Vec<_> = geometry.iter().map(|geometry| &geometry.mesh).collect();
@@ -383,16 +420,18 @@ fn build_script_snapshot_cached(
     let volume_mm3 = geometry.iter().map(|geometry| geometry.volume_mm3).sum();
     let scene = build_scene(
         &model,
-        &mut bodies,
         &geometry,
+        &cache.presentations(&model, placement::Layout::Assembly)?,
+        Arc::clone(&display),
         placement::Layout::Assembly,
         &checks,
     )?;
     let alternate = if model.parts.iter().any(|part| part.print.is_some()) {
         Some(build_scene(
             &model,
-            &mut bodies,
             &geometry,
+            &cache.presentations(&model, placement::Layout::Print)?,
+            display,
             placement::Layout::Print,
             &checks,
         )?)
@@ -422,24 +461,23 @@ fn build_script_snapshot_cached(
 
 fn build_scene(
     model: &model::Model,
-    bodies: &mut [kernel::Body<'_>],
     geometry: &[std::rc::Rc<model::Geometry>],
+    presentations: &[Arc<model::Presentation>],
+    display: Arc<viewport::Geometry>,
     layout: placement::Layout,
     checks: &dimensions::Annotations,
 ) -> Result<Scene, String> {
-    assert_eq!(bodies.len(), model.parts.len());
-    assert_eq!(geometry.len(), bodies.len());
-    assert!(!bodies.is_empty());
-    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
-        part.placement(layout).apply(body, false)?;
-    }
-    let meshes: Vec<_> = geometry
+    assert_eq!(presentations.len(), model.parts.len());
+    assert_eq!(geometry.len(), presentations.len());
+    assert!(!presentations.is_empty());
+    let meshes: Vec<_> = presentations
         .iter()
         .zip(&model.parts)
-        .map(|(geometry, part)| {
-            geometry
-                .mesh
-                .placed(part.placement(layout).matrix(), part.color)
+        .map(|(presentation, part)| {
+            presentation.mesh.placed(
+                glam::Mat4::from_translation(part.placement(layout).translation()),
+                part.color,
+            )
         })
         .collect();
     let mesh_refs: Vec<_> = meshes.iter().collect();
@@ -450,15 +488,9 @@ fn build_scene(
         glam::Vec3::splat(f32::INFINITY),
         glam::Vec3::splat(f32::NEG_INFINITY),
     ];
-    let mut remaining = thumbnail::PIXEL_VISITS_MAX;
-    for (((part, body), mesh), geometry) in model
-        .parts
-        .iter()
-        .zip(bodies.iter())
-        .zip(&meshes)
-        .zip(geometry)
-    {
-        let part_box = body.bounds(true)?.map(|point| point.as_vec3());
+    for ((part, presentation), geometry) in model.parts.iter().zip(presentations).zip(geometry) {
+        let translation = part.placement(layout).translation();
+        let part_box = presentation.bounds.map(|point| point + translation);
         bounds[0] = bounds[0].min(part_box[0]);
         bounds[1] = bounds[1].max(part_box[1]);
         part_bounds.push(part_box);
@@ -466,7 +498,7 @@ fn build_scene(
             line: part.line,
             name: part.name.clone(),
             content: inline_output::Content::Part {
-                image: thumbnail::render(mesh, part_box, &mut remaining),
+                image: presentation.image.clone(),
                 dimensions: part_box[1] - part_box[0],
                 volume_mm3: geometry.volume_mm3,
             },
@@ -476,7 +508,7 @@ fn build_scene(
         items: Vec::new(),
         segments: Vec::new(),
     };
-    let mut part_segments = Vec::with_capacity(bodies.len());
+    let mut part_segments = Vec::with_capacity(presentations.len());
     for (part, geometry) in model.parts.iter().zip(geometry) {
         let matrix = part.placement(layout).matrix();
         let part_edges = &geometry.edges;
@@ -503,7 +535,14 @@ fn build_scene(
                 }
             }));
     }
-    let faces = inspection::faces(&mesh)?;
+    let mut faces = std::collections::BTreeMap::new();
+    for ((part, presentation), range) in model.parts.iter().zip(presentations).zip(&part_faces) {
+        for (id, face) in &presentation.faces {
+            let mut face = face.translated(part.placement(layout).translation());
+            face.id = id + range.start() - 1;
+            faces.insert(face.id, face);
+        }
+    }
     let annotations = if layout == placement::Layout::Assembly {
         checks.clone()
     } else {
@@ -524,10 +563,15 @@ fn build_scene(
         });
     }
     outputs.sort_by_key(|output| output.line);
-    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
-        part.placement(layout).apply(body, true)?;
-    }
     Ok(Scene {
+        display,
+        instances: Arc::new(
+            model
+                .parts
+                .iter()
+                .map(|part| viewport::Instance::new(part.placement(layout).matrix(), part.color))
+                .collect(),
+        ),
         part_segments,
         layout,
         outputs: Arc::new(outputs),
@@ -972,8 +1016,15 @@ impl Editor {
                                 self.frame_next_model = false;
                             }
                             self.message = "Preview ready".into();
+                            self.selected = self
+                                .snapshot
+                                .as_ref()
+                                .filter(|previous| {
+                                    Arc::ptr_eq(&previous.scene.display, &snapshot.scene.display)
+                                })
+                                .and(self.selected.as_ref())
+                                .and_then(|selection| snapshot.scene.selection(selection));
                             self.snapshot = Some(*snapshot);
-                            self.selected = None;
                         }
                         Ok(Outcome::Exported(message)) => self.message = message,
                         Err(error) => {
@@ -1647,6 +1698,7 @@ impl eframe::App for Editor {
                             snapshot.build_ms, snapshot.tessellation_ms
                         ));
                         ui.label(format!("Build pipeline {:.1} ms", snapshot.total_ms));
+                        ui.small(format!("Preview revision {}", snapshot.revision));
                         ui.label(format!(
                             "{} / {} parts reused",
                             snapshot.cached_parts,
@@ -1667,6 +1719,10 @@ impl eframe::App for Editor {
                         metrics.geometry_bytes as f64 / 1048576.0
                     ));
                     ui.label(format!("{} uniform uploads", metrics.uniform_writes));
+                    ui.label(format!(
+                        "{} placement uploads · {} bytes total",
+                        metrics.placement_writes, metrics.placement_bytes
+                    ));
                     ui.small("CPU timings exclude GPU completion and presentation.");
                 });
         }
@@ -2119,9 +2175,7 @@ impl eframe::App for Editor {
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                         rect,
                         viewport::Draw {
-                            layout: snapshot.scene.layout,
                             edge_width_px: self.edge_width_px,
-                            edges: Arc::clone(&snapshot.scene.edges),
                             edges_enabled: self.show_edges,
                             eye: self.camera.eye(),
                             viewport_size: [
@@ -2129,8 +2183,8 @@ impl eframe::App for Editor {
                                 rect.height() * ui.ctx().pixels_per_point(),
                             ],
                             saved_at: snapshot.saved_at,
-                            mesh: Arc::clone(&snapshot.scene.mesh),
-                            revision: snapshot.revision,
+                            geometry: Arc::clone(&snapshot.scene.display),
+                            instances: Arc::clone(&snapshot.scene.instances),
                             matrix,
                             selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
                             selected_part: match &self.selected { Some(inspection::Selection::Part { faces, .. }) => *faces, _ => [0; 2] },
@@ -2796,6 +2850,115 @@ fn benchmark() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placement_checks_rerun_when_type_checks_and_geometry_are_reused() -> Result<(), String> {
+        let source = "local gap=cad.number(10,{min=0,max=100});local a=cad.box({width=10,depth=10,height=2});local b=cad.box({width=10,depth=10,height=2});local top=cad.face(a,{name='top',normal='z+',at=2});local bottom=cad.face(b,{name='bottom',normal='z-',at=0});cad.measure('gap',{from=top,to=bottom,min=7.5,max=8.5});cad.show('a',a,{assembly={rotation={y=90},position={x=20}},print={}});cad.show('b',b,{assembly={rotation={y=90},position={x=20+gap}},print={position={x=40}}})";
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let first = build_script_snapshot_cached(source.into(), 1, &mut cache)?;
+        let error = build_script_snapshot_cached(
+            source.replacen("number(10,", "number(20,", 1),
+            2,
+            &mut cache,
+        )
+        .err()
+        .ok_or("Placement check must fail")?;
+        assert!(error.contains("Constraint 'gap'"));
+        let recovered = build_script_snapshot_cached(source.into(), 3, &mut cache)?;
+        assert_eq!(recovered.cached_parts, 2);
+        assert!(Arc::ptr_eq(&first.scene.display, &recovered.scene.display));
+        assert!((recovered.checks.measurements[0].distance_mm - 8.0).abs() < 0.001);
+        Ok(())
+    }
+
+    #[test]
+    fn placement_edits_reuse_gpu_geometry_and_thumbnails_but_refresh_inspection()
+    -> Result<(), String> {
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let source = "local movement=cad.number(0,{min=0,max=100});local spin=cad.number(0,{min=0,max=90});local radius=cad.number(10,{min=1,max=20});local part=cad.cylinder({radius=radius,height=20});cad.show('part',part,{assembly={position={x=movement},rotation={y=spin}},print={rotation={x=90},position={x=movement,z=radius}}})";
+        let first = build_script_snapshot_cached(source.into(), 1, &mut cache)?;
+        let moved = source.replacen("number(0,", "number(25,", 1);
+        let second = build_script_snapshot_cached(moved.clone(), 2, &mut cache)?;
+        assert_eq!(second.cached_parts, 1);
+        assert_eq!(second.build_ms, 0.0);
+        assert!(Arc::ptr_eq(&first.scene.display, &second.scene.display));
+        let face = *first.scene.faces.values().next().expect("Face");
+        let selection = second
+            .scene
+            .selection(&inspection::Selection::Face(face))
+            .expect("Moved selection");
+        let inspection::Selection::Face(moved_face) = selection else {
+            panic!("Selected face");
+        };
+        assert!((moved_face.center - face.center - glam::vec3(25.0, 0.0, 0.0)).length() < 0.001);
+        let edge = first.scene.inspected_edges[0];
+        let inspection::Selection::Edge(moved_edge) = second
+            .scene
+            .selection(&inspection::Selection::Edge(edge))
+            .expect("Moved edge")
+        else {
+            panic!("Selected edge");
+        };
+        assert_eq!(moved_edge.segments, edge.segments);
+        let part = inspection::Selection::Part {
+            index: 0,
+            faces: [1, first.scene.mesh.face_count],
+            bounds: first.scene.bounds,
+        };
+        let inspection::Selection::Part { bounds, .. } =
+            second.scene.selection(&part).expect("Moved part")
+        else {
+            panic!("Selected part");
+        };
+        assert_eq!(bounds, second.scene.part_bounds[0]);
+        for (a, b) in [
+            (&first.scene, &second.scene),
+            (
+                first.alternate.as_ref().expect("Print"),
+                second.alternate.as_ref().expect("Print"),
+            ),
+        ] {
+            let image = |scene: &Scene| match &scene.outputs[0].content {
+                inline_output::Content::Part {
+                    image: Some(image), ..
+                } => Arc::clone(image),
+                _ => panic!("Part thumbnail"),
+            };
+            assert!(Arc::ptr_eq(&image(a), &image(b)));
+            assert!((b.bounds[0] - a.bounds[0] - glam::vec3(25.0, 0.0, 0.0)).length() < 0.001);
+            for (id, face) in &a.faces {
+                let moved = b.faces[id];
+                assert!((moved.center - face.center - glam::vec3(25.0, 0.0, 0.0)).length() < 0.001);
+                for (before, after) in face
+                    .spans
+                    .iter()
+                    .flatten()
+                    .zip(moved.spans.iter().flatten())
+                {
+                    assert_eq!(before.distance_mm, after.distance_mm);
+                    assert!(
+                        (after.points[0] - before.points[0] - glam::vec3(25.0, 0.0, 0.0)).length()
+                            < 0.001
+                    );
+                }
+            }
+        }
+        let rotated = moved.replace("spin=cad.number(0,", "spin=cad.number(45,");
+        let third = build_script_snapshot_cached(rotated.clone(), 3, &mut cache)?;
+        assert!(Arc::ptr_eq(&second.scene.display, &third.scene.display));
+        assert!((third.scene.bounds[1] - second.scene.bounds[1]).length() > 1.0);
+        let changed = build_script_snapshot_cached(
+            rotated.replace("radius=cad.number(10,", "radius=cad.number(12,"),
+            4,
+            &mut cache,
+        )?;
+        assert_eq!(changed.cached_parts, 0);
+        assert!(!Arc::ptr_eq(&third.scene.display, &changed.scene.display));
+        assert!(changed.volume_mm3 > third.volume_mm3);
+        Ok(())
+    }
 
     #[test]
     fn canonical_curves_keep_tight_bounds_face_ids_and_rotated_normals() -> Result<(), String> {
@@ -3547,23 +3710,28 @@ mod tests {
             assert_eq!(snapshot.cached_parts, usize::from(revision != 1));
             assert!((snapshot.volume_mm3 - 200.0).abs() < 0.001);
             if revision == 3 {
-                worker
-                    .try_send(Command::ExportScript {
-                        source: match snapshot.source {
-                            ModelSource::Script(source) => source,
-                            _ => unreachable!(),
-                        },
-                        folder: folder.clone(),
-                        target: export::Target::Print,
-                    })
-                    .map_err(|error| error.to_string())?;
-                assert!(matches!(
+                for (target, directory, filename) in [
+                    (export::Target::Print, "print", "model.step"),
+                    (export::Target::Game, "game", "model.glb"),
+                ] {
                     worker
-                        .recv_timeout(Duration::from_secs(20))
-                        .map_err(|error| error.to_string())??,
-                    Outcome::Exported(_)
-                ));
-                assert!(folder.join("model.step").is_file());
+                        .try_send(Command::ExportScript {
+                            source: match &snapshot.source {
+                                ModelSource::Script(source) => source.clone(),
+                                _ => unreachable!(),
+                            },
+                            folder: folder.join(directory),
+                            target,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    assert!(matches!(
+                        worker
+                            .recv_timeout(Duration::from_secs(20))
+                            .map_err(|error| error.to_string())??,
+                        Outcome::Exported(_)
+                    ));
+                    assert!(folder.join(directory).join(filename).is_file());
+                }
             }
         }
         std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;

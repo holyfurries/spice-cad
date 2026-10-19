@@ -39,7 +39,7 @@ impl Profile {
         };
         if let Some(event) = event {
             eprintln!(
-                "Profile: {event} elapsed_ms={:.3} ui_cpu_ms={cpu_ms:.3} frames={} width={} height={} uploads={} geometry_allocations={} geometry_bytes={} uniform_writes={}",
+                "Profile: {event} elapsed_ms={:.3} ui_cpu_ms={cpu_ms:.3} frames={} width={} height={} uploads={} geometry_allocations={} geometry_bytes={} uniform_writes={} placement_uploads={} placement_bytes={}",
                 self.started.elapsed().as_secs_f64() * 1000.0,
                 self.frame_count,
                 size[0],
@@ -48,6 +48,8 @@ impl Profile {
                 metrics.buffer_allocations,
                 metrics.geometry_bytes,
                 metrics.uniform_writes,
+                metrics.placement_writes,
+                metrics.placement_bytes,
             );
         }
         self.model_uploaded = metrics.uploads > 0;

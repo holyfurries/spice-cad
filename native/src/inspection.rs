@@ -208,6 +208,16 @@ pub struct Face {
     normal: Option<Vec3>,
 }
 
+impl Face {
+    pub fn translated(mut self, translation: Vec3) -> Self {
+        self.center += translation;
+        for span in self.spans.iter_mut().flatten() {
+            span.points = span.points.map(|point| point + translation);
+        }
+        self
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Selection {
     Part {

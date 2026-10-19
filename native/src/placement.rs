@@ -9,13 +9,24 @@ pub enum Layout {
     Print,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct Placement {
     position: [f64; 3],
     rotation: [f64; 3],
 }
 
 impl Placement {
+    pub fn orientation(self) -> Self {
+        Self {
+            position: [0.0; 3],
+            ..self
+        }
+    }
+
+    pub fn translation(self) -> glam::Vec3 {
+        DVec3::from_array(self.position).as_vec3()
+    }
+
     pub fn from_table(options: Table) -> mlua::Result<Self> {
         crate::model::options_fields(&options, &["position", "rotation"])?;
         let mut placement = Self::default();

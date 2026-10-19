@@ -10,6 +10,26 @@ const TYPE_CONTEXT: &str = include_str!("../types/cad.luau");
 const OUTPUT_SIZE_BYTES_MAX: u64 = 65536;
 const DIAGNOSTIC_COUNT_MAX: usize = 200;
 
+#[derive(Default)]
+pub struct Cache {
+    successful: Option<String>,
+}
+
+impl Cache {
+    pub fn validate(&mut self, source: &str) -> Result<bool, String> {
+        let key = crate::parameters::analysis_key(source);
+        if key.is_some() && key == self.successful {
+            return Ok(true);
+        }
+        let report = check(source, || false)?.ok_or("Analysis cancelled")?;
+        if let Some(error) = report.error() {
+            return Err(error);
+        }
+        self.successful = key;
+        Ok(false)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Position {
     pub line: usize,
@@ -342,6 +362,50 @@ fn parse(output: &str, offset: usize) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_checks_reuse_only_numeric_property_literals() -> Result<(), String> {
+        let source = "-- λ\nlocal movement = cad.number(10, {min=-100,max=100})\nlocal mode = cad.toggle(false,{})\nlocal ordinary: number = 10\nassert(movement > 0)\ncad.show('part',cad.box({width=10,depth=10,height=10}))";
+        let mut cache = Cache::default();
+        assert!(!cache.validate(source)?);
+        for literal in ["11", "-12.5", "1e2"] {
+            let edited = source.replacen("number(10,", &format!("number({literal},"), 1);
+            assert!(cache.validate(&edited)?);
+            assert!(
+                check(&edited, || false)?
+                    .expect("Checked")
+                    .error()
+                    .is_none()
+            );
+        }
+        for edited in [
+            source.replace("false", "true"),
+            source.replace("max=100", "max=101"),
+            source.replace("number = 10", "number = 11"),
+            source.replace("movement > 0", "movement > 1"),
+            source.replace("number(10,", "number(5+5,"),
+        ] {
+            assert_ne!(
+                crate::parameters::analysis_key(source),
+                crate::parameters::analysis_key(&edited)
+            );
+        }
+        let invalid = source.replace("ordinary: number = 10", "ordinary: number = 'bad'");
+        assert!(cache.validate(&invalid).is_err());
+        assert!(cache.validate(source)?);
+        assert!(
+            crate::model::compile_cached(&source.replace("number(10,", "number(-1,"), &mut cache)
+                .is_err()
+        );
+        assert!(cache.validate(source)?);
+        assert!(crate::model::compile_cached(source, &mut cache).is_ok());
+        assert!(cache.validate("local bad = cad.number(").is_err());
+        let rack = include_str!("../../models/rack-parts.luau");
+        let mut cache = Cache::default();
+        assert!(!cache.validate(rack)?);
+        assert!(cache.validate(&rack.replacen("number(12,", "number(25,", 1))?);
+        Ok(())
+    }
 
     #[test]
     fn positions_are_model_relative_and_warnings_do_not_block() -> Result<(), String> {

@@ -14,7 +14,7 @@ const PART_COUNT_MAX: usize = 32;
 
 #[path = "geometry_cache.rs"]
 mod cache;
-pub use cache::Cache;
+pub use cache::{Cache, Presentation};
 
 #[derive(Clone)]
 pub struct Part {
@@ -109,6 +109,7 @@ pub struct Geometry {
     pub mesh: crate::mesh::Mesh,
     pub edges: crate::inspection::Edges,
     pub volume_mm3: f64,
+    pub bounds: [glam::Vec3; 2],
 }
 
 pub fn read_source(path: &Path) -> Result<String, String> {
@@ -124,11 +125,15 @@ pub fn read_source(path: &Path) -> Result<String, String> {
 }
 
 pub fn compile(source: &str) -> Result<Model, String> {
+    compile_cached(source, &mut crate::analysis::Cache::default())
+}
+
+pub fn compile_cached(
+    source: &str,
+    analysis: &mut crate::analysis::Cache,
+) -> Result<Model, String> {
     let started = Instant::now();
-    let report = crate::analysis::check(source, || false)?.ok_or("Analysis cancelled")?;
-    if let Some(error) = report.error() {
-        return Err(error);
-    }
+    analysis.validate(source)?;
     let analysis_ms = started.elapsed().as_secs_f64() * 1000.0;
     let started = Instant::now();
     let lua = Lua::new();

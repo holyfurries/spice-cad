@@ -4,6 +4,16 @@ use super::{
 };
 use crate::kernel::{Body, Kernel};
 use std::rc::Rc;
+use std::sync::Arc;
+
+pub struct Presentation {
+    orientation: crate::placement::Placement,
+    color: [f32; 3],
+    pub bounds: [glam::Vec3; 2],
+    pub mesh: Arc<crate::mesh::Mesh>,
+    pub faces: std::collections::BTreeMap<u32, crate::inspection::Face>,
+    pub image: Option<Arc<eframe::egui::ColorImage>>,
+}
 
 struct Entry<'kernel> {
     recipe: Rc<Recipe>,
@@ -11,10 +21,11 @@ struct Entry<'kernel> {
     steps: usize,
     body: Rc<Body<'kernel>>,
     geometry: Rc<Geometry>,
+    presentations: [Option<Arc<Presentation>>; 2],
 }
 
 pub struct Prepared<'kernel> {
-    pub bodies: Vec<Body<'kernel>>,
+    pub bodies: Vec<Rc<Body<'kernel>>>,
     pub geometry: Vec<Rc<Geometry>>,
     pub hits: usize,
     pub build_ms: f64,
@@ -25,6 +36,8 @@ pub struct Cache<'kernel> {
     kernel: &'kernel Kernel,
     entries: Vec<Entry<'kernel>>,
     comparisons: Vec<(usize, usize)>,
+    analysis: crate::analysis::Cache,
+    display: Option<(Vec<Rc<Geometry>>, Arc<crate::viewport::Geometry>)>,
 }
 
 impl<'kernel> Cache<'kernel> {
@@ -33,13 +46,82 @@ impl<'kernel> Cache<'kernel> {
             kernel,
             entries: Vec::new(),
             comparisons: Vec::with_capacity(EVALUATION_COUNT_MAX),
+            analysis: Default::default(),
+            display: None,
         }
+    }
+
+    pub fn compile(&mut self, source: &str) -> Result<Model, String> {
+        super::compile_cached(source, &mut self.analysis)
+    }
+
+    pub fn display(
+        &mut self,
+        geometry: &[Rc<Geometry>],
+    ) -> Result<Arc<crate::viewport::Geometry>, String> {
+        if let Some((previous, display)) = &self.display {
+            if previous.len() == geometry.len()
+                && previous.iter().zip(geometry).all(|(a, b)| Rc::ptr_eq(a, b))
+            {
+                return Ok(Arc::clone(display));
+            }
+        }
+        let parts: Vec<_> = geometry
+            .iter()
+            .map(|part| (&part.mesh, part.edges.segments.as_slice()))
+            .collect();
+        let display = Arc::new(crate::viewport::Geometry::new(&parts)?);
+        self.display = Some((geometry.to_vec(), Arc::clone(&display)));
+        Ok(display)
+    }
+
+    pub fn presentations(
+        &mut self,
+        model: &Model,
+        layout: crate::placement::Layout,
+    ) -> Result<Vec<Arc<Presentation>>, String> {
+        assert_eq!(self.entries.len(), model.parts.len());
+        assert!(model.parts.len() <= PART_COUNT_MAX);
+        let slot = match layout {
+            crate::placement::Layout::Assembly => 0,
+            crate::placement::Layout::Print => 1,
+        };
+        let mut remaining = crate::thumbnail::PIXEL_VISITS_MAX;
+        let mut result = Vec::with_capacity(model.parts.len());
+        for (entry, part) in self.entries.iter_mut().zip(&model.parts) {
+            let orientation = part.placement(layout).orientation();
+            let cached = &mut entry.presentations[slot];
+            if cached.as_ref().is_none_or(|previous| {
+                previous.orientation != orientation || previous.color != part.color
+            }) {
+                let bounds = if orientation == crate::placement::Placement::default() {
+                    entry.geometry.bounds
+                } else {
+                    let mut body = entry.body.try_clone()?;
+                    orientation.apply(&mut body, false)?;
+                    body.bounds(true)?.map(|point| point.as_vec3())
+                };
+                let mesh = entry.geometry.mesh.placed(orientation.matrix(), part.color);
+                let faces = crate::inspection::faces(&mesh)?;
+                let image = crate::thumbnail::render(&mesh, bounds, &mut remaining).map(Arc::new);
+                *cached = Some(Arc::new(Presentation {
+                    orientation,
+                    color: part.color,
+                    bounds,
+                    mesh: Arc::new(mesh),
+                    faces,
+                    image,
+                }));
+            }
+            result.push(Arc::clone(cached.as_ref().expect("Prepared presentation")));
+        }
+        Ok(result)
     }
 
     pub fn prepare(&mut self, model: &Model) -> Result<Prepared<'kernel>, String> {
         assert!(!model.parts.is_empty());
         assert!(model.parts.len() <= PART_COUNT_MAX);
-        let mut next = Vec::with_capacity(model.parts.len());
+        let mut next: Vec<Entry<'kernel>> = Vec::with_capacity(model.parts.len());
         let mut prepared = Prepared {
             bodies: Vec::with_capacity(model.parts.len()),
             geometry: Vec::with_capacity(model.parts.len()),
@@ -51,7 +133,7 @@ impl<'kernel> Cache<'kernel> {
         let mut vertices = 0;
         let mut segments = 0;
         for part in &model.parts {
-            let found = self.entries.iter().find(|entry| {
+            let found = self.entries.iter().chain(next.iter()).find(|entry| {
                 cache_matches(
                     &model.recipe,
                     part.solid,
@@ -74,6 +156,7 @@ impl<'kernel> Cache<'kernel> {
                     steps: entry.steps,
                     body: Rc::clone(&entry.body),
                     geometry: Rc::clone(&entry.geometry),
+                    presentations: entry.presentations.clone(),
                 }
             } else {
                 let before = steps;
@@ -89,6 +172,7 @@ impl<'kernel> Cache<'kernel> {
                     mesh,
                     edges: body.edges()?,
                     volume_mm3: body.volume()?,
+                    bounds: body.bounds(true)?.map(|point| point.as_vec3()),
                 });
                 prepared.tessellation_ms += started.elapsed().as_secs_f64() * 1000.0;
                 Entry {
@@ -97,6 +181,7 @@ impl<'kernel> Cache<'kernel> {
                     steps: steps - before,
                     body: Rc::new(body),
                     geometry,
+                    presentations: Default::default(),
                 }
             };
             vertices += entry.geometry.mesh.vertices.len();
@@ -107,9 +192,7 @@ impl<'kernel> Cache<'kernel> {
             if segments > 131072 {
                 return Err("Assembly exceeds its display edge budget".into());
             }
-            let started = std::time::Instant::now();
-            prepared.bodies.push(entry.body.try_clone()?);
-            prepared.build_ms += started.elapsed().as_secs_f64() * 1000.0;
+            prepared.bodies.push(Rc::clone(&entry.body));
             prepared.geometry.push(Rc::clone(&entry.geometry));
             next.push(entry);
         }
@@ -249,11 +332,12 @@ mod tests {
                 "'renamed',cut,{color={r=1,g=0,b=0},assembly={position={x=50}},print={}}"
             )
         );
-        let mut second = cache.prepare(&super::super::compile(&edited)?)?;
+        let second = cache.prepare(&super::super::compile(&edited)?)?;
         assert_eq!(second.hits, 2);
         assert!(Rc::ptr_eq(&first.geometry[0], &second.geometry[0]));
-        second.bodies[0].translate([100.0, 0.0, 0.0])?;
-        second.bodies[0].step_data("working-copy")?;
+        let mut working = second.bodies[0].try_clone()?;
+        working.translate([100.0, 0.0, 0.0])?;
+        working.step_data("working-copy")?;
         let next = cache.prepare(&super::super::compile(source)?)?;
         assert_eq!(next.hits, 2);
         assert!(next.bodies[0].bounds(true)?[0].abs().max_element() < 0.001);

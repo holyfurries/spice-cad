@@ -27,7 +27,7 @@ call count and retained memory measure different costs. Results are recorded in
 
 ## Ownership and invalidation
 
-| Data | Existing cache / lifetime | Remaining cost |
+| Data | Baseline cache / lifetime | Baseline repeated cost |
 | --- | --- | --- |
 | Editor source/history | Rope snapshots, bounded undo history | Whole source flattened for geometry and LSP; geometry snapshot copies it again |
 | Visible text | Galleys and character advances, viewport bounded | Every edit or completed syntax parse clears all visible entries; per-frame temporary vectors/maps remain |
@@ -170,13 +170,54 @@ invalid step rise preserved the previous geometry and recovered on a valid value
 Controls remained visible throughout. All 129 workspace tests, Clippy with all
 targets/features and warnings denied, formatting and release build passed.
 
+## Placement fast path
+
+Both layouts now share one canonical GPU triangle/edge buffer pair. Vertices and
+segments identify their part; vertex shaders apply that part's matrix and color.
+Movement, rotation, color changes and layout switches update at most 32 records
+of 80 bytes each. A four-part placement upload is 320 bytes. Geometry identity
+depends on the ordered canonical parts, independently of source/preview revision.
+Shape changes or part reordering invalidate that payload. Face, edge and part
+selections follow unchanged geometry to its updated placement. Geometry buffer capacity
+is bounded by 13,270,016 bytes (12.66 MiB), plus a fixed 2,560-byte placement buffer
+and camera uniform; driver staging, CPU caches and textures are separate.
+
+The worker retains up to two orientation/color presentations per current part.
+Translation reuses thumbnails and face spans, shifts tight bounds, and never
+copies a native body. Rotation refreshes orientation-dependent presentation and
+obtains tight bounds from an independent native body copy. Volume and canonical
+tessellation remain cached. Inline thumbnail textures retain their handles while
+their shared image is unchanged. CPU world meshes and sampled edge positions still
+refresh for picking and occlusion. Export creates independent mutable body copies.
+
+A single successful type-check cache normalizes only validated numeric literal
+spans in parsed `cad.number` property declarations. All other source bytes are
+compared exactly, without hashes; boolean literals and metadata are preserved.
+Luau has one numeric type and [does not support numeric singleton types](https://luau.org/types/basic-types/#singleton-types-aka-literal-types).
+Malformed/unrecognized declarations remain exact bytes; a parse timeout falls back
+to full checking. Only a successful check populates the cache. Runtime evaluation,
+resource limits, property validation and assembly constraints always rerun.
+The language server independently refreshes diagnostics for the actual source.
+
+The release rack separation sample now measured 2.2 ms for the build pipeline:
+1.3 ms analysis-key preparation, 0.8 ms script evaluation, no native construction,
+and 0.1 ms scene preparation. The earlier slider sample was 36.4 ms; these are
+individual CPU samples, not controlled percentiles or presentation timings.
+During a held drag, geometry uploads stayed at one and allocations at two while
+placement uploads increased from one to 21 (320 bytes per update). Assembly/Print
+switches likewise preserved geometry buffers. Native checks cover final values,
+one-step Undo, shape invalidation and picking; unit checks compare GPU transforms
+with CPU positions, normals, face IDs and edges in both layouts. All 134 workspace
+tests, Clippy with all targets/features and warnings denied, formatting and release
+build pass, including cached print/game exports and constraint failure/recovery.
+
 ## Remaining work
 
 1. Profile interactive heap allocation counts and p95 editing latency on large
    ASCII/Unicode files, plus retained native geometry memory during repeated edits.
 2. Consider intermediate-operation caching if changed-part rebuilds remain costly.
-   CPU scene transforms, face inspection and thumbnails still regenerate for a
-   successful source revision even when final native parts are reused.
+   CPU world meshes and sampled edge positions still regenerate for picking;
+   rotation-dependent inspection and thumbnails refresh when orientation changes.
 3. Send LSP document deltas when negotiated and update special-character indexes
    for changed lines. Add stale-work checks between CAD operations and before
    scene generation. An individual native call may remain non-interruptible.

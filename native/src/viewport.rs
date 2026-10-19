@@ -1,4 +1,4 @@
-use crate::mesh::{EdgeSegment, Mesh, Vertex};
+use crate::mesh::{EdgeSegment, Mesh};
 use eframe::{
     egui,
     egui_wgpu::{self, wgpu},
@@ -74,27 +74,110 @@ impl Camera {
 }
 
 pub struct Draw {
-    pub layout: crate::placement::Layout,
     pub edge_width_px: f32,
-    pub edges: Arc<Vec<EdgeSegment>>,
     pub edges_enabled: bool,
     pub eye: Vec3,
     pub viewport_size: [f32; 2],
     pub saved_at: Option<std::time::SystemTime>,
-    pub mesh: Arc<Mesh>,
-    pub revision: u64,
+    pub geometry: Arc<Geometry>,
+    pub instances: Arc<Vec<Instance>>,
     pub matrix: Mat4,
     pub selected: [u32; 2],
     pub selected_part: [u32; 2],
     pub selected_edge: Option<[u32; 2]>,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    normal: [f32; 3],
+    face: u32,
+    part: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Segment {
+    start: [f32; 3],
+    end: [f32; 3],
+    part: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Instance {
+    matrix: [f32; 16],
+    color: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<Vertex>() == 32);
+const _: () = assert!(std::mem::size_of::<Segment>() == 28);
+const _: () = assert!(std::mem::size_of::<Instance>() == 80);
+
+impl Instance {
+    pub fn new(matrix: Mat4, color: [f32; 3]) -> Self {
+        assert!(matrix.is_finite());
+        assert!(color.iter().all(|value| value.is_finite()));
+        Self {
+            matrix: matrix.to_cols_array(),
+            color: [color[0], color[1], color[2], 1.0],
+        }
+    }
+}
+
+pub struct Geometry {
+    vertices: Vec<Vertex>,
+    segments: Vec<Segment>,
+    part_count: usize,
+}
+
+impl Geometry {
+    pub fn new(parts: &[(&Mesh, &[EdgeSegment])]) -> Result<Self, String> {
+        let vertices = parts
+            .iter()
+            .map(|(mesh, _)| mesh.vertices.len())
+            .sum::<usize>();
+        let segments = parts.iter().map(|(_, edges)| edges.len()).sum::<usize>();
+        if parts.is_empty() || parts.len() > 32 || vertices > 300000 || segments > 131072 {
+            return Err("GPU geometry exceeds its part, triangle or edge budget".into());
+        }
+        let mut result = Self {
+            vertices: Vec::with_capacity(vertices),
+            segments: Vec::with_capacity(segments),
+            part_count: parts.len(),
+        };
+        let mut faces = 0;
+        for (part, (mesh, segments)) in parts.iter().enumerate() {
+            result
+                .vertices
+                .extend(mesh.vertices.iter().map(|vertex| Vertex {
+                    position: vertex.position,
+                    normal: vertex.normal,
+                    face: vertex.face_id + faces,
+                    part: part as u32,
+                }));
+            result
+                .segments
+                .extend(segments.iter().map(|segment| Segment {
+                    start: segment.start,
+                    end: segment.end,
+                    part: part as u32,
+                }));
+            faces += mesh.face_count;
+        }
+        Ok(result)
+    }
+}
 struct Gpu {
-    scenes: [GpuScene; 2],
+    scene: GpuScene,
     line_pipeline: wgpu::RenderPipeline,
     pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     uniform_previous: Option<[u32; 32]>,
+    instances: wgpu::Buffer,
+    instances_previous: Option<Arc<Vec<Instance>>>,
     metrics: Metrics,
 }
 
@@ -102,7 +185,7 @@ struct Gpu {
 struct GpuScene {
     vertices: Option<wgpu::Buffer>,
     lines: Option<wgpu::Buffer>,
-    revision: u64,
+    geometry: Option<Arc<Geometry>>,
     count: u32,
     line_count: u32,
 }
@@ -115,13 +198,8 @@ pub struct Metrics {
     pub geometry_bytes: u64,
     pub upload_ms: f64,
     pub saved_ms: Option<f64>,
-}
-
-fn layout_index(layout: crate::placement::Layout) -> usize {
-    match layout {
-        crate::placement::Layout::Assembly => 0,
-        crate::placement::Layout::Print => 1,
-    }
+    pub placement_writes: u64,
+    pub placement_bytes: u64,
 }
 
 fn upload_buffer(
@@ -168,9 +246,12 @@ pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("CAD viewport"),source:wgpu::ShaderSource::Wgsl(r#"
 struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32>, part:vec4<f32> }
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
+struct Instance { matrix:mat4x4<f32>, color:vec4<f32> }
+@group(0) @binding(1) var<uniform> instances:array<Instance,32>;
 struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32> }
-@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) color:vec4<f32>)->Output {
- var output:Output; output.position=uniforms.matrix*vec4<f32>(position,1.0); output.normal=normal; output.face=face; output.world=position; output.color=color.rgb; return output;
+@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
+ let instance=instances[part]; let world=instance.matrix*vec4<f32>(position,1.0);
+ var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; return output;
 }
 @fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
  let normal=normalize(input.normal);
@@ -186,9 +267,10 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
 }
 struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32, @location(1) @interpolate(flat) selected:u32 }
-@vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@builtin(vertex_index) index:u32,@builtin(instance_index) segment:u32)->LineOutput {
- let a=uniforms.matrix*vec4<f32>(start,1.0);
- let b=uniforms.matrix*vec4<f32>(end,1.0);
+@vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@location(2) part:u32,@builtin(vertex_index) index:u32,@builtin(instance_index) segment:u32)->LineOutput {
+ let transform=uniforms.matrix*instances[part].matrix;
+ let a=transform*vec4<f32>(start,1.0);
+ let b=transform*vec4<f32>(end,1.0);
  let viewport=max(uniforms.selection.yz,vec2<f32>(1.0));
  let delta=(b.xy/b.w-a.xy/a.w)*viewport;
  let perpendicular=vec2<f32>(-delta.y,delta.x)/max(length(delta),0.001);
@@ -207,16 +289,28 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
 "#.into()) });
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Camera"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("CAD"),
@@ -233,7 +327,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Uint32,3=>Unorm8x4],
+                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Uint32,3=>Uint32],
             })],
         },
         fragment: Some(wgpu::FragmentState {
@@ -262,13 +356,25 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         contents: &[0; 128],
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
+    let instances = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("CAD part placements"),
+        size: (32 * std::mem::size_of::<Instance>()) as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Camera"),
         layout: &layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: instances.as_entire_binding(),
+            },
+        ],
     });
     let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("CAD edge outlines"),
@@ -278,9 +384,9 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
             entry_point: Some("line_vertex"),
             compilation_options: Default::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<EdgeSegment>() as u64,
+                array_stride: std::mem::size_of::<Segment>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3],
+                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Uint32],
             })],
         },
         fragment: Some(wgpu::FragmentState {
@@ -313,12 +419,14 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         cache: None,
     });
     state.renderer.write().callback_resources.insert(Gpu {
-        scenes: Default::default(),
+        scene: Default::default(),
         line_pipeline,
         pipeline,
         group,
         uniform,
         uniform_previous: None,
+        instances,
+        instances_previous: None,
         metrics: Metrics::default(),
     });
     Ok(())
@@ -336,29 +444,35 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get_mut::<Gpu>()
             .expect("Viewport initialized before drawing");
-        assert!(self.revision > 0);
-        let scene = &mut gpu.scenes[layout_index(self.layout)];
-        if scene.revision != self.revision {
+        assert_eq!(self.instances.len(), self.geometry.part_count);
+        assert!(self.instances.len() <= 32);
+        let scene = &mut gpu.scene;
+        if scene
+            .geometry
+            .as_ref()
+            .is_none_or(|geometry| !Arc::ptr_eq(geometry, &self.geometry))
+        {
             let started = std::time::Instant::now();
             gpu.metrics.buffer_allocations += u64::from(upload_buffer(
                 device,
                 queue,
                 &mut scene.vertices,
-                bytemuck::cast_slice(&self.mesh.vertices),
-                300000 * std::mem::size_of::<crate::mesh::Vertex>() as u64,
+                bytemuck::cast_slice(&self.geometry.vertices),
+                300000 * std::mem::size_of::<Vertex>() as u64,
                 "CAD triangles",
             ));
             gpu.metrics.buffer_allocations += u64::from(upload_buffer(
                 device,
                 queue,
                 &mut scene.lines,
-                bytemuck::cast_slice(self.edges.as_slice()),
-                131072 * std::mem::size_of::<EdgeSegment>() as u64,
+                bytemuck::cast_slice(self.geometry.segments.as_slice()),
+                131072 * std::mem::size_of::<Segment>() as u64,
                 "CAD curve segments",
             ));
-            scene.count = u32::try_from(self.mesh.vertices.len()).expect("Mesh budget checked");
-            scene.line_count = u32::try_from(self.edges.len()).expect("Edge budget checked");
-            scene.revision = self.revision;
+            scene.count = u32::try_from(self.geometry.vertices.len()).expect("Mesh budget checked");
+            scene.line_count =
+                u32::try_from(self.geometry.segments.len()).expect("Edge budget checked");
+            scene.geometry = Some(Arc::clone(&self.geometry));
             gpu.metrics.uploads += 1;
             gpu.metrics.upload_ms = started.elapsed().as_secs_f64() * 1000.0;
             gpu.metrics.saved_ms = self
@@ -366,6 +480,17 @@ impl egui_wgpu::CallbackTrait for Draw {
                 .and_then(|saved| std::time::SystemTime::now().duration_since(saved).ok())
                 .map(|elapsed| elapsed.as_secs_f64() * 1000.0);
         }
+        if gpu.instances_previous.as_ref().is_none_or(|previous| {
+            !Arc::ptr_eq(previous, &self.instances)
+                && bytemuck::cast_slice::<_, u8>(previous.as_slice())
+                    != bytemuck::cast_slice::<_, u8>(self.instances.as_slice())
+        }) {
+            let bytes = bytemuck::cast_slice(self.instances.as_slice());
+            queue.write_buffer(&gpu.instances, 0, bytes);
+            gpu.metrics.placement_writes += 1;
+            gpu.metrics.placement_bytes += bytes.len() as u64;
+        }
+        gpu.instances_previous = Some(Arc::clone(&self.instances));
         let mut uniform = [0_f32; 32];
         uniform[..16].copy_from_slice(&self.matrix.to_cols_array());
         uniform[16] = self.selected[0] as f32;
@@ -398,8 +523,13 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get::<Gpu>()
             .expect("Viewport initialized before drawing");
-        let scene = &gpu.scenes[layout_index(self.layout)];
-        assert_eq!(scene.revision, self.revision);
+        let scene = &gpu.scene;
+        assert!(
+            scene
+                .geometry
+                .as_ref()
+                .is_some_and(|geometry| Arc::ptr_eq(geometry, &self.geometry))
+        );
         pass.set_pipeline(&gpu.pipeline);
         pass.set_bind_group(0, &gpu.group, &[]);
         if scene.count > 0 {
@@ -431,10 +561,8 @@ pub fn metrics(frame: &eframe::Frame) -> Metrics {
                 .callback_resources
                 .get::<Gpu>()
                 .map(|gpu| Metrics {
-                    geometry_bytes: gpu
-                        .scenes
-                        .iter()
-                        .flat_map(|scene| [&scene.vertices, &scene.lines])
+                    geometry_bytes: [&gpu.scene.vertices, &gpu.scene.lines]
+                        .into_iter()
                         .flatten()
                         .map(wgpu::Buffer::size)
                         .sum(),
@@ -442,4 +570,65 @@ pub fn metrics(frame: &eframe::Frame) -> Metrics {
                 })
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_instances_match_cpu_positions_normals_edges_and_face_ids_in_both_layouts()
+    -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=20,height=30});local b=cad.cylinder({radius=5,height=15});cad.show('a',a,{color={r=1,g=0,b=0},assembly={rotation={x=25,y=40,z=10},position={x=40,y=-10}},print={position={x=20}}});cad.show('b',b,{color={r=0,g=1,b=0},assembly={rotation={y=90},position={z=20}},print={rotation={x=90},position={y=30,z=5}}})";
+        let mut snapshot = crate::build_script_snapshot(source, 1)?;
+        let geometry = Arc::clone(&snapshot.scene.display);
+        for layout in [
+            crate::placement::Layout::Assembly,
+            crate::placement::Layout::Print,
+        ] {
+            snapshot.set_layout(layout);
+            let scene = &snapshot.scene;
+            assert!(Arc::ptr_eq(&geometry, &scene.display));
+            assert_eq!(geometry.vertices.len(), scene.mesh.vertices.len());
+            assert_eq!(geometry.segments.len(), scene.edges.len());
+            for (vertex, expected) in geometry.vertices.iter().zip(&scene.mesh.vertices) {
+                let instance = scene.instances[vertex.part as usize];
+                let matrix = Mat4::from_cols_array(&instance.matrix);
+                assert_eq!(vertex.face, expected.face_id);
+                assert!(
+                    matrix
+                        .transform_point3(Vec3::from_array(vertex.position))
+                        .distance(Vec3::from_array(expected.position))
+                        < 0.001
+                );
+                assert!(
+                    matrix
+                        .transform_vector3(Vec3::from_array(vertex.normal))
+                        .dot(Vec3::from_array(expected.normal))
+                        > 0.9999
+                );
+                assert_eq!(
+                    instance.color.map(|value| (value * 255.0).round() as u8)[..3],
+                    expected.color[..3]
+                );
+            }
+            for (segment, expected) in geometry.segments.iter().zip(scene.edges.iter()) {
+                let matrix = Mat4::from_cols_array(&scene.instances[segment.part as usize].matrix);
+                assert!(
+                    matrix
+                        .transform_point3(Vec3::from_array(segment.start))
+                        .distance(Vec3::from_array(expected.start))
+                        < 0.001
+                );
+                assert!(
+                    matrix
+                        .transform_point3(Vec3::from_array(segment.end))
+                        .distance(Vec3::from_array(expected.end))
+                        < 0.001
+                );
+            }
+        }
+        assert!(Geometry::new(&[]).is_err());
+        Ok(())
+    }
 }

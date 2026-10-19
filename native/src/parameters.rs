@@ -145,6 +145,37 @@ pub struct Parameter {
     property: Property,
 }
 
+pub fn analysis_key(source: &str) -> Option<String> {
+    if source.len() > crate::text_buffer::SIZE_BYTES_MAX {
+        return None;
+    }
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_luau::LANGUAGE.into())
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+    let mut cancelled = |_: &tree_sitter::ParseState| std::time::Instant::now() >= deadline;
+    let tree = parser.parse_with_options(
+        &mut |offset, _| source.as_bytes().get(offset..).unwrap_or_default(),
+        None,
+        Some(tree_sitter::ParseOptions::new().progress_callback(&mut cancelled)),
+    )?;
+    let rope = Rope::from_str(source);
+    let mut key = String::with_capacity(source.len());
+    let mut previous = 0;
+    for parameter in extract(&rope, &tree) {
+        if matches!(parameter.property.control, Control::Number { .. }) {
+            let start = rope.char_to_byte(parameter.range.start);
+            let end = rope.char_to_byte(parameter.range.end);
+            key.push_str(&source[previous..start]);
+            key.push('0');
+            previous = end;
+        }
+    }
+    key.push_str(&source[previous..]);
+    Some(key)
+}
+
 pub fn extract(source: &Rope, tree: &tree_sitter::Tree) -> Vec<Parameter> {
     let mut parameters = Vec::new();
     let root = tree.root_node();

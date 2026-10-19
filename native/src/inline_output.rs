@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 pub enum Content {
     Part {
-        image: Option<egui::ColorImage>,
+        image: Option<Arc<egui::ColorImage>>,
         dimensions: Vec3,
         volume_mm3: f64,
     },
@@ -117,7 +117,33 @@ impl State {
                 .take()
                 .filter(|previous| Arc::ptr_eq(&previous.entries, &entries))
                 .map(|previous| previous.handles)
-                .unwrap_or_else(|| (0..entries.len()).map(|_| None).collect());
+                .unwrap_or_else(|| {
+                    entries
+                        .iter()
+                        .map(|entry| {
+                            let Content::Part {
+                                image: Some(image), ..
+                            } = &entry.content
+                            else {
+                                return None;
+                            };
+                            self.entries.iter().zip(&self.textures).find_map(
+                                |(previous, texture)| {
+                                    let Content::Part {
+                                        image: Some(previous),
+                                        ..
+                                    } = &previous.content
+                                    else {
+                                        return None;
+                                    };
+                                    Arc::ptr_eq(image, previous)
+                                        .then(|| texture.clone())
+                                        .flatten()
+                                },
+                            )
+                        })
+                        .collect()
+                });
             let previous = Textures {
                 entries: Arc::clone(&self.entries),
                 handles: std::mem::replace(&mut self.textures, handles),
@@ -367,7 +393,7 @@ impl State {
                     let texture = self.textures[placement.index].get_or_insert_with(|| {
                         ui.ctx().load_texture(
                             format!("inline-{}-{}", self.result_revision, placement.index),
-                            image.clone(),
+                            image.as_ref().clone(),
                             egui::TextureOptions::LINEAR,
                         )
                     });
@@ -435,6 +461,39 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_thumbnail_images_keep_their_texture_across_source_revisions() {
+        let image = Arc::new(egui::ColorImage::filled([2, 2], Color32::WHITE));
+        let entry = |image| {
+            Arc::new(vec![Entry {
+                line: 1,
+                name: "part".into(),
+                content: Content::Part {
+                    image: Some(image),
+                    dimensions: Vec3::ONE,
+                    volume_mm3: 1.0,
+                },
+            }])
+        };
+        let context = egui::Context::default();
+        let mut state = State::default();
+        state.set(1, entry(Arc::clone(&image)));
+        let texture = context.load_texture(
+            "thumbnail",
+            image.as_ref().clone(),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = texture.id();
+        state.textures[0] = Some(texture);
+        state.set(2, entry(Arc::clone(&image)));
+        assert_eq!(
+            state.textures[0].as_ref().expect("Reused thumbnail").id(),
+            id
+        );
+        state.set(3, entry(Arc::new(image.as_ref().clone())));
+        assert!(state.textures[0].is_none());
+    }
 
     fn entries() -> Arc<Vec<Entry>> {
         Arc::new(vec![

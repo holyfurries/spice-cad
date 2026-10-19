@@ -39,9 +39,13 @@ pub fn model_files_cached(
     target: Target,
     cache: &mut model::Cache<'_>,
 ) -> Result<(), String> {
-    let model = model::compile(source)?;
+    let model = cache.compile(source)?;
     let prepared = cache.prepare(&model)?;
-    let mut bodies = prepared.bodies;
+    let mut bodies = prepared
+        .bodies
+        .iter()
+        .map(|body| body.try_clone())
+        .collect::<Result<Vec<_>, _>>()?;
     let meshes: Vec<_> = prepared
         .geometry
         .iter()

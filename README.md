@@ -394,10 +394,10 @@ Rotations are degrees about the solid's source origin, applied X, then Y, then
 Z; translation follows in millimetres. Omitted assembly placement means
 identity. If any part declares a print placement, every part must declare one
 (`print = {}` means identity). Without print placements, exports use the
-assembly placement. The worker builds solids once and caches both scenes; layout
-switches change no source and perform no kernel work. Source edits refresh both
-caches and retain the active layout. A switch uploads the selected cached mesh
-once to the GPU.
+assembly placement. Both layouts share canonical GPU geometry; switching layouts
+updates part transforms without kernel work or another mesh upload. Source edits
+retain the active layout. Placing a finished part through `cad.show` reuses its
+geometry. Transforms inside a Boolean construction remain geometry dependencies.
 
 Named face selectors use the original geometry's coordinates. Design checks run
 in assembly coordinates, including rotated and translated parts. Print-layout
@@ -774,9 +774,13 @@ startup, idle-CPU, memory, and resize harness is in
 `evaluation/profile-native.rs`. The [cache audit](evaluation/cache-audit.md)
 records ownership, invalidation, heap profiles, and remaining repeated work.
 **Debug → Performance** and `--profile` expose GPU geometry uploads, buffer
-allocations, retained capacity, and uniform uploads. Both layouts retain GPU
-buffers; revisiting a cached layout does not transfer geometry, and rebuilds
-reuse buffer capacity when it fits.
+allocations, retained capacity, and uniform uploads, including placement upload
+counts and bytes. Moving or rotating finished parts updates small transform/color
+records; shape changes upload new geometry and reuse buffer capacity when it fits.
+Translations also reuse cached thumbnails, bounds, and face measurements.
+Numeric property edits reuse a successful type check when every other source
+byte is unchanged. Runtime assertions, property bounds, and assembly checks still
+run; code, metadata, and boolean changes require another type check.
 
 ## Browser prototype
 
