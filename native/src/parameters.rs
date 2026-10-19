@@ -138,14 +138,14 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<()> {
 
 #[derive(Clone)]
 pub struct Parameter {
-    name: String,
+    pub name: String,
     literal: String,
-    range: Range<usize>,
-    line: u32,
+    pub range: Range<usize>,
+    pub line: u32,
     property: Property,
 }
 
-pub fn analysis_key(source: &str) -> Option<String> {
+fn parse_source(source: &str) -> Option<(Rope, tree_sitter::Tree)> {
     if source.len() > crate::text_buffer::SIZE_BYTES_MAX {
         return None;
     }
@@ -160,7 +160,22 @@ pub fn analysis_key(source: &str) -> Option<String> {
         None,
         Some(tree_sitter::ParseOptions::new().progress_callback(&mut cancelled)),
     )?;
-    let rope = Rope::from_str(source);
+    Some((Rope::from_str(source), tree))
+}
+
+pub fn extract_source(source: &str) -> Option<Vec<Parameter>> {
+    let (rope, tree) = parse_source(source)?;
+    Some(extract(&rope, &tree))
+}
+
+impl Parameter {
+    pub fn is_numeric(&self) -> bool {
+        matches!(self.property.control, Control::Number { .. })
+    }
+}
+
+pub fn analysis_key(source: &str) -> Option<String> {
+    let (rope, tree) = parse_source(source)?;
     let mut key = String::with_capacity(source.len());
     let mut previous = 0;
     for parameter in extract(&rope, &tree) {
@@ -360,9 +375,16 @@ pub struct State {
     groups: Vec<Option<u64>>,
     input_times: Vec<Option<std::time::Instant>>,
     dragging: Option<usize>,
+    highlighted: Option<String>,
+    reveal_highlight: bool,
 }
 
 impl State {
+    pub fn reveal(&mut self, name: Option<&str>) {
+        self.highlighted = name.map(str::to_owned);
+        self.reveal_highlight = name.is_some();
+    }
+
     pub fn edit_literal(
         &mut self,
         revision: u64,
@@ -458,18 +480,31 @@ impl State {
             .spacing([10.0, 8.0])
             .show(ui, |ui| {
                 for (index, parameter) in parameters.iter().enumerate() {
-                    ui.add_sized(
-                        egui::vec2(label_width, crate::interface::CONTROL_HEIGHT),
-                        egui::Label::new(
-                            parameter.property.label.as_ref().unwrap_or(&parameter.name),
+                    let highlighted = self.highlighted.as_deref() == Some(parameter.name.as_str());
+                    let label = ui
+                        .add_sized(
+                            egui::vec2(label_width, crate::interface::CONTROL_HEIGHT),
+                            egui::Label::new(
+                                egui::RichText::new(
+                                    parameter.property.label.as_ref().unwrap_or(&parameter.name),
+                                )
+                                .color(if highlighted {
+                                    crate::interface::ACCENT
+                                } else {
+                                    ui.visuals().text_color()
+                                }),
+                            )
+                            .truncate()
+                            .halign(egui::Align::Min),
                         )
-                        .truncate()
-                        .halign(egui::Align::Min),
-                    )
-                    .on_hover_text(format!(
-                        "{} · source line {}",
-                        parameter.name, parameter.line
-                    ));
+                        .on_hover_text(format!(
+                            "{} · source line {}",
+                            parameter.name, parameter.line
+                        ));
+                    if highlighted && self.reveal_highlight {
+                        label.scroll_to_me(Some(egui::Align::Center));
+                        self.reveal_highlight = false;
+                    }
                     let draft = &mut self.drafts[index];
                     let mut immediate = false;
                     let response = match parameter.property.control {

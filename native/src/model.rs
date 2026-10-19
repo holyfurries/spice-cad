@@ -480,9 +480,11 @@ pub fn compile_cached(
     } else {
         "Assembly".into()
     };
+    let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
+    definitions.validate_parameters(source)?;
     Ok(Model {
         recipe: Rc::new(recipe),
-        definitions: std::mem::take(&mut *definitions.borrow_mut()),
+        definitions,
         name,
         parts,
         analysis_ms,

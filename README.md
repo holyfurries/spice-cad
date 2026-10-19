@@ -730,10 +730,11 @@ clear the selection. Invalid pairs keep the previous selection. Properties shows
 the same measurements. Inspection does not edit source or add design checks.
 
 ```lua
-local part = cad.box({ width = 40, depth = 30, height = 20 })
+local height = cad.number(20, { label = "Height", unit = "mm" })
+local part = cad.box({ width = 40, depth = 30, height = height })
 local top = cad.face(part, { name = "top", normal = "z+" })
 local bottom = cad.face(part, { name = "bottom", normal = "z-" })
-cad.measure("height", { from = bottom, to = top, min = 2, max = 25 })
+cad.measure("height", { from = bottom, to = top, min = 2, max = 25, parameter = "height" })
 cad.show("Measured block", part)
 ```
 
@@ -753,6 +754,20 @@ export. Properties distinguishes reference dimensions from passed checks and
 marks measurements from an older preview. A code-defined shape is deterministic;
 that alone does not prove clearance, fit, or manufacturability. There is no
 sketch constraint solver or automatic fully-constrained classification.
+
+`parameter = "height"` explicitly links a measurement to one top-level numeric
+`cad.number` control. Unknown, duplicate and nonnumeric declarations fail validation.
+Click a named dimension label or its row under **Properties → Measurements** to
+select its two faces and reveal the linked control and source literal. The
+control is highlighted and scrolled into view; its usual edit, bounds, preview
+and undo behavior applies. Unlinked measurements reveal their `cad.measure`
+source instead. Source navigation requires a preview of the current revision.
+The bundled `models/measured-block.luau` demonstrates the link.
+
+A link is an authored association, not proof that the parameter drives the
+measurement or equals its displayed value. Formulas may connect them. Dimension
+labels remain measured values; edit the parameter control or code to change the
+model. `min`/`max` checks remain independent of this association.
 
 These measurements use the preview mesh, display `≈`, and allow 0.001 mm
 tolerance when resolving planes and checking limits. They are bounded preview

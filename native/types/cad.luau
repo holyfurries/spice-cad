@@ -34,6 +34,6 @@ local cad: {
 		{ color: { r: number, g: number, b: number }?, assembly: Placement?, print: Placement? }?
 	) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number? }) -> Face,
-	measure: (string, { from: Face, to: Face, min: number?, max: number? }) -> (),
+	measure: (string, { from: Face, to: Face, min: number?, max: number?, parameter: string? }) -> (),
 } =
 	nil :: any

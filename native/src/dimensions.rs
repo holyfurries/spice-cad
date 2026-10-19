@@ -23,6 +23,7 @@ struct Requirement {
     name: String,
     first: usize,
     second: usize,
+    parameter: Option<String>,
     minimum: Option<f64>,
     maximum: Option<f64>,
 }
@@ -30,6 +31,7 @@ struct Requirement {
 pub struct Definitions {
     faces: Vec<Selector>,
     measurements: Vec<Requirement>,
+    parameters: Vec<crate::parameters::Parameter>,
 }
 #[derive(Clone)]
 pub struct NamedFace {
@@ -40,6 +42,7 @@ pub struct NamedFace {
 }
 #[derive(Clone)]
 pub struct Measurement {
+    pub parameter: Option<crate::parameters::Parameter>,
     pub line: usize,
     pub name: String,
     axis: usize,
@@ -59,6 +62,7 @@ struct Plane {
     maximum: Vec3,
 }
 struct DisplayDimension<'a> {
+    measurement: Option<&'a Measurement>,
     direction: &'static str,
     points: [Vec3; 2],
     name: &'a str,
@@ -121,9 +125,13 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
         "measure",
         lua.create_function(move |lua, (name, options): (String, Table)| {
             valid_name(&name)?;
-            crate::model::options_fields(&options, &["from", "to", "min", "max"])?;
+            crate::model::options_fields(&options, &["from", "to", "min", "max", "parameter"])?;
             let first = options.get::<AnyUserData>("from")?.borrow::<Face>()?.0;
             let second = options.get::<AnyUserData>("to")?.borrow::<Face>()?.0;
+            let parameter: Option<String> = options.get("parameter")?;
+            if let Some(parameter) = &parameter {
+                valid_name(parameter)?;
+            }
             let minimum: Option<f64> = options.get("min")?;
             let maximum: Option<f64> = options.get("max")?;
             if minimum
@@ -165,6 +173,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
                 name,
                 first,
                 second,
+                parameter,
                 minimum,
                 maximum,
             });
@@ -216,7 +225,60 @@ fn planes(mesh: &Mesh) -> BTreeMap<u32, Plane> {
     planes
 }
 
+impl Measurement {
+    pub fn matches_selection(&self, selection: &crate::inspection::Selection) -> bool {
+        let ids = selection.ids();
+        match selection {
+            crate::inspection::Selection::Face(_) => self.faces.contains(&ids[0]),
+            crate::inspection::Selection::Pair { .. } => {
+                self.faces == ids || self.faces == [ids[1], ids[0]]
+            }
+            _ => false,
+        }
+    }
+
+    pub fn selection(
+        &self,
+        faces: &BTreeMap<u32, crate::inspection::Face>,
+    ) -> Option<crate::inspection::Selection> {
+        Some(crate::inspection::Selection::Pair {
+            first: *faces.get(&self.faces[0])?,
+            second: *faces.get(&self.faces[1])?,
+        })
+    }
+}
+
 impl Definitions {
+    pub fn validate_parameters(&mut self, source: &str) -> Result<(), String> {
+        if !self
+            .measurements
+            .iter()
+            .any(|measurement| measurement.parameter.is_some())
+        {
+            return Ok(());
+        }
+        self.parameters = crate::parameters::extract_source(source)
+            .ok_or("Could not read measurement parameter declarations")?;
+        for measurement in &self.measurements {
+            if let Some(name) = &measurement.parameter {
+                let mut matches = self
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.name == *name);
+                match (matches.next(), matches.next()) {
+                    (Some(parameter), None) if parameter.is_numeric() => {}
+                    _ => {
+                        return Err(format!(
+                            "Measurement '{}': parameter '{name}' must name one declared numeric cad.number control",
+                            measurement.name
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.faces.is_empty()
     }
@@ -314,6 +376,13 @@ impl Definitions {
                 .find(|axis| first.normal[*axis].abs() > 0.99999)
                 .unwrap_or(3);
             annotations.measurements.push(Measurement {
+                parameter: requirement.parameter.as_ref().map(|name| {
+                    self.parameters
+                        .iter()
+                        .find(|parameter| parameter.name == *name)
+                        .expect("Validated measurement parameter")
+                        .clone()
+                }),
                 line: requirement.line,
                 name: requirement.name.clone(),
                 axis,
@@ -349,7 +418,7 @@ pub fn draw(
     bounds: [Vec3; 2],
     annotations: &Annotations,
     selected: Option<&crate::inspection::Selection>,
-) {
+) -> Option<String> {
     let project = |point: Vec3| -> Option<egui::Pos2> {
         let point = matrix * point.extend(1.0);
         if point.w <= 0.1 || !(0.0..=point.w).contains(&point.z) {
@@ -365,12 +434,18 @@ pub fn draw(
     };
     if let Some(selection) = selected {
         let spans = selection.spans();
-        let ids = selection.ids();
+        let named_pair = matches!(selection, crate::inspection::Selection::Pair { .. })
+            && annotations
+                .measurements
+                .iter()
+                .any(|measurement| measurement.matches_selection(selection));
         let local = spans
             .iter()
             .flatten()
+            .filter(|_| !named_pair)
             .enumerate()
             .map(|(index, span)| DisplayDimension {
+                measurement: None,
                 direction: span.direction,
                 points: span.points,
                 name: span.direction,
@@ -387,11 +462,9 @@ pub fn draw(
         let related = annotations
             .measurements
             .iter()
-            .filter(|measurement| {
-                matches!(selection, crate::inspection::Selection::Face(_))
-                    && measurement.faces.iter().any(|id| ids.contains(id))
-            })
+            .filter(|measurement| measurement.matches_selection(selection))
             .map(|measurement| DisplayDimension {
+                measurement: Some(measurement),
                 direction: ["X", "Y", "Z", "Distance"][measurement.axis],
                 points: measurement.points,
                 name: &measurement.name,
@@ -400,7 +473,7 @@ pub fn draw(
                 selected: true,
                 offset_px: 48.0,
             });
-        draw_dimensions(ui, rect, matrix, selection.center(), local.chain(related));
+        let clicked = draw_dimensions(ui, rect, matrix, selection.center(), local.chain(related));
         if let Some(face) = annotations.faces.iter().find(|face| {
             selection
                 .latest()
@@ -416,7 +489,7 @@ pub fn draw(
                 );
             }
         }
-        return;
+        return clicked;
     }
     let [minimum, maximum] = bounds;
     assert!(minimum.is_finite());
@@ -453,6 +526,7 @@ pub fn draw(
         })
     });
     let axes = (0..3).map(|axis| DisplayDimension {
+        measurement: primary[axis],
         direction: ["X", "Y", "Z"][axis],
         points: anchors(axis, [minimum[axis], maximum[axis]]),
         name: primary[axis].map_or(
@@ -464,7 +538,7 @@ pub fn draw(
         selected: false,
         offset_px: if axis == 2 { 0.0 } else { 24.0 },
     });
-    let mut lanes = [0_u32; 3];
+    let mut lanes = [0_u32; 4];
     let extra = annotations
         .measurements
         .iter()
@@ -477,11 +551,16 @@ pub fn draw(
         .map(|measurement| {
             lanes[measurement.axis] += 1;
             DisplayDimension {
+                measurement: Some(measurement),
                 direction: ["X", "Y", "Z", "Distance"][measurement.axis],
-                points: anchors(
-                    measurement.axis,
-                    measurement.points.map(|point| point[measurement.axis]),
-                ),
+                points: if measurement.axis < 3 {
+                    anchors(
+                        measurement.axis,
+                        measurement.points.map(|point| point[measurement.axis]),
+                    )
+                } else {
+                    measurement.points
+                },
                 name: &measurement.name,
                 distance_mm: measurement.distance_mm,
                 checked: measurement.checked,
@@ -489,7 +568,7 @@ pub fn draw(
                 offset_px: 24.0 + lanes[measurement.axis] as f32 * 18.0,
             }
         });
-    draw_dimensions(ui, rect, matrix, center, axes.chain(extra));
+    draw_dimensions(ui, rect, matrix, center, axes.chain(extra))
 }
 
 fn draw_dimensions<'a>(
@@ -498,7 +577,7 @@ fn draw_dimensions<'a>(
     matrix: Mat4,
     center: Vec3,
     dimensions: impl Iterator<Item = DisplayDimension<'a>>,
-) {
+) -> Option<String> {
     let project = |point: Vec3| -> Option<egui::Pos2> {
         let point = matrix * point.extend(1.0);
         if point.w <= 0.1 || !(0.0..=point.w).contains(&point.z) {
@@ -518,6 +597,7 @@ fn draw_dimensions<'a>(
     };
     let painter = ui.painter().with_clip_rect(rect);
     let line_color = egui::Color32::from_rgba_unmultiplied(140, 150, 145, 90);
+    let mut clicked = None;
     for (index, dimension) in dimensions.enumerate() {
         let [Some(first), Some(second)] = dimension.points.map(&project) else {
             continue;
@@ -569,20 +649,36 @@ fn draw_dimensions<'a>(
         ]
         .map(|point| label_center + rotation * point);
         let response = ui.interact(
-            egui::Rect::from_points(&corners),
+            egui::Rect::from_points(&corners).intersect(rect),
             ui.make_persistent_id(("dimension_label", index)),
-            egui::Sense::hover(),
+            if dimension.measurement.is_some() {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
         );
+        if response.clicked() {
+            if let Some(measurement) = dimension.measurement {
+                clicked = Some(measurement.name.clone());
+            }
+        }
         let active = response.hovered() || dimension.selected;
         response.on_hover_text(format!(
-            "{} · {} · {}",
+            "{} · {} · {}{}",
             dimension.name,
             dimension.direction,
             if dimension.checked {
                 "distance check passed"
             } else {
                 "reference dimension"
-            }
+            },
+            dimension
+                .measurement
+                .and_then(|measurement| measurement.parameter.as_ref())
+                .map_or(String::new(), |parameter| format!(
+                    " · linked to {} · click to reveal control and source",
+                    parameter.name
+                ))
         ));
         if dimension.offset_px > 0.0 {
             for (anchor, endpoint) in [first, second].into_iter().zip(endpoints) {
@@ -632,6 +728,7 @@ fn draw_dimensions<'a>(
                 .with_angle(angle),
         );
     }
+    clicked
 }
 
 #[cfg(test)]
@@ -757,6 +854,7 @@ mod tests {
         let annotations = Annotations {
             faces: Vec::new(),
             measurements: vec![Measurement {
+                parameter: None,
                 line: 0,
                 name: "height".into(),
                 axis: 2,
@@ -818,6 +916,140 @@ mod tests {
                     == Some(egui::Color32::from_rgb(196, 237, 180)))
         );
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn parameter_links_resolve_unicode_source_ranges_and_survive_cached_numeric_edits()
+    -> Result<(), String> {
+        let source = format!(
+            "-- Unicode: λ\n{}",
+            include_str!("../../models/measured-block.luau")
+        );
+        let kernel = crate::kernel::Kernel::new()?;
+        let mut cache = crate::model::Cache::new(&kernel);
+        let first = crate::build_script_snapshot_cached(source.clone(), 1, &mut cache)?;
+        let second_source = source
+            .replace("cad.number(40,", "cad.number(100,")
+            .replace("cad.number(20,", "cad.number(24,");
+        let second = crate::build_script_snapshot_cached(second_source.clone(), 2, &mut cache)?;
+        for (source, snapshot, expected) in
+            [(&source, &first, "20"), (&second_source, &second, "24")]
+        {
+            let measurement = &snapshot.scene.annotations.measurements[0];
+            let binding = measurement
+                .parameter
+                .as_ref()
+                .ok_or("Missing parameter link")?;
+            let rope = ropey::Rope::from_str(source);
+            assert_eq!(binding.name, "height");
+            assert_eq!(rope.slice(binding.range.clone()).to_string(), expected);
+            assert_eq!(
+                rope.char_to_line(binding.range.start) as u32 + 1,
+                binding.line
+            );
+            let selected = measurement
+                .selection(&snapshot.scene.faces)
+                .ok_or("Missing selected faces")?;
+            assert!(measurement.matches_selection(&selected));
+            assert_eq!(selected.ids(), measurement.faces);
+            assert!(
+                (measurement.distance_mm - expected.parse::<f32>().unwrap()).abs() < TOLERANCE_MM
+            );
+        }
+        let reference = source.replace(", parameter = \"height\"", "");
+        let reference = crate::build_script_snapshot_cached(reference, 3, &mut cache)?;
+        assert!(reference.checks.measurements[0].parameter.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn parameter_links_reject_unknown_toggle_computed_and_shadowed_controls() {
+        let source = include_str!("../../models/measured-block.luau");
+        for source in [
+            source.replace("parameter = \"height\"", "parameter = \"missing\""),
+            source
+                .replace("parameter = \"height\"", "parameter = \"enabled\"")
+                .replace(
+                    "local part =",
+                    "local enabled = cad.toggle(true, {})\nlocal part =",
+                ),
+            source.replace(
+                "local height: number = cad.number(20, { label = \"Height\", unit = \"mm\" })",
+                "local height: number = 20",
+            ),
+            source.replace(
+                "local part =",
+                "local height = cad.number(20, {})\nlocal part =",
+            ),
+        ] {
+            let error = crate::model::compile(&source)
+                .err()
+                .expect("Invalid measurement link");
+            assert!(
+                error.contains("declared numeric cad.number control"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rotated_measurement_labels_are_clickable_and_use_world_endpoints() -> Result<(), String> {
+        let source = include_str!("../../models/measured-block.luau").replace(
+            "cad.show(\"Measured block\", part)",
+            "cad.show(\"Measured block\", part, {assembly={rotation={y=45}}})",
+        );
+        let snapshot = crate::build_script_snapshot(&source, 1)?;
+        assert_eq!(snapshot.checks.measurements[0].axis, 3);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0));
+        let camera = crate::snapshot_camera(&snapshot, 1.0);
+        let context = egui::Context::default();
+        let mut position = None;
+        let mut clicked = None;
+        for phase in 0..4 {
+            let events = position.map_or(Vec::new(), |position| {
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: phase == 2,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            });
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    clicked = draw(
+                        ui,
+                        rect,
+                        camera.matrix(1.0),
+                        snapshot.scene.bounds,
+                        &snapshot.scene.annotations,
+                        None,
+                    )
+                    .or(clicked.take());
+                },
+            );
+            if phase == 1 {
+                position = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "≈20.00 mm" => Some(
+                        text.pos
+                            + egui::emath::Rot2::from_angle(text.angle)
+                                * (text.galley.size() * 0.5),
+                    ),
+                    _ => None,
+                });
+                assert!(position.is_some(), "Rotated dimension label is visible");
+            }
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(clicked.as_deref(), Some("height"));
+        Ok(())
     }
 
     #[test]

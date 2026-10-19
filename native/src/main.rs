@@ -943,6 +943,59 @@ impl Editor {
         Ok(())
     }
 
+    fn select_measurement(&mut self, name: &str) -> Result<(), String> {
+        let snapshot = self.snapshot.as_ref().ok_or("No model preview")?;
+        let script = self.script.as_ref().ok_or("No source document")?;
+        if snapshot.editor_revision != Some(script.buffer.revision) {
+            return Err("Run the current source before selecting a measurement".into());
+        }
+        let measurement = snapshot
+            .scene
+            .annotations
+            .measurements
+            .iter()
+            .find(|measurement| measurement.name == name)
+            .ok_or("Measurement is not in the current layout")?;
+        let selection = measurement
+            .selection(&snapshot.scene.faces)
+            .ok_or("Measurement faces are unavailable")?;
+        self.parameter_state.reveal(
+            measurement
+                .parameter
+                .as_ref()
+                .map(|parameter| parameter.name.as_str()),
+        );
+        let range = if let Some(parameter) = &measurement.parameter {
+            self.message = format!(
+                "{} ≈{:.3} mm · linked parameter {}",
+                measurement.name, measurement.distance_mm, parameter.name
+            );
+            parameter.range.clone()
+        } else {
+            self.message = format!(
+                "{} ≈{:.3} mm · {}",
+                measurement.name,
+                measurement.distance_mm,
+                if measurement.checked {
+                    "distance check passed"
+                } else {
+                    "reference measurement"
+                }
+            );
+            let line = measurement.line.min(script.buffer.rope.len_lines() - 1);
+            let start = script.buffer.rope.line_to_char(line);
+            start..start + script.buffer.rope.line(line).len_chars()
+        };
+        assert!(range.start <= range.end);
+        assert!(range.end <= script.buffer.rope.len_chars());
+        self.code_state.jump_to(range);
+        self.selected = Some(selection);
+        self.show_code = true;
+        self.show_inspector = true;
+        self.focus_editor = false;
+        Ok(())
+    }
+
     fn start_preview(&mut self, pointer_down: bool) {
         if !matches!(self.work, WorkerState::Idle) {
             return;
@@ -1268,6 +1321,7 @@ impl eframe::App for Editor {
             });
         let mut close_after_save = false;
         let mut file_dialog_requested = None;
+        let mut measurement_requested = None;
         if shortcuts_enabled {
             if ui.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -1927,7 +1981,7 @@ impl eframe::App for Editor {
                     interface::section(ui, "GEOMETRY");
                     ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
                     ui.label(format!("{} faces · {} triangles", snapshot.scene.display.face_count(), snapshot.scene.display.vertex_count() / 3));
-                    interface::section(ui, "ASSEMBLY CHECKS");
+                    interface::section(ui, "MEASUREMENTS");
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
                         ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
                     }
@@ -1935,7 +1989,13 @@ impl eframe::App for Editor {
                     ui.label(if checked == 0 { "No explicit distance checks".into() } else { format!("{checked} distance checks passed") });
                     ui.small("Code defines shape. Checks validate declared limits; no constraint solver is active.");
                     for measurement in &snapshot.checks.measurements {
-                        ui.label(format!("{} ≈{:.3} mm · {}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }));
+                        let current = snapshot.scene.layout == placement::Layout::Assembly && self.script.as_ref().is_some_and(|script| snapshot.editor_revision == Some(script.buffer.revision));
+                        let selected = self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection));
+                        let linked = measurement.parameter.as_ref().map_or(String::new(), |parameter| format!(" · {}", parameter.name));
+                        if ui.add_enabled(current, egui::Button::new(format!("{} ≈{:.3} mm · {}{}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }, linked)).selected(selected))
+                            .on_hover_text("Select measurement and reveal its linked parameter or measurement source").clicked() {
+                            measurement_requested = Some(measurement.name.clone());
+                        }
                     }
                 }
                 return;
@@ -2327,7 +2387,9 @@ impl eframe::App for Editor {
                         },
                     ));
                     if self.show_dimensions || self.selected.is_some() {
-                        dimensions::draw(ui, rect, matrix, snapshot.scene.bounds, &snapshot.scene.annotations, self.selected.as_ref());
+                        if let Some(name) = dimensions::draw(ui, rect, matrix, snapshot.scene.bounds, &snapshot.scene.annotations, self.selected.as_ref()) {
+                            measurement_requested = Some(name);
+                        }
                     }
                 }
                 ui.painter().text(
@@ -2796,6 +2858,12 @@ impl eframe::App for Editor {
                         }
                     });
                 });
+        }
+        if let Some(name) = measurement_requested {
+            if let Err(error) = self.select_measurement(&name) {
+                self.message = error;
+            }
+            ui.ctx().request_repaint();
         }
         self.observe_preview();
         self.start_preview(ui.input(|input| input.pointer.any_down()));
