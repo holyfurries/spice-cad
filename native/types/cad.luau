@@ -24,7 +24,7 @@ local cad: {
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
-	show: (string, Solid) -> (),
+	show: (string, Solid, { color: { r: number, g: number, b: number }? }?) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number? }) -> Face,
 	measure: (string, { from: Face, to: Face, min: number?, max: number? }) -> (),
 } =

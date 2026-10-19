@@ -1,4 +1,4 @@
-use crate::{game_asset, kernel::Kernel, model};
+use crate::{game_asset, kernel::Kernel, mesh::Mesh, model};
 use std::path::Path;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -19,56 +19,79 @@ impl Target {
 pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), String> {
     let model = model::compile(source)?;
     let kernel = Kernel::new()?;
-    let mut body = model.build(&kernel)?;
-    let files = if target == Target::Game {
-        let mut mesh = body.game_mesh()?;
-        model.annotations(&mesh)?;
-        mesh.smooth_normals();
-        vec![
-            ("model.glb", game_asset::glb(&model.name, &mesh)?),
-            ("GAME_ASSET.md", b"# Game asset\n\nImport model.glb as a static mesh. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. The model origin is preserved as the pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with smooth normals within CAD faces and hard boundaries between faces. One solid and one neutral material are exported. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()),
-        ]
+    let mut bodies = model.build(&kernel)?;
+    let meshes = model.meshes(&mut bodies, target == Target::Game)?;
+    let (combined, ranges) = Mesh::combine(&meshes)?;
+    model.annotations(&combined, &ranges)?;
+    drop(combined);
+    let mut files = Vec::new();
+    if target == Target::Game {
+        files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));
+        files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object with its own color material. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. All parts preserve the source origin as their pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with smooth normals within CAD faces and hard boundaries between faces. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
     } else {
-        let [minimum, maximum] = body.bounds(true)?;
-        if (maximum - minimum).max_element() > 256.0001 {
-            return Err("Model exceeds the P1S 256 × 256 × 256 mm envelope; change the model or its orientation".into());
-        }
-        if minimum.z.abs() > 0.001 {
-            return Err(
-                "Model must rest on Z=0; translate it onto the print bed before exporting".into(),
-            );
-        }
-        let mesh = body.mesh()?;
-        model.annotations(&mesh)?;
-        let volume_before = body.volume()?;
-        let step = body.step_data(&model.name)?;
-        let volume_after = body.volume()?;
-        if (volume_after - volume_before).abs() > volume_before.abs().mul_add(1e-5, 0.001) {
-            return Err("NURBS conversion changed the model volume; export cancelled".into());
-        }
-        let count = u32::try_from(mesh.vertices.len() / 3).map_err(|error| error.to_string())?;
-        let mut stl = Vec::with_capacity(84 + count as usize * 50);
-        let mut header = [0_u8; 80];
-        header[..24].copy_from_slice(b"Spice CAD binary STL, mm");
-        stl.extend_from_slice(&header);
-        stl.extend_from_slice(&count.to_le_bytes());
-        for triangle in mesh.vertices.as_chunks::<3>().0 {
-            for value in triangle[0]
-                .normal
-                .iter()
-                .chain(triangle.iter().flat_map(|vertex| vertex.position.iter()))
-            {
-                stl.extend_from_slice(&value.to_le_bytes());
+        let mut manifest = Vec::with_capacity(bodies.len());
+        for (index, ((body, mesh), part)) in
+            bodies.iter_mut().zip(&meshes).zip(&model.parts).enumerate()
+        {
+            let stem = if model.parts.len() == 1 {
+                "model".into()
+            } else {
+                format!("part-{:02}", index + 1)
+            };
+            let [minimum, maximum] = body.bounds(true)?;
+            if (maximum - minimum).max_element() > 256.0001 {
+                return Err(format!(
+                    "Part '{}': model exceeds the P1S 256 × 256 × 256 mm envelope; change the model or its orientation",
+                    part.name
+                ));
             }
-            stl.extend_from_slice(&0_u16.to_le_bytes());
+            if minimum.z.abs() > 0.001 {
+                return Err(format!(
+                    "Part '{}': model must rest on Z=0; translate it onto the print bed before exporting",
+                    part.name
+                ));
+            }
+            let volume_before = body.volume()?;
+            let step = body.step_data(&part.name)?;
+            let volume_after = body.volume()?;
+            if (volume_after - volume_before).abs() > volume_before.abs().mul_add(1e-5, 0.001) {
+                return Err(format!(
+                    "Part '{}': NURBS conversion changed the model volume; export cancelled",
+                    part.name
+                ));
+            }
+            let count =
+                u32::try_from(mesh.vertices.len() / 3).map_err(|error| error.to_string())?;
+            let mut stl = Vec::with_capacity(84 + count as usize * 50);
+            let mut header = [0_u8; 80];
+            header[..24].copy_from_slice(b"Spice CAD binary STL, mm");
+            stl.extend_from_slice(&header);
+            stl.extend_from_slice(&count.to_le_bytes());
+            for triangle in mesh.vertices.as_chunks::<3>().0 {
+                let points = triangle.map(|vertex| glam::Vec3::from_array(vertex.position));
+                let normal = (points[1] - points[0])
+                    .cross(points[2] - points[0])
+                    .normalize_or_zero()
+                    .to_array();
+                for value in normal
+                    .iter()
+                    .chain(triangle.iter().flat_map(|vertex| vertex.position.iter()))
+                {
+                    stl.extend_from_slice(&value.to_le_bytes());
+                }
+                stl.extend_from_slice(&0_u16.to_le_bytes());
+            }
+            assert_eq!(stl.len(), 84 + count as usize * 50);
+            manifest.push(serde_json::json!({"name": part.name, "step": format!("{stem}.step"), "stl": format!("{stem}.stl")}));
+            files.push((format!("{stem}.step"), step.into_bytes()));
+            files.push((format!("{stem}.stl"), stl));
         }
-        assert_eq!(stl.len(), 84 + count as usize * 50);
-        vec![
-        ("model.step", step.into_bytes()),
-        ("model.stl", stl),
-        ("PRINTING.md", b"# Print model\n\nImport model.stl into Bambu Studio in millimetres. Select your P1S and actual filament, inspect orientation and supports, then slice. Bed fit and mesh closure were checked; strength, fit, and support requirements have not been physically verified. model.step contains native SMLib geometry converted to NURBS, not a triangle mesh. Some intersection curves may use the kernels NURBS fitting tolerance.\n".to_vec()),
-    ]
-    };
+        files.push((
+            "parts.json".into(),
+            serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        ));
+        files.push(("PRINTING.md".into(), b"# Print model\n\nImport the STL files into Bambu Studio in millimetres. parts.json maps each source part name to its STEP/STL files. Each part is checked separately for bed placement, P1S envelope, and mesh closure; arrange multiple parts on plates in the slicer. Colors are not stored in STEP or STL. Select your P1S and actual filament, inspect orientation and supports, then slice. Strength, fit, and support requirements have not been physically verified. STEP files contain native SMLib geometry converted to NURBS, not triangle meshes. Some intersection curves may use the kernel's NURBS fitting tolerance.\n".to_vec()));
+    }
     if let Some(parent) = folder.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }

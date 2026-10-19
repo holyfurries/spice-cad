@@ -875,6 +875,7 @@ impl Body<'_> {
                         position: point.to_array(),
                         normal: normal.to_array(),
                         face_id,
+                        color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
                     });
                 }
             }

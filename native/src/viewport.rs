@@ -112,9 +112,9 @@ pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("CAD viewport"),source:wgpu::ShaderSource::Wgsl(r#"
 struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32> }
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
-struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32> }
-@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32)->Output {
- var output:Output; output.position=uniforms.matrix*vec4<f32>(position,1.0); output.normal=normal; output.face=face; output.world=position; return output;
+struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32> }
+@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) color:vec4<f32>)->Output {
+ var output:Output; output.position=uniforms.matrix*vec4<f32>(position,1.0); output.normal=normal; output.face=face; output.world=position; output.color=color.rgb; return output;
 }
 @fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
  let normal=normalize(input.normal);
@@ -124,7 +124,7 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  let light=0.24+0.62*max(dot(normal,key),0.0)+0.16*max(dot(normal,fill),0.0);
  let specular=0.20*pow(max(dot(normal,normalize(key+view)),0.0),48.0);
  let rim=0.07*pow(1.0-max(dot(normal,view),0.0),3.0);
- var color=vec3<f32>(0.70,0.73,0.78); if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
+ var color=input.color; if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
 }
@@ -176,7 +176,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Uint32],
+                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Uint32,3=>Unorm8x4],
             })],
         },
         fragment: Some(wgpu::FragmentState {

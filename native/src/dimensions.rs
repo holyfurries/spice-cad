@@ -207,7 +207,11 @@ fn planes(mesh: &Mesh) -> BTreeMap<u32, Plane> {
 }
 
 impl Definitions {
-    pub fn resolve(&self, mesh: &Mesh, output: usize) -> Result<Annotations, String> {
+    pub fn resolve(
+        &self,
+        mesh: &Mesh,
+        outputs: &[(usize, std::ops::RangeInclusive<u32>)],
+    ) -> Result<Annotations, String> {
         assert!(self.faces.len() <= COUNT_MAX);
         assert!(self.measurements.len() <= COUNT_MAX);
         let mut annotations = Annotations::default();
@@ -216,14 +220,18 @@ impl Definitions {
         }
         let planes = planes(mesh);
         for selector in &self.faces {
-            if selector.solid != output {
-                return Err(format!(
-                    "Face '{}': select faces on the final solid passed to cad.show",
-                    selector.name
-                ));
-            }
-            let mut matches = planes.iter().filter(|(_, plane)| {
-                plane.axis == Some((selector.axis, selector.positive))
+            let (_, range) = outputs
+                .iter()
+                .find(|(solid, _)| *solid == selector.solid)
+                .ok_or_else(|| {
+                    format!(
+                        "Face '{}': select faces on the final solid passed to cad.show",
+                        selector.name
+                    )
+                })?;
+            let mut matches = planes.iter().filter(|(id, plane)| {
+                range.contains(id)
+                    && plane.axis == Some((selector.axis, selector.positive))
                     && selector
                         .at
                         .is_none_or(|at| (plane.minimum[selector.axis] - at).abs() <= TOLERANCE_MM)

@@ -1,5 +1,14 @@
 use glam::{Mat4, Vec3};
 
+pub const DEFAULT_COLOR: [f32; 3] = [0.70, 0.73, 0.78];
+
+pub fn vertex_color(color: [f32; 3]) -> [u8; 4] {
+    assert!(color.iter().all(|value| value.is_finite()));
+    assert!(color.iter().all(|value| (0.0..=1.0).contains(value)));
+    let [r, g, b] = color.map(|value| (value * 255.0).round() as u8);
+    [r, g, b, 255]
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct EdgeSegment {
@@ -13,7 +22,10 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub face_id: u32,
+    pub color: [u8; 4],
 }
+
+const _: () = assert!(std::mem::size_of::<Vertex>() == 32);
 
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
@@ -27,6 +39,31 @@ pub struct Hit {
 }
 
 impl Mesh {
+    pub fn combine(meshes: &[Self]) -> Result<(Self, Vec<std::ops::RangeInclusive<u32>>), String> {
+        let count: usize = meshes.iter().map(|mesh| mesh.vertices.len()).sum();
+        if meshes.is_empty() || meshes.len() > 32 || count > 300000 {
+            return Err("Assembly exceeds its part or triangle budget".into());
+        }
+        let mut combined = Self {
+            vertices: Vec::with_capacity(count),
+            face_count: 0,
+        };
+        let mut ranges = Vec::with_capacity(meshes.len());
+        for mesh in meshes {
+            assert!(mesh.face_count > 0);
+            let offset = combined.face_count;
+            ranges.push(offset + 1..=offset + mesh.face_count);
+            combined
+                .vertices
+                .extend(mesh.vertices.iter().map(|vertex| Vertex {
+                    face_id: vertex.face_id + offset,
+                    ..*vertex
+                }));
+            combined.face_count += mesh.face_count;
+        }
+        assert_eq!(combined.vertices.len(), count);
+        Ok((combined, ranges))
+    }
     pub fn smooth_normals(&mut self) {
         let mut normals = std::collections::BTreeMap::new();
         for triangle in self.vertices.as_chunks::<3>().0 {

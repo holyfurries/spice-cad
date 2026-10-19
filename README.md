@@ -343,8 +343,8 @@ demonstrates box booleans; `models/rack.luau`
 recreates the rack blank in code. All coordinates and dimensions are millimetres.
 `cad.box` takes `width`, `depth`, `height`, and optional minimum-corner coordinates
 `x`, `y`, `z` (default zero). `cad.union(a, b)` and `cad.subtract(a, b)` return
-new solid recipes; operands can be reused. Call `cad.show("name", solid)` once
-to choose the output. Ordinary Luau functions, arithmetic, and loops work.
+new solid recipes; operands can be reused. Call `cad.show("name", solid)` for each
+named part. Ordinary Luau functions, arithmetic, and loops work.
 
 `cad.cylinder({ radius, height, x?, y?, z? })` creates a cylinder along +Z,
 with its base centre at the supplied coordinates. `cad.translate(solid, { x?,
@@ -485,9 +485,37 @@ Game exports follow [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-
 metres, right-handed coordinates, Y up. CAD `(x, y, z)` becomes `(x, z, -y) / 1000`.
 The source origin stays the pivot, including negative coordinates; game assets
 have no P1S envelope or bed-placement requirement. Closed-mesh validation and
-declared dimension checks still apply. Currently each export contains one solid;
-multiple objects, material assignment, UVs, textures, collision meshes, rigging,
-and animation remain future work. These are static hard-surface asset workflows.
+declared dimension checks still apply. Each named part exports as a separate object
+with its own color material. UVs, textures, collision meshes, rigging, and animation
+remain future work. These are static hard-surface asset workflows.
+
+Use **Examples → Rocket engine assembly** to try a three-part asset. Set
+`print_layout` to `true` in its source to place each part on Z=0 for print export.
+The model is a static visual asset.
+
+Multiple `cad.show` calls build an assembly without fusing its solids:
+
+```lua
+local base = cad.box({ width = 40, depth = 30, height = 4 })
+local cap = cad.box({ width = 20, depth = 20, height = 6, x = 10, y = 5, z = 4 })
+cad.show("Base", base, { color = { r = 0.25, g = 0.35, b = 0.65 } })
+cad.show("Cap", cap, { color = { r = 0.85, g = 0.40, b = 0.10 } })
+```
+
+Part names must be unique, with 1–80 bytes and no control characters. Each output
+must reference a distinct solid recipe; translate a copy when repeating a part.
+Optional RGB channels use linear values from 0 to 1. Colors appear in the viewport
+and GLB materials; STEP/STL carry geometry only. The properties pane lists the
+parts and identifies the owner of a selected face. Measurements can reference
+named faces on different shown parts. Touching or overlapping parts remain
+independent; the reported assembly volume is the sum of part volumes.
+
+Assemblies share the existing 256-operation, 512-evaluation-step, and 100,000-triangle
+budgets, with up to 32 parts. Print exports check every part before writing anything:
+each must fit the P1S envelope and rest on Z=0 in the source. A single part keeps
+`model.step` / `model.stl`; multiple parts use `part-01.step` / `part-01.stl`, etc.
+`parts.json` maps these safe filenames to source names. Arrange the separate files
+on slicer plates as needed; no packing, auto-orientation, or support generation is performed.
 
 The host runs `luau-analyze` in strict mode against the exact source snapshot and
 the API type context in `native/types/cad.luau` before executing it with `mlua`.
@@ -549,8 +577,8 @@ and translations must stay within ±2000 mm. Rotation angles are bounded to
 curved tessellation; closure and winding checks remain mandatory.
 The scripting environment exposes no file/process access or module imports.
 Repeated operand recipes are evaluated again; incremental geometry caching is
-not implemented. The API supports one output solid. Arbitrary sketch profiles,
-selective edge fillets, and parameter widgets are not implemented.
+not implemented. Interactive sketch editing, per-part pivots, and part visibility
+controls are not implemented.
 The existing P1S rack export remains available in the rack-tools build with `--rack`.
 
 Format source with `cargo fmt --all`, Luau files with `stylua --syntax Luau models

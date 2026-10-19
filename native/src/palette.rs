@@ -46,6 +46,7 @@ pub enum Command {
     EdgeFillets,
     EdgeChamfers,
     RevolvedBushing,
+    RocketEngine,
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
@@ -85,6 +86,11 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
         "",
     ),
     (Command::RevolvedBushing, "Examples: revolved bushing", ""),
+    (
+        Command::RocketEngine,
+        "Examples: rocket engine assembly",
+        "",
+    ),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

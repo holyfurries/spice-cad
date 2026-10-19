@@ -165,6 +165,8 @@ impl ModelRevision {
     }
 }
 struct Snapshot {
+    parts: Vec<model::Part>,
+    part_faces: Vec<std::ops::RangeInclusive<u32>>,
     inspected_edges: Vec<inspection::Edge>,
     faces: std::collections::BTreeMap<u32, inspection::Face>,
     bounds: [glam::Vec3; 2],
@@ -254,6 +256,8 @@ fn build_snapshot(
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        parts: Vec::new(),
+        part_faces: Vec::new(),
         inspected_edges: edges.items,
         faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
@@ -280,20 +284,49 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let model = model::compile(source)?;
     let kernel = kernel::Kernel::new()?;
     let start = Instant::now();
-    let mut body = model.build(&kernel)?;
-    let volume_mm3 = body.volume()?;
+    let mut bodies = model.build(&kernel)?;
+    let mut volume_mm3 = 0.0;
+    let mut bounds = [
+        glam::Vec3::splat(f32::INFINITY),
+        glam::Vec3::splat(f32::NEG_INFINITY),
+    ];
+    for body in &bodies {
+        volume_mm3 += body.volume()?;
+        let part_bounds = body.bounds(true)?.map(|point| point.as_vec3());
+        bounds[0] = bounds[0].min(part_bounds[0]);
+        bounds[1] = bounds[1].max(part_bounds[1]);
+    }
     let build_ms = start.elapsed().as_secs_f64() * 1000.0;
     let start = Instant::now();
-    let mut mesh = body.mesh()?;
-    mesh.smooth_normals();
-    let edges = body.edges()?;
+    let meshes = model.meshes(&mut bodies, false)?;
+    let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
+    let mut edges = inspection::Edges {
+        items: Vec::new(),
+        segments: Vec::new(),
+    };
+    for body in &mut bodies {
+        let part_edges = body.edges()?;
+        let offset = edges.segments.len() as u32;
+        if edges.segments.len() + part_edges.segments.len() > 131072 {
+            return Err("Assembly exceeds its display edge budget".into());
+        }
+        edges
+            .items
+            .extend(part_edges.items.into_iter().map(|mut edge| {
+                edge.segments = edge.segments.map(|index| index + offset);
+                edge
+            }));
+        edges.segments.extend(part_edges.segments);
+    }
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let annotations = model.annotations(&mesh)?;
+    let annotations = model.annotations(&mesh, &part_faces)?;
     Ok(Snapshot {
         inspected_edges: edges.items,
         faces,
-        bounds: body.bounds(true)?.map(|point| point.as_vec3()),
+        bounds,
+        parts: model.parts,
+        part_faces,
         annotations,
         editor_revision: None,
         edges: Arc::new(edges.segments),
@@ -345,6 +378,7 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
                 position: point.as_vec3().to_array(),
                 normal: normal.as_vec3().to_array(),
                 face_id: 1,
+                color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
             }));
         }
         crate::mesh::Mesh {
@@ -1004,6 +1038,9 @@ impl eframe::App for Editor {
                         Navigation::RevolvedBushing => {
                             example_requested = Some(document::Example::RevolvedBushing)
                         }
+                        Navigation::RocketEngine => {
+                            example_requested = Some(document::Example::RocketEngine)
+                        }
                     }
                 }
             }
@@ -1074,6 +1111,7 @@ impl eframe::App for Editor {
                         ("Selected edge fillets", document::Example::EdgeFillets),
                         ("Selected edge chamfers", document::Example::EdgeChamfers),
                         ("Revolved bushing", document::Example::RevolvedBushing),
+                        ("Rocket engine assembly", document::Example::RocketEngine),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -1370,15 +1408,25 @@ impl eframe::App for Editor {
             if self.script.is_some() {
                 interface::section(ui, "MODEL");
                 ui.heading(self.snapshot.as_ref().map_or("Luau model", |snapshot| snapshot.name.as_str()));
-                ui.small("Solid body · millimetres");
+                ui.small("Solid parts · millimetres");
                 ui.separator();
                 if let Some(script) = &self.script {
                     let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
                     parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some());
                 }
                 if let Some(snapshot) = &self.snapshot {
+                    interface::section(ui, "PARTS");
+                    for (part, faces) in snapshot.parts.iter().zip(&snapshot.part_faces) {
+                        let selected = self.selected.as_ref().and_then(|selection| selection.latest()).is_some_and(|face| faces.contains(&face.id));
+                        ui.horizontal(|ui| {
+                            let color: egui::Color32 = egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2]).into();
+                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().rect_filled(swatch, 2.0, color);
+                            ui.label(if selected { format!("{} · selected", part.name) } else { part.name.clone() });
+                        });
+                    }
                     interface::section(ui, "GEOMETRY");
-                    ui.label(format!("Volume {:.3} mm³", snapshot.volume_mm3));
+                    ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
                     ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
                     interface::section(ui, "SELECTION");
                     if let Some(selection) = &self.selected {
@@ -2465,6 +2513,7 @@ mod tests {
                     position: point.as_vec3().to_array(),
                     normal,
                     face_id: 1,
+                    color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
                 }));
             }
             crate::mesh::Mesh {
@@ -2492,6 +2541,7 @@ mod tests {
                         position: *position,
                         normal: values[..3].try_into().expect("STL normal"),
                         face_id: 1,
+                        color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
                     });
                 }
             }
@@ -2580,7 +2630,7 @@ mod tests {
             "local a = cad.box({width=10, depth=10, height=10})\nlocal b = cad.box({width=5, depth=5, height=12, z=-1})\ncad.show('reused', cad.union(cad.subtract(a, b), b))",
         )?;
         let kernel = kernel::Kernel::new()?;
-        let body = model.build(&kernel)?;
+        let body = model.build(&kernel)?.remove(0);
         assert!((body.volume()? - 1050.0).abs() < 0.01);
         Ok(())
     }

@@ -10,6 +10,14 @@ use std::{
 
 const OPERATION_COUNT_MAX: usize = 256;
 const EVALUATION_COUNT_MAX: usize = 512;
+const PART_COUNT_MAX: usize = 32;
+
+#[derive(Clone)]
+pub struct Part {
+    pub name: String,
+    pub color: [f32; 3],
+    solid: usize,
+}
 
 #[derive(Clone, Copy)]
 enum Operation {
@@ -69,13 +77,14 @@ struct Recipe {
     edge_treatments: Vec<EdgeTreatmentRecipe>,
     profiles: Vec<crate::profile::Polygon>,
     operations: Vec<Operation>,
-    output: Option<(String, usize)>,
+    outputs: Vec<Part>,
 }
 
 pub struct Model {
     recipe: Recipe,
     definitions: crate::dimensions::Definitions,
     pub name: String,
+    pub parts: Vec<Part>,
     pub analysis_ms: f64,
     pub script_ms: f64,
 }
@@ -359,19 +368,40 @@ pub fn compile(source: &str) -> Result<Model, String> {
     let state = Rc::clone(&recipe);
     cad.set(
         "show",
-        lua.create_function(move |_, (name, solid): (String, AnyUserData)| {
+        lua.create_function(move |_, (name, solid, options): (String, AnyUserData, Option<Table>)| {
             if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
                 return Err(mlua::Error::RuntimeError(
                     "Output name must contain 1–80 bytes without control characters".into(),
                 ));
             }
+            let mut color = crate::mesh::DEFAULT_COLOR;
+            if let Some(options) = options {
+                options_fields(&options, &["color"])?;
+                if let Some(rgb) = options.get::<Option<Table>>("color")? {
+                    options_fields(&rgb, &["r", "g", "b"])?;
+                    for (index, key) in ["r", "g", "b"].into_iter().enumerate() {
+                        let value: f64 = rgb.get(key)?;
+                        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                            return Err(mlua::Error::RuntimeError("Part color channels must be finite and between 0 and 1".into()));
+                        }
+                        color[index] = value as f32;
+                    }
+                }
+            }
+            let solid = solid.borrow::<Solid>()?.0;
             let mut state = state.borrow_mut();
-            if state.output.is_some() {
+            if state.outputs.len() >= PART_COUNT_MAX {
                 return Err(mlua::Error::RuntimeError(
-                    "Exactly one cad.show output is supported".into(),
+                    "At most 32 cad.show parts are supported".into(),
                 ));
             }
-            state.output = Some((name, solid.borrow::<Solid>()?.0));
+            if state.outputs.iter().any(|part| part.name == name) {
+                return Err(mlua::Error::RuntimeError("Part names must be unique".into()));
+            }
+            if state.outputs.iter().any(|part| part.solid == solid) {
+                return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
+            }
+            state.outputs.push(Part { name, color, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,
@@ -399,17 +429,21 @@ pub fn compile(source: &str) -> Result<Model, String> {
         .set_name("@model.luau")
         .exec()
         .map_err(|error| error.to_string())?;
-    let recipe = std::mem::take(&mut *recipe.borrow_mut());
-    let name = recipe
-        .output
-        .as_ref()
-        .ok_or("Model must call cad.show(name, solid)")?
-        .0
-        .clone();
+    let mut recipe = std::mem::take(&mut *recipe.borrow_mut());
+    let parts = std::mem::take(&mut recipe.outputs);
+    let first = parts
+        .first()
+        .ok_or("Model must call cad.show(name, solid)")?;
+    let name = if parts.len() == 1 {
+        first.name.clone()
+    } else {
+        "Assembly".into()
+    };
     Ok(Model {
         recipe,
         definitions: std::mem::take(&mut *definitions.borrow_mut()),
         name,
+        parts,
         analysis_ms,
         script_ms: started.elapsed().as_secs_f64() * 1000.0,
     })
@@ -469,21 +503,71 @@ impl Model {
     pub fn annotations(
         &self,
         mesh: &crate::mesh::Mesh,
+        ranges: &[std::ops::RangeInclusive<u32>],
     ) -> Result<crate::dimensions::Annotations, String> {
-        self.definitions.resolve(
-            mesh,
-            self.recipe.output.as_ref().ok_or("Missing model output")?.1,
-        )
+        assert_eq!(self.parts.len(), ranges.len());
+        let outputs: Vec<_> = self
+            .parts
+            .iter()
+            .zip(ranges)
+            .map(|(part, range)| (part.solid, range.clone()))
+            .collect();
+        self.definitions.resolve(mesh, &outputs)
     }
-    pub fn build<'kernel>(&self, kernel: &'kernel Kernel) -> Result<Body<'kernel>, String> {
-        let output = self.recipe.output.as_ref().ok_or("Missing model output")?.1;
+    pub fn build<'kernel>(&self, kernel: &'kernel Kernel) -> Result<Vec<Body<'kernel>>, String> {
+        assert!(!self.parts.is_empty());
+        assert!(self.parts.len() <= PART_COUNT_MAX);
+        let mut count = 0;
+        let mut bodies = Vec::with_capacity(self.parts.len());
+        for part in &self.parts {
+            bodies.push(
+                self.build_solid(kernel, part.solid, &mut count)
+                    .map_err(|error| format!("Part '{}': {error}", part.name))?,
+            );
+        }
+        Ok(bodies)
+    }
+
+    pub fn meshes(
+        &self,
+        bodies: &mut [Body<'_>],
+        game: bool,
+    ) -> Result<Vec<crate::mesh::Mesh>, String> {
+        assert_eq!(bodies.len(), self.parts.len());
+        let mut meshes = Vec::with_capacity(bodies.len());
+        let mut count = 0;
+        for (body, part) in bodies.iter_mut().zip(&self.parts) {
+            let mut mesh = if game {
+                body.game_mesh()?
+            } else {
+                body.mesh()?
+            };
+            count += mesh.vertices.len();
+            if count > 300000 {
+                return Err("Assembly exceeds its 100000 triangle budget".into());
+            }
+            mesh.smooth_normals();
+            let color = crate::mesh::vertex_color(part.color);
+            for vertex in &mut mesh.vertices {
+                vertex.color = color;
+            }
+            meshes.push(mesh);
+        }
+        Ok(meshes)
+    }
+
+    fn build_solid<'kernel>(
+        &self,
+        kernel: &'kernel Kernel,
+        output: usize,
+        count: &mut usize,
+    ) -> Result<Body<'kernel>, String> {
         assert!(output < self.recipe.operations.len());
         let mut pending = vec![(output, false)];
         let mut bodies = Vec::<Body<'kernel>>::new();
-        let mut count = 0;
         while let Some((index, visited)) = pending.pop() {
-            count += 1;
-            if count > EVALUATION_COUNT_MAX {
+            *count += 1;
+            if *count > EVALUATION_COUNT_MAX {
                 return Err("Model exceeds 512 evaluation steps; reduce repeated subtrees".into());
             }
             match self.recipe.operations[index] {
@@ -567,7 +651,105 @@ impl Model {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn touching_parts_preserve_faces_colors_edges_and_volume() -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=10});cad.show('red',a,{color={r=1,g=0,b=0}});cad.show('blue',b,{color={r=0,g=0,b=1}})";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert_eq!(snapshot.parts.len(), 2);
+        assert_eq!(snapshot.parts[0].name, "red");
+        assert_eq!(snapshot.parts[1].name, "blue");
+        assert_eq!(snapshot.mesh.face_count, 12);
+        assert_eq!(snapshot.faces.len(), 12);
+        assert_eq!(snapshot.inspected_edges.len(), 24);
+        assert!((snapshot.volume_mm3 - 2000.0).abs() < 1e-6);
+        assert_eq!(
+            snapshot.bounds,
+            [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
+        );
+        for vertex in &snapshot.mesh.vertices {
+            let index = snapshot
+                .part_faces
+                .iter()
+                .position(|range| range.contains(&vertex.face_id))
+                .expect("Part owns face");
+            assert_eq!(
+                vertex.color,
+                crate::mesh::vertex_color(snapshot.parts[index].color)
+            );
+            assert!(snapshot.faces.contains_key(&vertex.face_id));
+        }
+        for edge in &snapshot.inspected_edges {
+            assert!(edge.segments[0] < edge.segments[1]);
+            assert!(edge.segments[1] as usize <= snapshot.edges.len());
+        }
+        assert!(snapshot.mesh.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn named_faces_resolve_on_their_parts_and_measure_across_parts() -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{z=20});local first=cad.face(a,{name='first top',normal='z+'});local second=cad.face(b,{name='second top',normal='z+'});cad.measure('top separation',{from=first,to=second,min=19,max=21});cad.show('lower',a);cad.show('upper',b)";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert_eq!(snapshot.annotations.faces.len(), 2);
+        assert!(snapshot.part_faces[0].contains(&snapshot.annotations.faces[0].id));
+        assert!(snapshot.part_faces[1].contains(&snapshot.annotations.faces[1].id));
+        assert_eq!(snapshot.annotations.measurements[0].distance_mm, 20.0);
+        assert!(snapshot.annotations.measurements[0].checked);
+        let error = crate::build_script_snapshot(&source.replace("max=21", "max=19"), 1)
+            .err()
+            .expect("Failed cross-part check");
+        assert!(error.contains("top separation"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn part_definitions_reject_invalid_colors_duplicates_and_excess_parts() {
+        let prefix =
+            "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=20});";
+        for suffix in [
+            "cad.show('same',a);cad.show('same',b)",
+            "cad.show('first',a);cad.show('second',a)",
+            "cad.show('bad',a,{color={r=-0.1,g=0,b=0}})",
+            "cad.show('bad',a,{color={r=1.1,g=0,b=0}})",
+            "cad.show('bad',a,{color={r=0/0,g=0,b=0}})",
+            "cad.show('bad',a,{color={r=1/0,g=0,b=0}})",
+        ] {
+            assert!(
+                super::compile(&format!("{prefix}{suffix}")).is_err(),
+                "{suffix}"
+            );
+        }
+        let mut source = prefix.to_string();
+        for index in 0..33 {
+            source.push_str(&format!(
+                "cad.show('part {index}',cad.translate(a,{{x={index}}}));"
+            ));
+        }
+        let error = super::compile(&source).err().expect("Part limit");
+        assert!(error.contains("32"), "{error}");
+    }
+
+    #[test]
+    fn evaluation_budget_is_shared_by_all_parts() -> Result<(), String> {
+        let mut source = "local a=cad.box({width=10,depth=10,height=10});".to_string();
+        for _ in 0..20 {
+            source.push_str("a=cad.translate(a,{x=1});");
+        }
+        for index in 0..32 {
+            source.push_str(&format!(
+                "cad.show('part {index}',cad.translate(a,{{y={index}}}));"
+            ));
+        }
+        let model = super::compile(&source)?;
+        let kernel = crate::kernel::Kernel::new()?;
+        let error = model.build(&kernel).err().expect("Total evaluation limit");
+        assert!(error.contains("512 evaluation"), "{error}");
+        Ok(())
+    }
+
+    #[test]
     fn options_can_call_cad_functions_without_reentrant_recipe_borrows() -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=10,height=10});local options:any=setmetatable({},{__index=function(_,key) if key=='color' then cad.show('nested',cad.translate(a,{x=20}));return {r=1,g=0,b=0} end;return nil end});cad.show('outer',a,options)";
+        assert_eq!(crate::build_script_snapshot(source, 1)?.parts.len(), 2);
         let source = "local point:any=setmetatable({y=0},{__index=function(_,key) if key=='x' then cad.polygon({{x=0,y=0},{x=1,y=0},{x=0,y=1}});return 0 end;return nil end});local profile=cad.polygon({point,{x=10,y=0},{x=0,y=10}});cad.show('profile',cad.extrude(profile,{height=2}))";
         assert!((crate::build_script_snapshot(source, 1)?.volume_mm3 - 100.0).abs() < 0.001);
         let source = "local part=cad.box({width=40,depth=20,height=8});local options:any=setmetatable({radius=2},{__index=function(_,key) if key=='edges' then return {cad.edge(part,{name='corner',from={x=40,y=0,z=0},to={x=40,y=0,z=8}})} end;return nil end});cad.show('fillet',cad.fillet(part,options))";
