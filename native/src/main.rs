@@ -220,15 +220,41 @@ enum ModelSource {
     Script(String),
 }
 struct Worker {
-    commands: mpsc::SyncSender<Command>,
-    results: mpsc::Receiver<Result<Outcome, String>>,
+    commands: Option<mpsc::SyncSender<Command>>,
+    results: Option<mpsc::Receiver<Result<Outcome, String>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Worker {
+    fn try_send(&self, command: Command) -> Result<(), mpsc::TrySendError<Command>> {
+        self.commands
+            .as_ref()
+            .expect("Live geometry worker")
+            .try_send(command)
+    }
+
+    fn try_recv(&self) -> Result<Result<Outcome, String>, mpsc::TryRecvError> {
+        self.results
+            .as_ref()
+            .expect("Live geometry worker")
+            .try_recv()
+    }
+
+    #[cfg(test)]
+    fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Result<Outcome, String>, mpsc::RecvTimeoutError> {
+        self.results
+            .as_ref()
+            .expect("Live geometry worker")
+            .recv_timeout(timeout)
+    }
+
     fn new(context: egui::Context) -> Result<Self, String> {
         let (commands, requests) = mpsc::sync_channel(1);
         let (responses, results) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("cad-kernel".into())
             .spawn(move || {
                 let kernel = kernel::Kernel::new();
@@ -265,7 +291,23 @@ impl Worker {
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok(Self { commands, results })
+        Ok(Self {
+            commands: Some(commands),
+            results: Some(results),
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.commands.take();
+        self.results.take();
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                eprintln!("Geometry: worker panicked during shutdown");
+            }
+        }
     }
 }
 
@@ -776,7 +818,7 @@ impl Editor {
                 }
             }
         };
-        match self.worker.commands.try_send(command) {
+        match self.worker.try_send(command) {
             Ok(()) => {
                 self.work = WorkerState::Export;
                 self.message = format!("Generating and validating {}…", target.description());
@@ -830,7 +872,7 @@ impl Editor {
         };
         assert_eq!(revision, script.buffer.revision);
         self.revision += 1;
-        match self.worker.commands.try_send(Command::Script {
+        match self.worker.try_send(Command::Script {
             source: script.buffer.rope.clone(),
             editor_revision: revision,
             revision: self.revision,
@@ -886,7 +928,7 @@ impl Editor {
                 diagnostics.sync(&script.buffer, context);
             }
         }
-        match self.worker.results.try_recv() {
+        match self.worker.try_recv() {
             Ok(result) => {
                 let active = match std::mem::replace(&mut self.work, WorkerState::Idle) {
                     WorkerState::Busy(revision) => Some(revision),
@@ -979,7 +1021,7 @@ impl Editor {
                                 }
                             }
                             self.revision += 1;
-                            match self.worker.commands.try_send(Command::Build {
+                            match self.worker.try_send(Command::Build {
                                 parameters: self.parameters,
                                 revision: self.revision,
                             }) {
@@ -3402,8 +3444,7 @@ mod tests {
     fn worker_bounds_error_messages_without_losing_runtime_locations() -> Result<(), String> {
         let worker = Worker::new(egui::Context::default())?;
         worker
-            .commands
-            .send(Command::Script {
+            .try_send(Command::Script {
                 source: "--!strict\nerror(string.rep('λ', 100000))".into(),
                 editor_revision: 1,
                 revision: 1,
@@ -3411,7 +3452,6 @@ mod tests {
             })
             .map_err(|error| error.to_string())?;
         let response = worker
-            .results
             .recv_timeout(Duration::from_secs(10))
             .map_err(|error| error.to_string())?;
         let message = response.err().expect("Runtime error");
@@ -3429,6 +3469,45 @@ mod tests {
     }
 
     #[test]
+    fn worker_shutdown_closes_full_channels_and_joins_before_returning() {
+        let (commands, requests) = mpsc::sync_channel(1);
+        let (responses, results) = mpsc::sync_channel(1);
+        let (ready, started) = mpsc::sync_channel(1);
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = Arc::clone(&completed);
+        let thread = std::thread::spawn(move || {
+            responses.send(Err("first".into())).expect("Initial result");
+            ready.send(()).expect("Full result channel");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut result = Err("second".into());
+            loop {
+                match responses.try_send(result) {
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                    Err(mpsc::TrySendError::Full(pending)) => result = pending,
+                    Ok(()) => panic!("Shutdown must close the result channel"),
+                }
+                assert!(Instant::now() < deadline, "Result channel remained open");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(matches!(
+                requests.recv_timeout(Duration::from_secs(1)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            ));
+            stopped.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let worker = Worker {
+            commands: Some(commands),
+            results: Some(results),
+            thread: Some(thread),
+        };
+        started
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Result published");
+        drop(worker);
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
     fn worker_reuses_parts_after_edits_and_exports_without_mutating_cache() -> Result<(), String> {
         let worker = Worker::new(egui::Context::default())?;
         let source = "local a=cad.box({width=10,depth=10,height=2});local b=cad.face(a,{name='bottom',normal='z-'});local t=cad.face(a,{name='top',normal='z+'});cad.measure('height',{from=b,to=t,min=1,max=3});cad.show('part',a,{print={}})";
@@ -3441,8 +3520,7 @@ mod tests {
                 format!("-- revision {revision}\n{source}")
             };
             worker
-                .commands
-                .send(Command::Script {
+                .try_send(Command::Script {
                     source: source.into(),
                     editor_revision: revision,
                     revision,
@@ -3450,7 +3528,6 @@ mod tests {
                 })
                 .map_err(|error| error.to_string())?;
             let result = worker
-                .results
                 .recv_timeout(Duration::from_secs(20))
                 .map_err(|error| error.to_string())?;
             if revision == 2 {
@@ -3469,8 +3546,7 @@ mod tests {
             assert!((snapshot.volume_mm3 - 200.0).abs() < 0.001);
             if revision == 3 {
                 worker
-                    .commands
-                    .send(Command::ExportScript {
+                    .try_send(Command::ExportScript {
                         source: match snapshot.source {
                             ModelSource::Script(source) => source,
                             _ => unreachable!(),
@@ -3481,7 +3557,6 @@ mod tests {
                     .map_err(|error| error.to_string())?;
                 assert!(matches!(
                     worker
-                        .results
                         .recv_timeout(Duration::from_secs(20))
                         .map_err(|error| error.to_string())??,
                     Outcome::Exported(_)
@@ -3509,8 +3584,7 @@ mod tests {
             (include_str!("../../models/bracket.luau"), 4),
         ] {
             worker
-                .commands
-                .send(Command::Script {
+                .try_send(Command::Script {
                     source: source.into(),
                     editor_revision: revision,
                     revision,
@@ -3518,7 +3592,6 @@ mod tests {
                 })
                 .map_err(|error| error.to_string())?;
             let result = worker
-                .results
                 .recv_timeout(Duration::from_secs(20))
                 .map_err(|error| error.to_string())?;
             if revision < 4 {
@@ -3579,8 +3652,7 @@ mod tests {
     fn worker_recovers_after_invalid_request() -> Result<(), String> {
         let worker = Worker::new(egui::Context::default())?;
         worker
-            .commands
-            .send(Command::Build {
+            .try_send(Command::Build {
                 parameters: RackParameters {
                     step_count: 0,
                     ..PARAMETERS
@@ -3590,20 +3662,17 @@ mod tests {
             .map_err(|error| error.to_string())?;
         assert!(
             worker
-                .results
                 .recv_timeout(Duration::from_secs(20))
                 .map_err(|error| error.to_string())?
                 .is_err()
         );
         worker
-            .commands
-            .send(Command::Build {
+            .try_send(Command::Build {
                 parameters: PARAMETERS,
                 revision: 2,
             })
             .map_err(|error| error.to_string())?;
         let result = worker
-            .results
             .recv_timeout(Duration::from_secs(20))
             .map_err(|error| error.to_string())??;
         match result {

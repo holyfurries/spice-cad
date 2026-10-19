@@ -126,7 +126,7 @@ changes, so multiline comments refresh subsequent rows correctly. Unknown edit
 chains, initial parsing and DPI/font cache changes fall back to broader
 invalidation. An empty memoized galley marks the egui font-cache lifetime without
 allocating a text job each frame; replacing that marker invalidates retained
-galleys after atlas/font resets. The 126-test suite covers these cases,
+galleys after atlas/font resets. The 127-test suite covers these cases,
 character-by-character typing/newline splits, layout/texture storage reuse and existing
 100,000-line/long-line rendering, Unicode, modal edits and horizontal scrolling.
 Clippy with all targets/features and warnings denied, formatting and release
@@ -135,6 +135,12 @@ that the whole egui frame is allocation-free.
 Native Vulkan validation also passed an unsaved modal-editor comment insertion,
 syntax refresh and automatic preview with all four parts reused; layout switching,
 part focus and buffer reuse remained correct.
+Shutdown closes both worker channels and joins the geometry thread, ensuring
+cached native bodies are released before library teardown. A full-channel
+regression verifies that shutdown disconnects both directions and waits for the
+worker to finish. An in-flight native call completes before teardown.
+The latest release also closed cleanly through the native editor's `:q` command
+after loading the default rack and populating its persistent cache.
 
 ## Remaining work
 

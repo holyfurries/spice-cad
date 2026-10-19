@@ -61,7 +61,8 @@
     "editor_row_scratch_reused": true,
     "inline_layout_and_alternate_textures_cached": true,
     "text_and_syntax_invalidation_limited_to_changed_rows_when_known": true,
-    "workspace_tests_passed": 126,
+    "geometry_worker_joined_on_shutdown": true,
+    "workspace_tests_passed": 127,
     "clippy_all_targets_all_features_deny_warnings": true,
     "rustfmt": true,
     "release_build": true
