@@ -1795,7 +1795,7 @@ impl eframe::App for Editor {
                         },
                     ));
                     if self.show_dimensions || self.selected.is_some() {
-                        dimensions::draw(ui, rect, matrix, self.camera.eye(), snapshot.bounds, &snapshot.annotations, self.selected.as_ref());
+                        dimensions::draw(ui, rect, matrix, snapshot.bounds, &snapshot.annotations, self.selected.as_ref());
                     }
                 }
                 ui.painter().text(

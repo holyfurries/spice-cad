@@ -326,7 +326,6 @@ pub fn draw(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     matrix: Mat4,
-    eye: Vec3,
     bounds: [Vec3; 2],
     annotations: &Annotations,
     selected: Option<&crate::inspection::Selection>,
@@ -403,13 +402,14 @@ pub fn draw(
     assert!(minimum.is_finite());
     assert!(maximum.is_finite());
     let center = (minimum + maximum) * 0.5;
+    let view_direction = -matrix.row(3).truncate();
     let corner = Vec3::new(
-        if eye.x >= center.x {
+        if view_direction.x >= -0.0001 {
             maximum.x
         } else {
             minimum.x
         },
-        if eye.y >= center.y {
+        if view_direction.y >= -0.0001 {
             maximum.y
         } else {
             minimum.y
@@ -492,8 +492,9 @@ fn draw_dimensions<'a>(
                 ),
         )
     };
-    let Some(center_screen) = project(center) else {
-        return;
+    let screen_vector = |vector: Vec3| {
+        let projected = matrix * vector.extend(0.0);
+        egui::vec2(projected.x * rect.width(), -projected.y * rect.height())
     };
     let painter = ui.painter().with_clip_rect(rect);
     let line_color = egui::Color32::from_rgba_unmultiplied(140, 150, 145, 90);
@@ -502,24 +503,30 @@ fn draw_dimensions<'a>(
             continue;
         };
         let length_px = first.distance(second);
-        let direction = if length_px > 0.01 {
-            (second - first) / length_px
+        if length_px < 1.0 {
+            continue;
+        }
+        let direction = (second - first) / length_px;
+        let projected_axis = screen_vector(dimension.points[1] - dimension.points[0]);
+        let reference_direction = if projected_axis.length() > 0.0001 {
+            projected_axis.normalized()
         } else {
-            egui::Vec2::X
+            direction
         };
         let mut outward = direction.rot90();
-        if outward.dot(first.lerp(second, 0.5) - center_screen) < 0.0 {
+        let reference = screen_vector((dimension.points[0] + dimension.points[1]) * 0.5 - center);
+        if reference_direction.rot90().dot(reference) < -0.0001 * reference.length().max(1.0) {
             outward = -outward;
         }
         let offset = outward * dimension.offset_px;
         let endpoints = [first + offset, second + offset];
-        let mut angle = direction.y.atan2(direction.x);
-        if angle >= std::f32::consts::FRAC_PI_2 {
-            angle -= std::f32::consts::PI;
-        }
-        if angle < -std::f32::consts::FRAC_PI_2 {
-            angle += std::f32::consts::PI;
-        }
+        let reverse = if reference_direction.x.abs() <= 0.0001 {
+            reference_direction.y > 0.0
+        } else {
+            reference_direction.x < 0.0
+        };
+        let baseline = if reverse { -direction } else { direction };
+        let angle = baseline.y.atan2(baseline.x);
         let prefix = match dimension.direction {
             "Radius" => "R ",
             "Diameter" => "Ø ",
@@ -529,14 +536,10 @@ fn draw_dimensions<'a>(
         let galley =
             painter.layout_no_wrap(text, egui::FontId::monospace(15.0), egui::Color32::WHITE);
         let rotation = egui::emath::Rot2::from_angle(angle);
-        let short = length_px < galley.size().x + 12.0;
+        let extension_px = (galley.size().x + 12.0 - length_px).max(0.0);
         let label_center = endpoints[0].lerp(endpoints[1], 0.5)
             + outward * (galley.size().y * 0.5 + 6.0)
-            + if short {
-                direction * (galley.size().x * 0.5 + 12.0)
-            } else {
-                egui::Vec2::ZERO
-            };
+            + direction * (extension_px * 0.5);
         let half_size = galley.size() * 0.5 + egui::vec2(6.0, 3.0);
         let corners = [
             egui::vec2(-half_size.x, -half_size.y),
@@ -570,12 +573,9 @@ fn draw_dimensions<'a>(
             }
         }
         painter.line_segment(endpoints, egui::Stroke::new(1.0, line_color));
-        if short {
+        if extension_px > 0.0 {
             painter.line_segment(
-                [
-                    endpoints[1],
-                    endpoints[1] + direction * (galley.size().x + 12.0),
-                ],
+                [endpoints[1], endpoints[1] + direction * extension_px],
                 egui::Stroke::new(1.0, line_color),
             );
         }
@@ -618,6 +618,119 @@ fn draw_dimensions<'a>(
 mod tests {
     use super::*;
 
+    fn camera_labels(
+        camera: &crate::viewport::Camera,
+        bounds: [Vec3; 2],
+        selected: Option<&crate::inspection::Selection>,
+    ) -> Vec<(String, egui::Pos2, f32)> {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0));
+        let output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                draw(
+                    ui,
+                    rect,
+                    camera.matrix(1.0),
+                    bounds,
+                    &Annotations::default(),
+                    selected,
+                );
+            },
+        );
+        let labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.job.text.clone(),
+                    text.pos
+                        + egui::emath::Rot2::from_angle(text.angle) * (text.galley.size() * 0.5),
+                    text.angle,
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        labels
+    }
+
+    #[test]
+    fn panning_does_not_switch_dimension_anchor_corners() {
+        let bounds = [Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)];
+        let center = (bounds[0] + bounds[1]) * 0.5;
+        let mut camera = crate::viewport::Camera::rack([40.0, 30.0, 20.0]);
+        camera.yaw = -1.45;
+        camera.distance = 150.0;
+        let eye_offset_x = camera.yaw.cos() * camera.pitch.cos() * camera.distance;
+        camera.target = center - Vec3::X * (eye_offset_x + 0.01);
+        let before = camera_labels(&camera, bounds, None);
+        camera.target.x += 0.02;
+        let after = camera_labels(&camera, bounds, None);
+        assert_eq!(before.len(), 3);
+        assert_eq!(after.len(), before.len());
+        for ((name, before, _), (after_name, after, _)) in before.iter().zip(&after) {
+            assert_eq!(name, after_name);
+            assert!(
+                before.distance(*after) < 2.0,
+                "{name} jumped {} pixels",
+                before.distance(*after)
+            );
+        }
+    }
+
+    #[test]
+    fn panning_vertical_edges_does_not_flip_text_upside_down() {
+        let points = [Vec3::ZERO, Vec3::new(0.0, 0.0, 40.0)];
+        let selected = crate::inspection::Selection::Edge(crate::inspection::Edge {
+            segments: [0, 1],
+            geometry: crate::inspection::EdgeGeometry::Line(points),
+        });
+        let mut camera = crate::viewport::Camera::rack([1.0, 1.0, 40.0]);
+        camera.distance = 200.0;
+        camera.target = Vec3::new(-0.01, 0.0, 20.0);
+        let before = camera_labels(&camera, points, Some(&selected));
+        camera.target.x = 0.01;
+        let after = camera_labels(&camera, points, Some(&selected));
+        assert_eq!(before.len(), 1);
+        assert_eq!(after.len(), 1);
+        assert!(
+            (before[0].2 - after[0].2).abs() < 0.01,
+            "Text angle jumped from {} to {}",
+            before[0].2,
+            after[0].2
+        );
+    }
+
+    #[test]
+    fn zooming_centered_edge_labels_has_no_side_or_short_edge_jumps() {
+        let points = [Vec3::ZERO, Vec3::new(40.0, 0.0, 0.0)];
+        let selected = crate::inspection::Selection::Edge(crate::inspection::Edge {
+            segments: [0, 1],
+            geometry: crate::inspection::EdgeGeometry::Line(points),
+        });
+        let mut camera = crate::viewport::Camera::rack([40.0, 1.0, 1.0]);
+        camera.target = Vec3::new(20.0, 0.0, 0.0);
+        let mut previous: Option<egui::Pos2> = None;
+        for distance in 200..=400 {
+            camera.distance = distance as f32;
+            let labels = camera_labels(&camera, points, Some(&selected));
+            assert_eq!(labels.len(), 1);
+            assert_eq!(labels[0].0, "≈40.00 mm");
+            let position = labels[0].1;
+            if let Some(previous) = previous {
+                assert!(
+                    previous.distance(position) < 3.0,
+                    "Distance {distance}: label jumped {} pixels",
+                    previous.distance(position)
+                );
+            }
+            previous = Some(position);
+        }
+    }
+
     #[test]
     fn dimension_labels_follow_edges_stay_upright_and_merge_matching_checks() {
         let camera = crate::viewport::Camera::rack([40.0, 30.0, 20.0]);
@@ -645,7 +758,6 @@ mod tests {
                     ui,
                     ui.available_rect_before_wrap(),
                     camera.matrix(1.0),
-                    camera.eye(),
                     [Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)],
                     &annotations,
                     None,
