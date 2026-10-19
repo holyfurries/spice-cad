@@ -988,6 +988,9 @@ impl eframe::App for Editor {
                         Navigation::EdgeChamfers => {
                             example_requested = Some(document::Example::EdgeChamfers)
                         }
+                        Navigation::RevolvedBushing => {
+                            example_requested = Some(document::Example::RevolvedBushing)
+                        }
                     }
                 }
             }
@@ -1057,6 +1060,7 @@ impl eframe::App for Editor {
                         ("Extruded bracket", document::Example::ExtrudedBracket),
                         ("Selected edge fillets", document::Example::EdgeFillets),
                         ("Selected edge chamfers", document::Example::EdgeChamfers),
+                        ("Revolved bushing", document::Example::RevolvedBushing),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -2345,6 +2349,10 @@ mod tests {
         let bracket = include_str!("../../models/mounting-bracket.luau");
         let changed = bracket.replace("= 100", "= 120");
         let cavity = "local a = cad.box({width=10, depth=10, height=10}); local b = cad.box({width=6, depth=6, height=6,x=2,y=2,z=2}); cad.show('hollow', cad.subtract(a,b))";
+        let bushing = include_str!("../../models/revolved-bushing.luau").replace(
+            "cad.revolve(section, { angle = sweep_angle })",
+            "cad.translate(cad.revolve(section, { angle = sweep_angle }), {x=16,y=16})",
+        );
         for (index, source, dimensions) in [
             (0, bracket, [100.0, 50.0, 40.0]),
             (1, changed.as_str(), [120.0, 50.0, 40.0]),
@@ -2363,6 +2371,17 @@ mod tests {
                 5,
                 include_str!("../../models/edge-chamfers.luau"),
                 [60.0, 30.0, 8.0],
+            ),
+            (
+                6,
+                "local p=cad.polygon({{x=0,y=0},{x=10,y=0},{x=10,y=20},{x=0,y=20}});cad.show('revolve',cad.translate(cad.revolve(p,{}),{x=10,y=10}))",
+                [20.0, 20.0, 20.0],
+            ),
+            (7, bushing.as_str(), [32.0, 32.0, 20.0]),
+            (
+                8,
+                "local p=cad.polygon({{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}});cad.show('sector',cad.revolve(p,{angle=90}))",
+                [10.0, 10.0, 20.0],
             ),
         ] {
             let folder =

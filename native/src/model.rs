@@ -1,4 +1,4 @@
-use crate::kernel::{Body, EdgeTreatment, Kernel};
+use crate::kernel::{Body, EdgeTreatment, Kernel, ProfileSweep};
 use mlua::{AnyUserData, Lua, Table, UserData, VmState};
 use std::{
     cell::RefCell,
@@ -13,9 +13,9 @@ const EVALUATION_COUNT_MAX: usize = 512;
 
 #[derive(Clone, Copy)]
 enum Operation {
-    Extrude {
+    Profile {
         profile: usize,
-        height: f64,
+        sweep: ProfileSweep,
     },
     Cylinder {
         origin: [f64; 3],
@@ -153,18 +153,38 @@ pub fn compile(source: &str) -> Result<Model, String> {
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let state = Rc::clone(&recipe);
-    cad.set(
-        "extrude",
-        lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
-            options_fields(&options, &["height"])?;
-            let height = dimension(&options, "height")?;
-            let profile = profile.borrow::<Profile>()?.0;
-            push_operation(&state, Operation::Extrude { profile, height })
-        })
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    for name in ["extrude", "revolve"] {
+        let state = Rc::clone(&recipe);
+        cad.set(
+            name,
+            lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
+                let sweep = if name == "extrude" {
+                    options_fields(&options, &["height"])?;
+                    ProfileSweep::Extrude {
+                        height_mm: dimension(&options, "height")?,
+                    }
+                } else {
+                    options_fields(&options, &["angle"])?;
+                    let angle_deg = options.get::<Option<f64>>("angle")?.unwrap_or(360.0);
+                    if !angle_deg.is_finite() || !(0.1..=360.0).contains(&angle_deg) {
+                        return Err(mlua::Error::RuntimeError(
+                            "Revolve angle must be finite and between 0.1 and 360 degrees".into(),
+                        ));
+                    }
+                    ProfileSweep::Revolve { angle_deg }
+                };
+                let profile = profile.borrow::<Profile>()?.0;
+                if matches!(sweep, ProfileSweep::Revolve { .. }) {
+                    state.borrow().profiles[profile]
+                        .validate_revolve()
+                        .map_err(mlua::Error::RuntimeError)?;
+                }
+                push_operation(&state, Operation::Profile { profile, sweep })
+            })
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
     let state = Rc::clone(&recipe);
     cad.set(
         "box",
@@ -467,13 +487,13 @@ impl Model {
                 return Err("Model exceeds 512 evaluation steps; reduce repeated subtrees".into());
             }
             match self.recipe.operations[index] {
-                Operation::Extrude { profile, height } => {
+                Operation::Profile { profile, sweep } => {
                     let polygon = self
                         .recipe
                         .profiles
                         .get(profile)
-                        .ok_or("Missing extrusion profile")?;
-                    bodies.push(kernel.extrude(polygon, height)?);
+                        .ok_or("Missing sweep profile")?;
+                    bodies.push(kernel.sweep_profile(polygon, sweep)?);
                 }
                 Operation::Cylinder {
                     origin,

@@ -8,6 +8,17 @@ pub struct Polygon {
 }
 
 impl Polygon {
+    pub fn validate_revolve(&self) -> Result<(), String> {
+        assert!((3..=POINT_COUNT_MAX).contains(&self.points.len()));
+        if self
+            .points
+            .iter()
+            .any(|point| !(0.0..=1000.0).contains(&point[0]))
+        {
+            return Err("Revolve profile X is radius and must be between 0 and 1000 mm; profiles must not cross the rotation axis".into());
+        }
+        Ok(())
+    }
     pub fn from_table(table: Table) -> mlua::Result<Self> {
         let count = table.raw_len();
         if !(3..=POINT_COUNT_MAX).contains(&count) {
@@ -128,6 +139,134 @@ mod tests {
     use super::*;
 
     #[test]
+    fn full_and_partial_revolves_have_correct_volume_bounds_and_closed_meshes() -> Result<(), String>
+    {
+        for inner in [0.0, 5.0] {
+            for angle in [90.0, 270.0, 360.0] {
+                let source = format!(
+                    "local p=cad.polygon({{{{x={inner},y=0}},{{x=10,y=0}},{{x=10,y=20}},{{x={inner},y=20}}}});cad.show('ring',cad.revolve(p,{{angle={angle}}}))"
+                );
+                let snapshot = crate::build_script_snapshot(&source, 1)?;
+                let expected =
+                    std::f64::consts::PI * (100.0 - inner * inner) * 20.0 * angle / 360.0;
+                assert!(
+                    (snapshot.volume_mm3 - expected).abs() < expected * 1e-5,
+                    "inner={inner}, angle={angle}: {} vs {expected}",
+                    snapshot.volume_mm3
+                );
+                snapshot.mesh.validate()?;
+                assert!(snapshot.bounds[0].z.abs() < 0.001);
+                assert!((snapshot.bounds[1].z - 20.0).abs() < 0.001);
+                if angle == 90.0 {
+                    assert!(snapshot.bounds[0].truncate().abs().max_element() < 0.001);
+                    assert!((snapshot.bounds[1].x - 10.0).abs() < 0.001);
+                    assert!((snapshot.bounds[1].y - 10.0).abs() < 0.001);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn revolved_axis_contacts_tapers_and_cups_are_closed() -> Result<(), String> {
+        for (points, volume_over_pi) in [
+            ("{{x=0,y=0},{x=10,y=0},{x=0,y=20}}", 100.0 * 20.0 / 3.0),
+            (
+                "{{x=0,y=0},{x=10,y=0},{x=5,y=20},{x=0,y=20}}",
+                20.0 * 175.0 / 3.0,
+            ),
+            (
+                "{{x=0,y=0},{x=10,y=0},{x=10,y=20},{x=8,y=20},{x=8,y=2},{x=0,y=2}}",
+                848.0,
+            ),
+        ] {
+            let snapshot = crate::build_script_snapshot(
+                &format!("local p=cad.polygon({points});cad.show('turned',cad.revolve(p,{{}}))"),
+                1,
+            )?;
+            let expected = volume_over_pi * std::f64::consts::PI;
+            assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
+            snapshot.mesh.validate()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn revolve_reuses_profiles_with_either_winding_and_existing_solid_operations()
+    -> Result<(), String> {
+        let snapshot =
+            crate::build_script_snapshot(include_str!("../../models/revolved-bushing.luau"), 1)?;
+        let expected = std::f64::consts::PI * ((256.0 - 25.0) * 4.0 + (100.0 - 25.0) * 16.0);
+        assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
+        snapshot.mesh.validate()?;
+        for points in [
+            "{{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}}",
+            "{{x=5,y=20},{x=10,y=20},{x=10,y=0},{x=5,y=0}}",
+        ] {
+            let source = format!(
+                "local p=cad.polygon({points});local a=cad.revolve(p,{{angle=90}});local b=cad.translate(cad.revolve(p,{{angle=90}}),{{x=40}});local part=cad.union(a,b);part=cad.rotate(part,{{axis='z',angle=30}});cad.show('reuse',part)"
+            );
+            let snapshot = crate::build_script_snapshot(&source, 1)?;
+            let expected = 2.0 * std::f64::consts::PI * 75.0 * 20.0 / 4.0;
+            assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
+            snapshot.mesh.validate()?;
+        }
+        let source = "local p=cad.polygon({{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}});local part=cad.revolve(p,{angle=90});part=cad.subtract(part,cad.box({width=5,depth=20,height=20,x=5}));cad.show('cut',part)";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert!(snapshot.volume_mm3 > 0.0);
+        assert!(snapshot.volume_mm3 < std::f64::consts::PI * 75.0 * 20.0 / 4.0);
+        snapshot.mesh.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_revolves_and_oversized_exports_are_rejected() -> Result<(), String> {
+        let base = "local p=cad.polygon({{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}});";
+        for options in [
+            "{angle=0}",
+            "{angle=-90}",
+            "{angle=361}",
+            "{angle=0/0}",
+            "{angle=math.huge}",
+            "{angle=0.01}",
+            "{axis='y'}",
+        ] {
+            assert!(
+                crate::model::compile(&format!("{base}cad.show('bad',cad.revolve(p,{options}))"))
+                    .is_err()
+            );
+        }
+        for points in [
+            "{{x=-5,y=0},{x=10,y=0},{x=10,y=20},{x=-5,y=20}}",
+            "{{x=1001,y=0},{x=1010,y=0},{x=1010,y=20},{x=1001,y=20}}",
+        ] {
+            assert!(
+                crate::model::compile(&format!(
+                    "local p=cad.polygon({points});cad.show('bad',cad.revolve(p,{{}}))"
+                ))
+                .err()
+                .is_some_and(|error| error.contains("radius"))
+            );
+        }
+        assert!(
+            crate::model::compile(
+                "cad.show('bad',cad.revolve(cad.box({width=10,depth=10,height=10}),{}))"
+            )
+            .is_err()
+        );
+        let source = "local p=cad.polygon({{x=0,y=0},{x=200,y=0},{x=200,y=20},{x=0,y=20}});cad.show('large',cad.revolve(p,{}))";
+        let folder =
+            std::env::temp_dir().join(format!("spice-cad-revolve-large-{}", std::process::id()));
+        assert!(
+            crate::export::model_files(source, &folder)
+                .err()
+                .is_some_and(|error| error.contains("P1S"))
+        );
+        assert!(!folder.exists());
+        Ok(())
+    }
+
+    #[test]
     fn concave_extrusions_preserve_volume_and_accept_booleans_transforms_and_reuse()
     -> Result<(), String> {
         let source = include_str!("../../models/extruded-bracket.luau");
@@ -146,7 +285,10 @@ mod tests {
                 [0.0, 10.0],
             ];
             for points in [points.clone(), points.into_iter().rev().collect()] {
-                let mut body = kernel.extrude(&Polygon::new(points)?, 3.0)?;
+                let mut body = kernel.sweep_profile(
+                    &Polygon::new(points)?,
+                    crate::kernel::ProfileSweep::Extrude { height_mm: 3.0 },
+                )?;
                 assert!((body.volume()? - 300.0).abs() < 1e-4);
                 body.mesh()?.validate()?;
             }

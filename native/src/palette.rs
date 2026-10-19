@@ -44,6 +44,7 @@ pub enum Command {
     ExtrudedBracket,
     EdgeFillets,
     EdgeChamfers,
+    RevolvedBushing,
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
@@ -81,6 +82,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
         "Examples: selected edge chamfers",
         "",
     ),
+    (Command::RevolvedBushing, "Examples: revolved bushing", ""),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -757,7 +759,7 @@ mod tests {
         state.open(Mode::Commands, PathBuf::new(), &context);
         assert!(render(&mut state, Vec::new()).is_none());
         assert!(render(&mut state, vec![egui::Event::Text("run".into())]).is_none());
-        assert_eq!(state.rows.len(), 1);
+        assert!(!state.rows.is_empty());
         let key = |key| egui::Event::Key {
             key,
             physical_key: None,

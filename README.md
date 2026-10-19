@@ -389,7 +389,7 @@ a size smaller than half the solid's smallest bounding dimension. Use new edge
 references on each resulting solid when combining fillets and chamfers.
 
 **Examples → Extruded bracket** demonstrates a concave polygon profile, a diagonal
-web, and mounting holes. `cad.polygon(points)` snapshots a closed XY outline;
+web, and mounting holes. `cad.polygon(points)` snapshots a closed 2D outline;
 list each vertex once, in either winding order. `cad.extrude(profile, { height })`
 creates a capped solid from Z=0 along +Z. Profiles can be reused at different
 heights; existing booleans, fillets, and transforms operate on the resulting solid.
@@ -411,7 +411,28 @@ width/depth at most 1000 mm, and edges at least 0.01 mm long. Self-intersections
 touching boundaries, repeated closing points, and overlapping edges are rejected.
 Extrusion height is 0.01–1000 mm; models may define at most 256 profiles.
 These profiles use straight segments. Cut holes with subtract; curved profiles,
-nested loops, revolve, and interactive sketch constraints remain future work.
+nested loops and interactive sketch constraints remain future work.
+
+**Examples → Revolved bushing** demonstrates a flanged part with a through-bore.
+`cad.revolve(profile, { angle = 360 })` interprets X as radius and Y as height,
+maps the section into the XZ plane, and turns it around +Z. For example:
+
+```lua
+local section = cad.polygon({
+    { x = 5, y = 0 },
+    { x = 12, y = 0 },
+    { x = 12, y = 20 },
+    { x = 5, y = 20 },
+})
+cad.show("Bushing", cad.revolve(section, { angle = 360 }))
+```
+
+Use `{}` for the default full turn, or set `angle` between 0.1° and 360° for a
+capped sector. Positive angles start along +X and turn toward +Y. Radius must be
+0–1000 mm throughout the profile; touching the axis is allowed, crossing it is
+rejected. Profile Y becomes world Z, including negative heights. Reuse profiles
+or apply existing transforms and booleans to the resulting solids. Export retains
+the usual P1S envelope and Z=0 placement checks.
 
 ```lua
 --!strict

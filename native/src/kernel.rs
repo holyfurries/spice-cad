@@ -7,6 +7,12 @@ pub enum EdgeTreatment {
     Fillet { radius_mm: f64 },
     Chamfer { width_mm: f64 },
 }
+
+#[derive(Clone, Copy)]
+pub enum ProfileSweep {
+    Extrude { height_mm: f64 },
+    Revolve { angle_deg: f64 },
+}
 #[path = "step.rs"]
 mod step;
 
@@ -100,6 +106,14 @@ mod ffi {
             curves: &SmCurveArray,
             direction: &SmVector3d,
             distance: f64,
+            cap: i32,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
+        unsafe fn SmApiCreateRotationalSweep(
+            curves: &SmCurveArray,
+            origin: &SmVector3d,
+            axis: &SmVector3d,
+            angle_deg: f64,
             cap: i32,
             result: &mut *mut SmBrep,
         ) -> Result<i64>;
@@ -297,28 +311,42 @@ impl Kernel {
         })
     }
 
-    pub fn extrude(
+    pub fn sweep_profile(
         &self,
         polygon: &crate::profile::Polygon,
-        height: f64,
+        sweep: ProfileSweep,
     ) -> Result<Body<'_>, String> {
         assert!((3..=crate::profile::POINT_COUNT_MAX).contains(&polygon.points.len()));
-        assert!(height.is_finite() && height > 0.0);
+        match sweep {
+            ProfileSweep::Extrude { height_mm } => {
+                assert!(height_mm.is_finite());
+                assert!(height_mm > 0.0);
+            }
+            ProfileSweep::Revolve { angle_deg } => {
+                assert!(angle_deg.is_finite());
+                assert!((0.1..=360.0).contains(&angle_deg));
+                polygon.validate_revolve()?;
+            }
+        }
         let mut lines = Vec::with_capacity(polygon.points.len());
         let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
         for index in 0..polygon.points.len() {
             let start = polygon.points[index];
             let end = polygon.points[(index + 1) % polygon.points.len()];
-            let start = Vector {
-                x: start[0],
-                y: start[1],
-                z: 0.0,
+            let point = |point: [f64; 2]| match sweep {
+                ProfileSweep::Extrude { .. } => Vector {
+                    x: point[0],
+                    y: point[1],
+                    z: 0.0,
+                },
+                ProfileSweep::Revolve { .. } => Vector {
+                    x: point[0],
+                    y: 0.0,
+                    z: point[1],
+                },
             };
-            let end = Vector {
-                x: end[0],
-                y: end[1],
-                z: 0.0,
-            };
+            let start = point(start);
+            let end = point(end);
             let mut result = std::ptr::null_mut();
             let status = unsafe { ffi::SmApiCreateLineSegment(&start, &end, &mut result) }
                 .map_err(|error| error.to_string())?;
@@ -331,23 +359,34 @@ impl Kernel {
             lines.push(line);
         }
         let mut result = std::ptr::null_mut();
+        let axis = Vector {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        };
         let status = unsafe {
-            ffi::SmApiCreateLinearSweep(
-                &curves,
-                &Vector {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
-                },
-                height,
-                1,
-                &mut result,
-            )
+            match sweep {
+                ProfileSweep::Extrude { height_mm } => {
+                    ffi::SmApiCreateLinearSweep(&curves, &axis, height_mm, 1, &mut result)
+                }
+                ProfileSweep::Revolve { angle_deg } => ffi::SmApiCreateRotationalSweep(
+                    &curves,
+                    &Vector::default(),
+                    &axis,
+                    angle_deg,
+                    1,
+                    &mut result,
+                ),
+            }
         }
         .map_err(|error| error.to_string())?;
         let shape = unsafe { UniquePtr::from_raw(result) };
         if status != 1000 || shape.is_null() {
-            return Err(format!("SMLib profile extrusion failed: {status}"));
+            let name = match sweep {
+                ProfileSweep::Extrude { .. } => "extrusion",
+                ProfileSweep::Revolve { .. } => "revolve",
+            };
+            return Err(format!("SMLib profile {name} failed: {status}"));
         }
         Ok(Body {
             shape,

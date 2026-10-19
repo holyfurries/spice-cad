@@ -632,6 +632,10 @@ mod tests {
             items.iter().any(|item| item.label == "chamfer"),
             "{items:?}"
         );
+        assert!(
+            items.iter().any(|item| item.label == "revolve"),
+            "{items:?}"
+        );
         let source = Buffer::from(
             "--!strict\nlocal width: number = 'bad'\ncad.show('plate',cad.box({width=10,depth=10,height=10}))",
         );

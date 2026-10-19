@@ -27,7 +27,8 @@ The existing operation/evaluation budgets and last-valid-preview behavior apply.
 
 This slice supports one simple straight-segment loop. Holes use existing solid
 subtraction. Curved/nested profiles, sketch constraints, arbitrary extrusion
-vectors, and revolve are outside this slice.
+vectors are outside this slice. Revolve now shares profile construction; see
+[revolve notes](revolve.md).
 
 ## Verification
 

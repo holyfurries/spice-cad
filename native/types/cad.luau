@@ -14,6 +14,7 @@ type BoxOptions = {
 local cad: {
 	polygon: ({ { x: number, y: number } }) -> Profile,
 	extrude: (Profile, { height: number }) -> Solid,
+	revolve: (Profile, { angle: number? }) -> Solid,
 	cylinder: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
 	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
 	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,
