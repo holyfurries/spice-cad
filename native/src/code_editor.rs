@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 const COLUMN_GUIDE: usize = 80;
 const INDENT_COLUMNS: usize = 4;
 const SCROLL_MARGIN_LINES: usize = 8;
+type LineKey = (usize, usize, usize);
 
 #[derive(Default, Clone, Copy)]
 enum FocusRequest {
@@ -38,13 +39,47 @@ pub struct State {
     focus_request: FocusRequest,
     width: f32,
     pixels_per_point: f32,
+    font_cache_marker: Option<Arc<egui::Galley>>,
     composition: String,
     pub error: Option<&'static str>,
-    lines: BTreeMap<(usize, usize, usize), Arc<egui::Galley>>,
+    lines: BTreeMap<LineKey, Arc<egui::Galley>>,
     advances: BTreeMap<usize, Vec<(u32, f32)>>,
+    visible: Vec<(LineKey, f32)>,
 }
 
 impl State {
+    fn invalidate_source(&mut self, source: &Buffer) {
+        let Some(change) = source
+            .change
+            .filter(|change| change.previous_revision == self.revision)
+        else {
+            self.lines.clear();
+            self.advances.clear();
+            return;
+        };
+        let start = change.start_point.0;
+        let end = change.old_end_point.0;
+        if end == change.new_end_point.0 {
+            self.lines.retain(|key, _| key.0 < start || key.0 > end);
+            self.advances.retain(|line, _| *line < start || *line > end);
+        } else {
+            let shift = |line: usize| {
+                if line < start {
+                    return Some(line);
+                }
+                (line > end).then(|| line - end + change.new_end_point.0)
+            };
+            self.lines = std::mem::take(&mut self.lines)
+                .into_iter()
+                .filter_map(|(key, galley)| shift(key.0).map(|line| ((line, key.1, key.2), galley)))
+                .collect();
+            self.advances = std::mem::take(&mut self.advances)
+                .into_iter()
+                .filter_map(|(line, advances)| shift(line).map(|line| (line, advances)))
+                .collect();
+        }
+    }
+
     pub fn parameters(
         &mut self,
         source: &Buffer,
@@ -509,17 +544,29 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
     }
     state.syntax_changed |= state.syntax.sync(source, ui.ctx());
     let syntax_changed = std::mem::take(&mut state.syntax_changed);
-    if syntax_changed
-        || state.revision != source.revision
-        || state.pixels_per_point != ui.ctx().pixels_per_point()
-    {
+    let marker = ui.fonts_mut(|fonts| fonts.layout_job(Default::default()));
+    let fonts_changed = state
+        .font_cache_marker
+        .as_ref()
+        .is_none_or(|previous| !Arc::ptr_eq(previous, &marker));
+    state.font_cache_marker = Some(marker);
+    if fonts_changed || state.pixels_per_point != ui.ctx().pixels_per_point() {
         state.lines.clear();
         state.advances.clear();
-        if state.revision != source.revision {
-            state.width = available.width();
-        }
-        state.revision = source.revision;
         state.pixels_per_point = ui.ctx().pixels_per_point();
+    } else if state.revision != source.revision {
+        state.invalidate_source(source);
+    }
+    if state.revision != source.revision {
+        state.width = available.width();
+    }
+    state.revision = source.revision;
+    if syntax_changed {
+        if let Some(changed) = state.syntax.changed_lines() {
+            state.lines.retain(|key, _| !changed.contains(&key.0));
+        } else {
+            state.lines.clear();
+        }
     }
     let line_count = source.rope.len_lines();
     state.outputs.sync(source);
@@ -545,8 +592,8 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
             let columns = ((viewport.width() / char_width).ceil() as usize)
                 .saturating_add(8)
                 .min(4096);
-            let mut visible_keys = Vec::new();
-            let mut origins = BTreeMap::new();
+            let mut visible = std::mem::take(&mut state.visible);
+            visible.clear();
             let mut cursor_x = None;
             for line in first..last {
                 let slice = source.rope.line(line);
@@ -577,10 +624,9 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                     (column_start + columns).min(length)
                 };
                 let origin = width(column_start);
-                origins.insert(line, origin);
                 state.width = state.width.max(gutter + width(length) + 32.0);
                 let key = (line, column_start, column_end);
-                visible_keys.push(key);
+                visible.push((key, origin));
                 state.lines.entry(key).or_insert_with(|| {
                     let start = source.rope.line_to_byte(line) + slice.char_to_byte(column_start);
                     let end = source.rope.line_to_byte(line)
@@ -598,15 +644,12 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 if let Some(pointer) = response.interact_pointer_pos() {
                     if ui.clip_rect().contains(pointer) && rect.contains(pointer) {
                         if let Some(line) = output_layout.text_line(pointer.y - rect.top()) {
-                            if let Some(&(line, column_start, column_end)) =
-                                visible_keys.iter().find(|key| key.0 == line)
+                            if let Some(&((line, column_start, column_end), origin)) =
+                                visible.iter().find(|(key, _)| key.0 == line)
                             {
                                 let galley = &state.lines[&(line, column_start, column_end)];
                                 let position = rect.min
-                                    + egui::vec2(
-                                        gutter + origins[&line],
-                                        output_layout.line_top(line),
-                                    );
+                                    + egui::vec2(gutter + origin, output_layout.line_top(line));
                                 let column: usize =
                                     galley.cursor_from_pos(pointer - position).index.into();
                                 let slice = source.rope.line(line);
@@ -639,11 +682,10 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
             let cursor_line = source.rope.char_to_line(state.cursor);
             let selection = state.selection(source);
             let mut highlights_remaining = 4096;
-            for &(line, column_start, column_end) in &visible_keys {
+            for &((line, column_start, column_end), origin) in &visible {
                 let start = source.rope.line_to_char(line);
                 let galley = Arc::clone(&state.lines[&(line, column_start, column_end)]);
-                let position =
-                    rect.min + egui::vec2(gutter + origins[&line], output_layout.line_top(line));
+                let position = rect.min + egui::vec2(gutter + origin, output_layout.line_top(line));
                 let row = egui::Rect::from_min_size(
                     egui::pos2(rect.left() + viewport.min.x, position.y),
                     egui::vec2(viewport.width(), row_height),
@@ -705,7 +747,7 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                         let x = galley
                             .pos_from_cursor(egui::text::CCursor::new(column - column_start))
                             .left();
-                        cursor_x = Some(origins[&line] + x);
+                        cursor_x = Some(origin + x);
                         let block =
                             state.modal.enabled && state.modal.mode != crate::modal::Mode::Insert;
                         let caret = egui::Rect::from_min_size(
@@ -822,10 +864,16 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 );
                 state.outputs.paint(ui, card, output_rect);
             }
-            state.lines.retain(|key, _| visible_keys.contains(key));
+            state.lines.retain(|key, _| {
+                key.0
+                    .checked_sub(first)
+                    .and_then(|index| visible.get(index))
+                    .is_some_and(|(candidate, _)| candidate == key)
+            });
             state
                 .advances
-                .retain(|line, _| visible_keys.iter().any(|key| key.0 == *line));
+                .retain(|line, _| (first..last).contains(line));
+            state.visible = visible;
         });
     source.revision != before
 }
@@ -887,6 +935,138 @@ fn line_length(line: ropey::RopeSlice<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_edits_preserve_unaffected_rows_rebase_insertions_and_clear_unknown_history() {
+        let context = egui::Context::default();
+        let mut galley = None;
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                galley = Some(ui.painter().layout_no_wrap(
+                    "cached".into(),
+                    FontId::monospace(14.0),
+                    Color32::WHITE,
+                ));
+            })
+            .drop_without_applying_deltas();
+        let galley = galley.expect("Row galley");
+        let mut source = Buffer::from("local a = 1\nlocal b = 2\nlocal c = 3\n");
+        let mut state = State {
+            revision: source.revision,
+            ..Default::default()
+        };
+        for line in 0..3 {
+            state.lines.insert((line, 0, 11), Arc::clone(&galley));
+            state.advances.insert(line, vec![(0, 0.0)]);
+        }
+        let start = source.rope.line_to_char(1) + 10;
+        source.replace(start..start + 1, "4", 0);
+        state.invalidate_source(&source);
+        assert!(Arc::ptr_eq(&state.lines[&(0, 0, 11)], &galley));
+        assert!(Arc::ptr_eq(&state.lines[&(2, 0, 11)], &galley));
+        assert!(!state.lines.keys().any(|key| key.0 == 1));
+        assert!(!state.advances.contains_key(&1));
+        state.revision = source.revision;
+        let start = source.rope.line_to_char(1);
+        source.replace(start..start, "-- λ\n", 0);
+        state.invalidate_source(&source);
+        assert!(Arc::ptr_eq(&state.lines[&(3, 0, 11)], &galley));
+        assert!(state.advances.contains_key(&3));
+        state.revision = source.revision;
+        source.replace(0..0, "a", 0);
+        source.replace(0..0, "b", 0);
+        state.invalidate_source(&source);
+        assert!(state.lines.is_empty());
+        assert!(state.advances.is_empty());
+    }
+
+    #[test]
+    fn cached_rows_match_source_after_typing_and_splitting_the_first_line() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from(include_str!("../../models/rack-parts.luau"));
+        let mut state = State::default();
+        let render = |source: &mut Buffer, state: &mut State| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1390.0, 890.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(ui, source, state);
+                    },
+                )
+                .drop_without_applying_deltas();
+            for (&(line, start, end), galley) in &state.lines {
+                let text = source.rope.line(line).slice(start..end).to_string();
+                assert_eq!(galley.job.text, text, "Cached row {line}");
+                assert!(galley.rows.len() <= 1, "Cached row {line} wrapped");
+            }
+        };
+        render(&mut source, &mut state);
+        for (cursor, character) in "-- editor cache check\n".chars().enumerate() {
+            let mut bytes = [0; 4];
+            source.replace(cursor..cursor, character.encode_utf8(&mut bytes), cursor);
+            render(&mut source, &mut state);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !state.syntax.ready(source.revision) {
+            assert!(std::time::Instant::now() < deadline);
+            render(&mut source, &mut state);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn font_cache_replacement_refreshes_galleys_and_preserves_row_scratch() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("local value = 123\n");
+        let mut state = State::default();
+        let render = |state: &mut State, source: &mut Buffer| {
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    show(ui, source, state);
+                })
+                .drop_without_applying_deltas();
+        };
+        render(&mut state, &mut source);
+        let first = Arc::clone(state.font_cache_marker.as_ref().expect("Font cache marker"));
+        let row_scratch = state.visible.as_ptr();
+        render(&mut state, &mut source);
+        assert!(Arc::ptr_eq(
+            &first,
+            state
+                .font_cache_marker
+                .as_ref()
+                .expect("Unchanged font cache")
+        ));
+        assert_eq!(state.visible.as_ptr(), row_scratch);
+        let mut fonts = egui::FontDefinitions::default();
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Monospace)
+            .expect("Monospace fonts")
+            .reverse();
+        context.set_fonts(fonts);
+        render(&mut state, &mut source);
+        assert!(!Arc::ptr_eq(
+            &first,
+            state
+                .font_cache_marker
+                .as_ref()
+                .expect("Replaced font cache")
+        ));
+        assert_eq!(state.visible.as_ptr(), row_scratch);
+        assert!(
+            state
+                .lines
+                .values()
+                .all(|galley| galley.job.text == "local value = 123" || galley.job.text.is_empty())
+        );
+    }
 
     #[test]
     fn inline_cards_preserve_text_hit_testing_and_collapse_without_editing_source() {

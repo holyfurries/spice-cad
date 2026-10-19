@@ -26,6 +26,7 @@ pub struct Focus {
     pub name: String,
 }
 
+#[derive(Clone)]
 pub struct Placement {
     pub index: usize,
     pub line: usize,
@@ -34,10 +35,17 @@ pub struct Placement {
     end: f32,
 }
 
+#[derive(Clone)]
 pub struct Layout {
     pub cards: Vec<Placement>,
     row_height: f32,
     line_count: usize,
+    hidden: bool,
+}
+
+struct Textures {
+    entries: Arc<Vec<Entry>>,
+    handles: Vec<Option<egui::TextureHandle>>,
 }
 
 impl Layout {
@@ -80,6 +88,10 @@ pub struct State {
     entries: Arc<Vec<Entry>>,
     anchors: Vec<usize>,
     textures: Vec<Option<egui::TextureHandle>>,
+    textures_previous: Option<Textures>,
+    keys: Vec<String>,
+    layout: Option<Arc<Layout>>,
+    layout_dirty: bool,
     collapsed: BTreeSet<String>,
     result_revision: u64,
     tracked_revision: u64,
@@ -92,11 +104,28 @@ impl State {
         assert!(revision > 0);
         assert!(entries.len() <= 96);
         assert!(entries.windows(2).all(|pair| pair[0].line <= pair[1].line));
-        let keys: BTreeSet<_> = entries.iter().map(Self::key).collect();
-        self.collapsed.retain(|key| keys.contains(key));
-        self.anchors = entries.iter().map(|entry| entry.line).collect();
-        self.textures = (0..entries.len()).map(|_| None).collect();
+        self.keys = entries.iter().map(Self::key).collect();
+        self.collapsed.retain(|key| self.keys.contains(key));
+        self.anchors.clear();
+        self.anchors.extend(entries.iter().map(|entry| entry.line));
+        if self.result_revision != revision {
+            self.textures_previous = None;
+        }
+        if self.result_revision != revision || !Arc::ptr_eq(&entries, &self.entries) {
+            let handles = self
+                .textures_previous
+                .take()
+                .filter(|previous| Arc::ptr_eq(&previous.entries, &entries))
+                .map(|previous| previous.handles)
+                .unwrap_or_else(|| (0..entries.len()).map(|_| None).collect());
+            let previous = Textures {
+                entries: Arc::clone(&self.entries),
+                handles: std::mem::replace(&mut self.textures, handles),
+            };
+            self.textures_previous = (self.result_revision == revision).then_some(previous);
+        }
         self.entries = entries;
+        self.layout_dirty = true;
         self.result_revision = revision;
         self.tracked_revision = revision;
         self.resolved = false;
@@ -115,16 +144,18 @@ impl State {
         if self.resolved || self.result_revision != self.tracked_revision {
             return;
         }
-        let Some(anchors) = self
-            .entries
-            .iter()
-            .map(|entry| call_end(entry.line))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return;
-        };
-        self.anchors = anchors;
+        let mut anchors = [0; 96];
+        for (index, entry) in self.entries.iter().enumerate() {
+            let Some(line) = call_end(entry.line) else {
+                return;
+            };
+            anchors[index] = line;
+        }
+        self.anchors.clear();
+        self.anchors
+            .extend_from_slice(&anchors[..self.entries.len()]);
         self.resolved = true;
+        self.layout_dirty = true;
     }
 
     pub fn sync(&mut self, source: &Buffer) {
@@ -148,6 +179,7 @@ impl State {
             self.anchors.clear();
         }
         self.tracked_revision = source.revision;
+        self.layout_dirty = true;
     }
 
     fn key(entry: &Entry) -> String {
@@ -162,50 +194,69 @@ impl State {
         )
     }
 
-    pub fn layout(&self, line_count: usize, row_height: f32) -> Layout {
+    pub fn layout(&mut self, line_count: usize, row_height: f32) -> Arc<Layout> {
         assert!(line_count > 0);
         assert!(row_height > 0.0);
-        let mut cards = Vec::with_capacity(self.anchors.len());
-        if self.hidden || !self.resolved {
-            return Layout {
-                cards,
+        if let Some(layout) = &self.layout {
+            if !self.layout_dirty
+                && layout.line_count == line_count
+                && layout.row_height == row_height
+                && layout.hidden == self.hidden
+            {
+                return Arc::clone(layout);
+            }
+        }
+        let cached = self.layout.get_or_insert_with(|| {
+            Arc::new(Layout {
+                cards: Vec::with_capacity(self.anchors.len()),
                 row_height,
                 line_count,
-            };
+                hidden: self.hidden,
+            })
+        });
+        let layout = Arc::make_mut(cached);
+        layout.cards.clear();
+        layout.line_count = line_count;
+        layout.row_height = row_height;
+        layout.hidden = self.hidden;
+        self.layout_dirty = false;
+        if self.hidden || !self.resolved {
+            return Arc::clone(cached);
         }
-        let mut extra = 0.0;
-        let mut anchors: Vec<_> = self.anchors.iter().copied().enumerate().collect();
-        anchors.sort_by_key(|(_, line)| *line);
-        for (index, line) in anchors {
+        for (index, line) in self.anchors.iter().copied().enumerate() {
             let line = line.min(line_count - 1);
             let entry = &self.entries[index];
-            let height = if self.collapsed.contains(&Self::key(entry)) {
+            let height = if self.collapsed.contains(&self.keys[index]) {
                 30.0
             } else if matches!(entry.content, Content::Part { .. }) {
                 136.0
             } else {
                 66.0
             };
-            cards.push(Placement {
+            layout.cards.push(Placement {
                 index,
                 line,
-                top: (line + 1) as f32 * row_height + extra,
+                top: 0.0,
                 height,
-                end: extra + height,
+                end: 0.0,
             });
-            extra += height;
         }
-        Layout {
-            cards,
-            row_height,
-            line_count,
+        layout
+            .cards
+            .sort_unstable_by_key(|card| (card.line, card.index));
+        let mut extra = 0.0;
+        for card in &mut layout.cards {
+            card.top = (card.line + 1) as f32 * row_height + extra;
+            extra += card.height;
+            card.end = extra;
         }
+        Arc::clone(cached)
     }
 
     pub fn paint(&mut self, ui: &mut egui::Ui, placement: &Placement, rect: egui::Rect) {
         let entry = &self.entries[placement.index];
-        let key = Self::key(entry);
-        let collapsed = self.collapsed.contains(&key);
+        let key = &self.keys[placement.index];
+        let collapsed = self.collapsed.contains(key);
         let stale = self.result_revision != self.tracked_revision;
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
         painter.rect_filled(
@@ -221,10 +272,11 @@ impl State {
         );
         if response.clicked() {
             if collapsed {
-                self.collapsed.remove(&key);
+                self.collapsed.remove(key);
             } else {
-                self.collapsed.insert(key);
+                self.collapsed.insert(key.clone());
             }
+            self.layout_dirty = true;
             ui.ctx().request_repaint();
         }
         painter.text(
@@ -432,6 +484,7 @@ mod tests {
             assert_eq!(layout.line_index(card.top + card.height / 2.0), card.line);
         }
         state.collapsed.insert("part:part".into());
+        state.layout_dirty = true;
         assert_eq!(state.layout(100001, 21.0).cards[0].height, 30.0);
         state.hidden = true;
         assert_eq!(state.layout(100001, 21.0).height(), 100001.0 * 21.0);
@@ -463,5 +516,46 @@ mod tests {
         state.resolve(Some);
         assert_eq!(state.anchors, [1]);
         assert_eq!(state.result_revision, state.tracked_revision);
+    }
+
+    #[test]
+    fn layouts_and_alternate_thumbnails_reuse_storage_until_inputs_change() {
+        let mut state = State::default();
+        let assembly = entries();
+        let print = entries();
+        state.set(1, Arc::clone(&assembly));
+        state.resolve(Some);
+        let first = state.layout(100001, 21.0);
+        let again = state.layout(100001, 21.0);
+        assert!(Arc::ptr_eq(&first, &again));
+        let cards = first.cards.as_ptr();
+        drop(first);
+        drop(again);
+        state.hidden = true;
+        assert!(state.layout(100001, 21.0).cards.is_empty());
+        state.hidden = false;
+        assert_eq!(state.layout(100001, 21.0).cards.as_ptr(), cards);
+        assert_eq!(state.layout(100001, 42.0).line_top(1), 42.0);
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "cached-thumbnail",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = texture.id();
+        state.textures[0] = Some(texture);
+        state.set(1, Arc::clone(&print));
+        assert!(state.textures[0].is_none());
+        state.set(1, Arc::clone(&assembly));
+        assert_eq!(
+            state.textures[0]
+                .as_ref()
+                .expect("Assembly texture retained")
+                .id(),
+            id
+        );
+        state.set(2, print);
+        assert!(state.textures[0].is_none());
+        assert!(state.textures_previous.is_none());
     }
 }

@@ -201,9 +201,14 @@ pub struct State {
     snapshot: Option<Snapshot>,
     query: Option<Query>,
     requested: u64,
+    changed_lines: Option<std::ops::Range<usize>>,
     pub error: Option<String>,
 }
 impl State {
+    pub fn changed_lines(&self) -> Option<std::ops::Range<usize>> {
+        self.changed_lines.clone()
+    }
+
     pub fn special_columns(&self, revision: u64, line: usize) -> Option<&[(u32, char)]> {
         self.snapshot
             .as_ref()
@@ -272,6 +277,33 @@ impl State {
             .take();
         if let Some(snapshot) = completed {
             if snapshot.revision == source.revision {
+                self.changed_lines = None;
+                if let (Some(previous), Some(change)) = (&self.snapshot, source.change) {
+                    if previous.revision == change.previous_revision {
+                        let point =
+                            |point: (usize, usize)| tree_sitter::Point::new(point.0, point.1);
+                        let mut tree = previous.tree.clone();
+                        tree.edit(&tree_sitter::InputEdit {
+                            start_byte: change.start_byte,
+                            old_end_byte: change.old_end_byte,
+                            new_end_byte: change.new_end_byte,
+                            start_position: point(change.start_point),
+                            old_end_position: point(change.old_end_point),
+                            new_end_position: point(change.new_end_point),
+                        });
+                        let mut lines =
+                            change.start_point.0..change.new_end_point.0.saturating_add(1);
+                        let mut count = 0;
+                        for range in tree.changed_ranges(&snapshot.tree).take(513) {
+                            count += 1;
+                            lines.start = lines.start.min(range.start_point.row);
+                            lines.end = lines.end.max(range.end_point.row.saturating_add(1));
+                        }
+                        if count <= 512 {
+                            self.changed_lines = Some(lines);
+                        }
+                    }
+                }
                 self.snapshot = Some(snapshot);
                 return true;
             }
@@ -373,6 +405,47 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn highlight_invalidation_tracks_local_edits_and_multiline_token_changes() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("local a = 1\nlocal b = 2\nlocal c = 3\n-- ]]\n");
+        let mut state = State::default();
+        let wait = |state: &mut State, source: &Buffer| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !state.sync(source, &context) {
+                assert!(state.error.is_none());
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        wait(&mut state, &source);
+        assert!(state.changed_lines().is_none());
+        let start = source.rope.line_to_char(1) + 10;
+        source.replace(start..start + 1, "4", 0);
+        wait(&mut state, &source);
+        assert_eq!(state.changed_lines(), Some(1..2));
+        let start = source.rope.line_to_char(1);
+        source.replace(start..start, "--[[", 0);
+        wait(&mut state, &source);
+        let changed = state.changed_lines().expect("Known edit chain");
+        assert!(changed.contains(&1));
+        assert!(changed.contains(&2));
+        let job = state.layout(
+            &source,
+            source.rope.line_to_byte(2)..source.rope.line_to_byte(3),
+            FontId::monospace(14.0),
+        );
+        assert!(
+            job.sections
+                .iter()
+                .all(|section| section.format.color == Color32::from_rgb(109, 137, 111))
+        );
+        source.replace(0..0, "-- header\n", 0);
+        source.replace(0..0, "-- another\n", 0);
+        wait(&mut state, &source);
+        assert!(state.changed_lines().is_none());
+    }
+
     #[test]
     fn parser_keeps_multiline_comments_and_incremental_edits_correct() {
         let mut buffer = Buffer::from("--[=[\nlocal not_code = 1\n]=]\nlocal value = 2\n");

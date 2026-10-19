@@ -76,7 +76,7 @@ uniform writes. UI frames also include passes without a viewport callback, so
 this is not a per-callback hit-rate measurement. All 117 workspace tests, Clippy
 with all targets/features and warnings denied, and formatting passed.
 
-## Next work, in order
+## Follow-up implementation
 
 First follow-up implemented: preview tessellation and edge sampling now happen
 once per canonical part. Both layouts transform those vertices, normals, sampled
@@ -113,20 +113,39 @@ four rack parts after changing separation, measuring 27.4 ms total (16.2 ms
 analysis, 1.4 ms script, 2.8 ms kernel copies, 7.1 ms scene work). This is one
 warm diagnostic sample; debounce, file watching and presentation add latency.
 
-1. Tessellate canonical parts once per build and derive rigidly transformed scene
-   meshes/edges; reuse canonical volume. Preserve tight bounds, face IDs, normals,
-   constraint coordinates, and mesh tolerances with rotated/curved regressions.
-2. Retain a bounded worker-owned geometry recipe/body cache. Key operations by
-   complete inputs and dependencies, including modeling tolerances and version;
-   invalidate affected descendants only. Keep bodies on their owning kernel
-   thread. Placement/color/comment edits should not repeat booleans. Export may
-   reuse exact bodies, but game tessellation has a distinct tolerance key.
-3. Reuse editor scratch capacity, cache inline placements by anchors/collapse/font
-   state, retain per-layout textures, and invalidate only affected text ranges.
-   Measure allocation counts and p95 editing time on large ASCII/Unicode files.
-4. Send LSP document deltas when negotiated; update special-character indexes for
-   changed lines. Add stale-work checks between CAD operations and before scene
-   generation. An individual native kernel call may remain non-interruptible.
+Third follow-up implemented: visible editor rows reuse a scratch vector instead
+of constructing a vector and origin map every frame. Cache retention uses direct
+visible-row indexing rather than scanning visible keys for every cached row.
+Inline placement layouts reuse their allocation and card capacity until anchors,
+collapse state, visibility, line count or row height change. Keys are built once
+per result set; alternate layout thumbnail textures survive switching.
+
+Text edits invalidate affected rows and rebase later rows after newline changes.
+Completed parses invalidate the union of edited lines and Tree-sitter structural
+changes, so multiline comments refresh subsequent rows correctly. Unknown edit
+chains, initial parsing and DPI/font cache changes fall back to broader
+invalidation. An empty memoized galley marks the egui font-cache lifetime without
+allocating a text job each frame; replacing that marker invalidates retained
+galleys after atlas/font resets. The 126-test suite covers these cases,
+character-by-character typing/newline splits, layout/texture storage reuse and existing
+100,000-line/long-line rendering, Unicode, modal edits and horizontal scrolling.
+Clippy with all targets/features and warnings denied, formatting and release
+build pass. This removes identified hot-path allocations; it does not establish
+that the whole egui frame is allocation-free.
+Native Vulkan validation also passed an unsaved modal-editor comment insertion,
+syntax refresh and automatic preview with all four parts reused; layout switching,
+part focus and buffer reuse remained correct.
+
+## Remaining work
+
+1. Profile interactive heap allocation counts and p95 editing latency on large
+   ASCII/Unicode files, plus retained native geometry memory during repeated edits.
+2. Consider intermediate-operation caching if changed-part rebuilds remain costly.
+   CPU scene transforms, face inspection and thumbnails still regenerate for a
+   successful source revision even when final native parts are reused.
+3. Send LSP document deltas when negotiated and update special-character indexes
+   for changed lines. Add stale-work checks between CAD operations and before
+   scene generation. An individual native call may remain non-interruptible.
 
 For each step, compare identical release workloads, record retained bytes and
 allocation counts separately, and prove invalidation after edits/undo/file changes.

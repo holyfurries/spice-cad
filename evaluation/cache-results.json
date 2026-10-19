@@ -45,6 +45,27 @@
     "rustfmt": true,
     "release_build": true
   },
+  "follow_up": {
+    "canonical_tessellation_and_edge_sampling_once_per_part": true,
+    "final_part_dependency_cache_entries_max": 32,
+    "intermediate_boolean_results_cached": false,
+    "native_editor_exports_reuse_part_cache": true,
+    "native_rack_placement_edit_sample": {
+      "parts_reused": 4,
+      "total_ms": 27.4,
+      "analysis_ms": 16.2,
+      "script_ms": 1.4,
+      "kernel_copy_ms": 2.8,
+      "scene_ms": 7.1
+    },
+    "editor_row_scratch_reused": true,
+    "inline_layout_and_alternate_textures_cached": true,
+    "text_and_syntax_invalidation_limited_to_changed_rows_when_known": true,
+    "workspace_tests_passed": 126,
+    "clippy_all_targets_all_features_deny_warnings": true,
+    "rustfmt": true,
+    "release_build": true
+  },
   "limits": [
     "Small local samples; OS caches were not flushed.",
     "Scene pipeline combines both layouts, checks, inspection, and thumbnails.",
