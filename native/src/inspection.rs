@@ -118,6 +118,7 @@ impl Edge {
     }
 }
 
+#[cfg(test)]
 pub fn pick_edge(
     edges: &[Edge],
     segments: &[crate::mesh::EdgeSegment],
@@ -578,36 +579,37 @@ mod tests {
             let point = matrix.project_point3(point);
             [(point.x + 1.0) * 300.0, (1.0 - point.y) * 300.0]
         };
-        let top = snapshot.scene.inspected_edges.iter().find(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 8.0) && (points[0].y-points[1].y).abs()<TOLERANCE_MM)).ok_or("Top edge")?;
+        let edges = snapshot.scene.world_edges();
+        let top = edges.items.iter().find(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 8.0) && (points[0].y-points[1].y).abs()<TOLERANCE_MM)).ok_or("Top edge")?;
         let position = project(top.center());
         let pick = |edges: &[Edge], position| {
             pick_edge(
                 edges,
-                &snapshot.scene.edges,
-                &snapshot.scene.mesh,
+                &snapshot.scene.world_edges().segments,
+                &snapshot.scene.world_mesh(),
                 matrix,
                 [600.0; 2],
                 position,
             )
         };
         let selected =
-            pick(&snapshot.scene.inspected_edges, position).ok_or("Visible edge not picked")?;
+            pick(&snapshot.scene.world_edges().items, position).ok_or("Visible edge not picked")?;
         assert!((selected.center().z - 8.0).abs() < TOLERANCE_MM);
         assert!(
             pick(
-                &snapshot.scene.inspected_edges,
+                &snapshot.scene.world_edges().items,
                 [position[0], position[1] + 12.0]
             )
             .is_none()
         );
         assert!(
             pick(
-                &snapshot.scene.inspected_edges,
+                &snapshot.scene.world_edges().items,
                 project(Vec3::new(20.0, 10.0, 8.0))
             )
             .is_none()
         );
-        let hidden = snapshot.scene.inspected_edges.iter().copied().filter(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 0.0))).collect::<Vec<_>>();
+        let hidden = snapshot.scene.world_edges().items.iter().copied().filter(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 0.0))).collect::<Vec<_>>();
         assert_eq!(hidden.len(), 4);
         for edge in &hidden {
             assert!(pick(&hidden, project(edge.center())).is_none());
@@ -624,8 +626,8 @@ mod tests {
                 assert!(
                     pick_edge(
                         &hidden,
-                        &snapshot.scene.edges,
-                        &snapshot.scene.mesh,
+                        &snapshot.scene.world_edges().segments,
+                        &snapshot.scene.world_mesh(),
                         matrix,
                         [6000.0; 2],
                         [(point.x + 1.0) * 3000.0, (1.0 - point.y) * 3000.0]

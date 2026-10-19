@@ -114,7 +114,14 @@ mod tests {
                 > 1000
         );
         let mut remaining = 0;
-        assert!(render(&snapshot.scene.mesh, snapshot.scene.bounds, &mut remaining).is_none());
+        assert!(
+            render(
+                &snapshot.scene.world_mesh(),
+                snapshot.scene.bounds,
+                &mut remaining
+            )
+            .is_none()
+        );
         assert_eq!(remaining, 0);
         let moved = crate::build_script_snapshot(
             "local part=cad.box({width=40,depth=30,height=20});cad.show('moved',cad.translate(part,{x=100,y=-50,z=35}))",

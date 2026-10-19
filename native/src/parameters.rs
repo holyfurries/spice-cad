@@ -325,6 +325,7 @@ fn number(text: &str) -> Result<f64, &'static str> {
 }
 
 pub struct Edit {
+    pub input_at: Option<std::time::Instant>,
     revision: u64,
     range: Range<usize>,
     literal: String,
@@ -357,6 +358,7 @@ pub struct State {
     drafts: Vec<String>,
     error: Option<&'static str>,
     groups: Vec<Option<u64>>,
+    input_times: Vec<Option<std::time::Instant>>,
     dragging: Option<usize>,
 }
 
@@ -408,6 +410,8 @@ impl State {
             self.error = None;
             self.groups.clear();
             self.groups.resize(parameters.len(), None);
+            self.input_times.clear();
+            self.input_times.resize(parameters.len(), None);
             self.dragging = None;
         }
         let parameters = &self.parameters;
@@ -480,6 +484,7 @@ impl State {
                             );
                             if response.changed() {
                                 *draft = value.to_string();
+                                self.input_times[index] = Some(std::time::Instant::now());
                                 if response.is_pointer_button_down_on() {
                                     if self.dragging != Some(index) {
                                         self.groups[index] = Some(revision);
@@ -546,6 +551,7 @@ impl State {
                             Ok(_) => {
                                 self.error = None;
                                 edit = Some(Edit {
+                                    input_at: self.input_times[index],
                                     revision,
                                     range: parameter.range.clone(),
                                     literal: draft.trim().to_owned(),
@@ -683,6 +689,7 @@ mod tests {
             literal: "325.5".into(),
             property: parameter.property,
             group_revision: None,
+            input_at: None,
         };
         assert!(edit.apply(&mut source, 0).is_ok());
         assert_eq!(source.to_string(), text.replacen("310", "325.5", 1));
@@ -710,6 +717,7 @@ mod tests {
             literal: "12".into(),
             property: parse("local width = cad.number(1,{})").remove(0).property,
             group_revision: None,
+            input_at: None,
         };
         assert!(edit.apply(&mut source, 0).is_err());
         assert_eq!(source.revision, revision);
@@ -729,6 +737,7 @@ mod tests {
             literal: "true".into(),
             property: parameter.property,
             group_revision: None,
+            input_at: None,
         };
         edit.apply(&mut source, 0).expect("Toggle edit");
         assert_eq!(source.to_string(), text.replace("false", "true"));
@@ -797,6 +806,7 @@ mod tests {
             literal: "4".into(),
             property: parameter.property,
             group_revision: None,
+            input_at: None,
         };
         assert!(edit.apply(&mut source, 0).is_err());
         assert_eq!(source.revision, revision);

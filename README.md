@@ -778,6 +778,12 @@ allocations, retained capacity, and uniform uploads, including placement upload
 counts and bytes. Moving or rotating finished parts updates small transform/color
 records; shape changes upload new geometry and reuse buffer capacity when it fits.
 Translations also reuse cached thumbnails, bounds, and face measurements.
+Picking shares canonical CPU geometry and transforms queries through part poses,
+avoiding world mesh and sampled-edge copies. With `--profile`, normal exit prints
+slider latency median, p95, p99 and maximum over the latest 512 accepted revisions.
+Timing runs from control change through GPU prepare, excluding GPU completion and
+presentation. See [canonical picking measurements](evaluation/canonical-picking.md)
+for allocation checks and sustained drag results.
 Numeric property edits reuse a successful type check when every other source
 byte is unchanged. Runtime assertions, property bounds, and assembly checks still
 run; code, metadata, and boolean changes require another type check.

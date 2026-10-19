@@ -1,4 +1,3 @@
-use crate::mesh::{EdgeSegment, Mesh};
 use eframe::{
     egui,
     egui_wgpu::{self, wgpu},
@@ -74,6 +73,7 @@ impl Camera {
 }
 
 pub struct Draw {
+    pub input: Option<crate::performance::Input>,
     pub edge_width_px: f32,
     pub edges_enabled: bool,
     pub eye: Vec3,
@@ -116,6 +116,15 @@ const _: () = assert!(std::mem::size_of::<Segment>() == 28);
 const _: () = assert!(std::mem::size_of::<Instance>() == 80);
 
 impl Instance {
+    pub fn matrix(&self) -> Mat4 {
+        Mat4::from_cols_array(&self.matrix)
+    }
+
+    #[cfg(test)]
+    pub fn color(&self) -> [f32; 3] {
+        [self.color[0], self.color[1], self.color[2]]
+    }
+
     pub fn new(matrix: Mat4, color: [f32; 3]) -> Self {
         assert!(matrix.is_finite());
         assert!(color.iter().all(|value| value.is_finite()));
@@ -129,26 +138,50 @@ impl Instance {
 pub struct Geometry {
     vertices: Vec<Vertex>,
     segments: Vec<Segment>,
-    part_count: usize,
+    pub parts: Vec<crate::picking::Part>,
 }
 
 impl Geometry {
-    pub fn new(parts: &[(&Mesh, &[EdgeSegment])]) -> Result<Self, String> {
+    pub fn vertex_count(&self) -> usize {
+        self.vertices.len()
+    }
+    pub fn face_count(&self) -> u32 {
+        *self.parts.last().expect("Nonempty geometry").faces.end()
+    }
+    pub fn new(parts: &[Arc<crate::model::Geometry>]) -> Result<Self, String> {
         let vertices = parts
             .iter()
-            .map(|(mesh, _)| mesh.vertices.len())
+            .map(|part| part.mesh.vertices.len())
             .sum::<usize>();
-        let segments = parts.iter().map(|(_, edges)| edges.len()).sum::<usize>();
+        let segments = parts
+            .iter()
+            .map(|part| part.edges.segments.len())
+            .sum::<usize>();
         if parts.is_empty() || parts.len() > 32 || vertices > 300000 || segments > 131072 {
             return Err("GPU geometry exceeds its part, triangle or edge budget".into());
         }
         let mut result = Self {
             vertices: Vec::with_capacity(vertices),
             segments: Vec::with_capacity(segments),
-            part_count: parts.len(),
+            parts: Vec::with_capacity(parts.len()),
         };
         let mut faces = 0;
-        for (part, (mesh, segments)) in parts.iter().enumerate() {
+        for (part, geometry) in parts.iter().enumerate() {
+            let mesh = &geometry.mesh;
+            let segments = &geometry.edges.segments;
+            let offset = result.segments.len() as u32;
+            result.parts.push(crate::picking::Part {
+                geometry: Arc::clone(geometry),
+                faces: faces + 1..=faces + mesh.face_count,
+                segments: offset..offset + segments.len() as u32,
+                mesh_bounds: mesh.vertices.iter().fold(
+                    [Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)],
+                    |bounds, vertex| {
+                        let point = Vec3::from_array(vertex.position);
+                        [bounds[0].min(point), bounds[1].max(point)]
+                    },
+                ),
+            });
             result
                 .vertices
                 .extend(mesh.vertices.iter().map(|vertex| Vertex {
@@ -192,6 +225,7 @@ struct GpuScene {
 
 #[derive(Clone, Copy, Default)]
 pub struct Metrics {
+    pub input_submission: Option<(u64, f64)>,
     pub uploads: u64,
     pub buffer_allocations: u64,
     pub uniform_writes: u64,
@@ -444,7 +478,7 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get_mut::<Gpu>()
             .expect("Viewport initialized before drawing");
-        assert_eq!(self.instances.len(), self.geometry.part_count);
+        assert_eq!(self.instances.len(), self.geometry.parts.len());
         assert!(self.instances.len() <= 32);
         let scene = &mut gpu.scene;
         if scene
@@ -510,6 +544,16 @@ impl egui_wgpu::CallbackTrait for Draw {
             queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
             gpu.uniform_previous = Some(bits);
             gpu.metrics.uniform_writes += 1;
+        }
+        if let Some(input) = self.input {
+            if gpu
+                .metrics
+                .input_submission
+                .is_none_or(|(revision, _)| revision != input.revision)
+            {
+                gpu.metrics.input_submission =
+                    Some((input.revision, input.at.elapsed().as_secs_f64() * 1000.0));
+            }
         }
         Vec::new()
     }
@@ -589,9 +633,11 @@ mod tests {
             snapshot.set_layout(layout);
             let scene = &snapshot.scene;
             assert!(Arc::ptr_eq(&geometry, &scene.display));
-            assert_eq!(geometry.vertices.len(), scene.mesh.vertices.len());
-            assert_eq!(geometry.segments.len(), scene.edges.len());
-            for (vertex, expected) in geometry.vertices.iter().zip(&scene.mesh.vertices) {
+            let mesh = scene.world_mesh();
+            let edges = scene.world_edges();
+            assert_eq!(geometry.vertices.len(), mesh.vertices.len());
+            assert_eq!(geometry.segments.len(), edges.segments.len());
+            for (vertex, expected) in geometry.vertices.iter().zip(&mesh.vertices) {
                 let instance = scene.instances[vertex.part as usize];
                 let matrix = Mat4::from_cols_array(&instance.matrix);
                 assert_eq!(vertex.face, expected.face_id);
@@ -612,7 +658,7 @@ mod tests {
                     expected.color[..3]
                 );
             }
-            for (segment, expected) in geometry.segments.iter().zip(scene.edges.iter()) {
+            for (segment, expected) in geometry.segments.iter().zip(edges.segments.iter()) {
                 let matrix = Mat4::from_cols_array(&scene.instances[segment.part as usize].matrix);
                 assert!(
                     matrix

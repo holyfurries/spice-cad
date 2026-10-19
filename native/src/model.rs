@@ -706,20 +706,21 @@ mod tests {
         assert_eq!(snapshot.parts.len(), 2);
         assert_eq!(snapshot.parts[0].name, "red");
         assert_eq!(snapshot.parts[1].name, "blue");
-        assert_eq!(snapshot.scene.mesh.face_count, 12);
+        assert_eq!(snapshot.scene.world_mesh().face_count, 12);
         assert_eq!(snapshot.scene.faces.len(), 12);
-        assert_eq!(snapshot.scene.inspected_edges.len(), 24);
+        assert_eq!(snapshot.scene.world_edges().items.len(), 24);
         assert!((snapshot.volume_mm3 - 2000.0).abs() < 1e-6);
         assert_eq!(
             snapshot.scene.bounds,
             [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
         );
-        for vertex in &snapshot.scene.mesh.vertices {
+        for vertex in &snapshot.scene.world_mesh().vertices {
             let index = snapshot
                 .scene
-                .part_faces
+                .display
+                .parts
                 .iter()
-                .position(|range| range.contains(&vertex.face_id))
+                .position(|part| part.faces.contains(&vertex.face_id))
                 .expect("Part owns face");
             assert_eq!(
                 vertex.color,
@@ -727,11 +728,11 @@ mod tests {
             );
             assert!(snapshot.scene.faces.contains_key(&vertex.face_id));
         }
-        for edge in &snapshot.scene.inspected_edges {
+        for edge in &snapshot.scene.world_edges().items {
             assert!(edge.segments[0] < edge.segments[1]);
-            assert!(edge.segments[1] as usize <= snapshot.scene.edges.len());
+            assert!(edge.segments[1] as usize <= snapshot.scene.world_edges().segments.len());
         }
-        assert!(snapshot.scene.mesh.validate().is_err());
+        assert!(snapshot.scene.world_mesh().validate().is_err());
         Ok(())
     }
 
@@ -740,8 +741,16 @@ mod tests {
         let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{z=20});local first=cad.face(a,{name='first top',normal='z+'});local second=cad.face(b,{name='second top',normal='z+'});cad.measure('top separation',{from=first,to=second,min=19,max=21});cad.show('lower',a);cad.show('upper',b)";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert_eq!(snapshot.scene.annotations.faces.len(), 2);
-        assert!(snapshot.scene.part_faces[0].contains(&snapshot.scene.annotations.faces[0].id));
-        assert!(snapshot.scene.part_faces[1].contains(&snapshot.scene.annotations.faces[1].id));
+        assert!(
+            snapshot.scene.display.parts[0]
+                .faces
+                .contains(&snapshot.scene.annotations.faces[0].id)
+        );
+        assert!(
+            snapshot.scene.display.parts[1]
+                .faces
+                .contains(&snapshot.scene.annotations.faces[1].id)
+        );
         assert_eq!(snapshot.scene.annotations.measurements[0].distance_mm, 20.0);
         assert!(snapshot.scene.annotations.measurements[0].checked);
         let error = crate::build_script_snapshot(&source.replace("max=21", "max=19"), 1)

@@ -10,7 +10,6 @@ pub struct Presentation {
     orientation: crate::placement::Placement,
     color: [f32; 3],
     pub bounds: [glam::Vec3; 2],
-    pub mesh: Arc<crate::mesh::Mesh>,
     pub faces: std::collections::BTreeMap<u32, crate::inspection::Face>,
     pub image: Option<Arc<eframe::egui::ColorImage>>,
 }
@@ -20,13 +19,13 @@ struct Entry<'kernel> {
     solid: usize,
     steps: usize,
     body: Rc<Body<'kernel>>,
-    geometry: Rc<Geometry>,
+    geometry: Arc<Geometry>,
     presentations: [Option<Arc<Presentation>>; 2],
 }
 
 pub struct Prepared<'kernel> {
     pub bodies: Vec<Rc<Body<'kernel>>>,
-    pub geometry: Vec<Rc<Geometry>>,
+    pub geometry: Vec<Arc<Geometry>>,
     pub hits: usize,
     pub build_ms: f64,
     pub tessellation_ms: f64,
@@ -37,7 +36,7 @@ pub struct Cache<'kernel> {
     entries: Vec<Entry<'kernel>>,
     comparisons: Vec<(usize, usize)>,
     analysis: crate::analysis::Cache,
-    display: Option<(Vec<Rc<Geometry>>, Arc<crate::viewport::Geometry>)>,
+    display: Option<Arc<crate::viewport::Geometry>>,
 }
 
 impl<'kernel> Cache<'kernel> {
@@ -57,21 +56,21 @@ impl<'kernel> Cache<'kernel> {
 
     pub fn display(
         &mut self,
-        geometry: &[Rc<Geometry>],
+        geometry: &[Arc<Geometry>],
     ) -> Result<Arc<crate::viewport::Geometry>, String> {
-        if let Some((previous, display)) = &self.display {
-            if previous.len() == geometry.len()
-                && previous.iter().zip(geometry).all(|(a, b)| Rc::ptr_eq(a, b))
+        if let Some(display) = &self.display {
+            if display.parts.len() == geometry.len()
+                && display
+                    .parts
+                    .iter()
+                    .zip(geometry)
+                    .all(|(a, b)| Arc::ptr_eq(&a.geometry, b))
             {
                 return Ok(Arc::clone(display));
             }
         }
-        let parts: Vec<_> = geometry
-            .iter()
-            .map(|part| (&part.mesh, part.edges.segments.as_slice()))
-            .collect();
-        let display = Arc::new(crate::viewport::Geometry::new(&parts)?);
-        self.display = Some((geometry.to_vec(), Arc::clone(&display)));
+        let display = Arc::new(crate::viewport::Geometry::new(geometry)?);
+        self.display = Some(Arc::clone(&display));
         Ok(display)
     }
 
@@ -108,7 +107,6 @@ impl<'kernel> Cache<'kernel> {
                     orientation,
                     color: part.color,
                     bounds,
-                    mesh: Arc::new(mesh),
                     faces,
                     image,
                 }));
@@ -155,7 +153,7 @@ impl<'kernel> Cache<'kernel> {
                     solid: part.solid,
                     steps: entry.steps,
                     body: Rc::clone(&entry.body),
-                    geometry: Rc::clone(&entry.geometry),
+                    geometry: Arc::clone(&entry.geometry),
                     presentations: entry.presentations.clone(),
                 }
             } else {
@@ -168,7 +166,7 @@ impl<'kernel> Cache<'kernel> {
                 let started = std::time::Instant::now();
                 let mut mesh = body.mesh()?;
                 mesh.smooth_normals();
-                let geometry = Rc::new(Geometry {
+                let geometry = Arc::new(Geometry {
                     mesh,
                     edges: body.edges()?,
                     volume_mm3: body.volume()?,
@@ -193,7 +191,7 @@ impl<'kernel> Cache<'kernel> {
                 return Err("Assembly exceeds its display edge budget".into());
             }
             prepared.bodies.push(Rc::clone(&entry.body));
-            prepared.geometry.push(Rc::clone(&entry.geometry));
+            prepared.geometry.push(Arc::clone(&entry.geometry));
             next.push(entry);
         }
         self.entries = next;
@@ -334,7 +332,7 @@ mod tests {
         );
         let second = cache.prepare(&super::super::compile(&edited)?)?;
         assert_eq!(second.hits, 2);
-        assert!(Rc::ptr_eq(&first.geometry[0], &second.geometry[0]));
+        assert!(Arc::ptr_eq(&first.geometry[0], &second.geometry[0]));
         let mut working = second.bodies[0].try_clone()?;
         working.translate([100.0, 0.0, 0.0])?;
         working.step_data("working-copy")?;
@@ -346,8 +344,8 @@ mod tests {
             &source.replace("radius=2", "radius=3"),
         )?)?;
         assert_eq!(changed.hits, 1);
-        assert!(!Rc::ptr_eq(&next.geometry[0], &changed.geometry[0]));
-        assert!(Rc::ptr_eq(&next.geometry[1], &changed.geometry[1]));
+        assert!(!Arc::ptr_eq(&next.geometry[0], &changed.geometry[0]));
+        assert!(Arc::ptr_eq(&next.geometry[1], &changed.geometry[1]));
         let invalid = super::super::compile(
             "local a=cad.box({width=1,depth=1,height=1});cad.show('empty',cad.subtract(a,a))",
         )?;

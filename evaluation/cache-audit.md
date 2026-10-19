@@ -187,8 +187,8 @@ Translation reuses thumbnails and face spans, shifts tight bounds, and never
 copies a native body. Rotation refreshes orientation-dependent presentation and
 obtains tight bounds from an independent native body copy. Volume and canonical
 tessellation remain cached. Inline thumbnail textures retain their handles while
-their shared image is unchanged. CPU world meshes and sampled edge positions still
-refresh for picking and occlusion. Export creates independent mutable body copies.
+their shared image is unchanged. The canonical-picking follow-up below removes
+CPU world meshes and sampled edge copies. Export creates independent mutable body copies.
 
 A single successful type-check cache normalizes only validated numeric literal
 spans in parsed `cad.number` property declarations. All other source bytes are
@@ -211,21 +211,35 @@ with CPU positions, normals, face IDs and edges in both layouts. All 134 workspa
 tests, Clippy with all targets/features and warnings denied, formatting and release
 build pass, including cached print/game exports and constraint failure/recovery.
 
+## Canonical picking follow-up
+
+Picking now shares canonical CPU geometry with rendering and transforms rays or
+projects local edge segments through each part's pose. Global occlusion remains
+intact. Scene construction no longer materializes world meshes or sampled edge
+arrays; orientation presentations discard temporary meshes after inspection.
+
+[Matched measurements](canonical-picking.md) show 59 → 42 scene allocation calls
+(28.8% fewer) during sustained separation dragging. Scoped tests record zero Rust
+allocations across 1,024 picking queries and scene allocation bytes independent of
+tessellation density. A separate hardware-rendered session measured 31.4 ms p95
+from slider control change to GPU prepare across 234 accepted revisions. This
+excludes GPU completion and presentation. All 139 workspace tests pass.
+
 ## Remaining work
 
 1. Profile interactive heap allocation counts and p95 editing latency on large
    ASCII/Unicode files, plus retained native geometry memory during repeated edits.
 2. Consider intermediate-operation caching if changed-part rebuilds remain costly.
-   CPU world meshes and sampled edge positions still regenerate for picking;
-   rotation-dependent inspection and thumbnails refresh when orientation changes.
+   Rotation-dependent inspection and thumbnails refresh when orientation changes.
 3. Send LSP document deltas when negotiated and update special-character indexes
    for changed lines. Add stale-work checks between CAD operations and before
    scene generation. An individual native call may remain non-interruptible.
 
 For each step, compare identical release workloads, record retained bytes and
 allocation counts separately, and prove invalidation after edits/undo/file changes.
-Interactive heap allocation profiles and input-to-presentation traces remain
-unmeasured; the CLI heap samples do not establish editor allocation budgets.
+Interactive scene allocation calls now have a matched profile; large-file editor
+budgets and input-to-presentation traces remain unmeasured. Neither the CLI heap
+samples nor the scoped scene checks establish whole-editor allocation budgets.
 
 ## Ring buffers and TPT Torus
 

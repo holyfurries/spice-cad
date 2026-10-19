@@ -841,8 +841,11 @@ mod tests {
                     < TOLERANCE_MM
             );
             assert!(snapshot.scene.annotations.measurements[0].checked);
-            let selector = selector(&snapshot.scene.mesh, snapshot.scene.annotations.faces[0].id)
-                .ok_or("Missing selector")?;
+            let selector = selector(
+                &snapshot.scene.world_mesh(),
+                snapshot.scene.annotations.faces[0].id,
+            )
+            .ok_or("Missing selector")?;
             assert!(selector.contains("normal = \"z+\""));
         }
         Ok(())

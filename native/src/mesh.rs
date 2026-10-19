@@ -168,11 +168,18 @@ impl Mesh {
             .sum()
     }
 
+    #[cfg(test)]
     pub fn pick(&self, matrix: Mat4, position: [f32; 2]) -> Option<Hit> {
         let inverse = matrix.inverse();
         let origin = inverse.project_point3(Vec3::new(position[0], position[1], 0.0));
         let direction =
             (inverse.project_point3(Vec3::new(position[0], position[1], 1.0)) - origin).normalize();
+        self.ray_hit(origin, direction)
+    }
+
+    pub fn ray_hit(&self, origin: Vec3, direction: Vec3) -> Option<Hit> {
+        assert!(origin.is_finite());
+        assert!(direction.is_finite());
         let mut closest = f32::INFINITY;
         let mut selected = None;
         for triangle in self.vertices.as_chunks::<3>().0.iter() {
