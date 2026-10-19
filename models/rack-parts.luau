@@ -1,14 +1,15 @@
 --!strict
-local print_layout: boolean = false
-local separation: number = 12
-local width: number = 310
-local steps: number = 5
-local rise: number = 42
-local wall: number = 3
-local lip: number = 8
-local jar_diameter: number = 50
-local jar_spacing: number = 1.5
-local joint_clearance: number = 0.2
+local print_layout: boolean = cad.toggle(false, { label = "Print layout" })
+local separation: number = cad.number(12, { label = "Part separation", min = 0, max = 100, step = 1, unit = "mm" })
+local width: number = cad.number(310, { label = "Rack width", min = 100, max = 480, step = 1, unit = "mm" })
+local steps: number = cad.number(5, { label = "Steps", min = 3, max = 8, step = 1 })
+local rise: number = cad.number(42, { label = "Step rise", min = 10, max = 80, step = 1, unit = "mm" })
+local wall: number = cad.number(3, { label = "Wall thickness", min = 1, max = 10, step = 0.1, unit = "mm" })
+local lip: number = cad.number(8, { label = "Lip height", min = 1, max = 20, step = 0.5, unit = "mm" })
+local jar_diameter: number = cad.number(50, { label = "Jar diameter", min = 20, max = 100, step = 1, unit = "mm" })
+local jar_spacing: number = cad.number(1.5, { label = "Jar spacing", min = 0.5, max = 10, step = 0.1, unit = "mm" })
+local joint_clearance: number =
+	cad.number(0.2, { label = "Joint clearance", min = 0.05, max = 0.5, step = 0.01, unit = "mm" })
 local tread_depth = jar_diameter + 2 * jar_spacing + wall
 local depth = steps * tread_depth + wall
 local front_steps = math.ceil(steps / 2)

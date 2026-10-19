@@ -91,7 +91,7 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
     };
     let (name, source) = match example {
         Example::RackParts => (
-            "rack-parts.luau",
+            "spice-rack.luau",
             include_str!("../../models/rack-parts.luau"),
         ),
         Example::RocketEngine => (
@@ -152,7 +152,7 @@ fn create_example_model(path: PathBuf, source: &str) -> Result<PathBuf, String> 
 impl Document {
     pub fn draft(path: PathBuf) -> Self {
         let mut document = Self::new(path);
-        document.buffer = "--!strict\nlocal width: number = 20\nlocal depth: number = 20\nlocal height: number = 20\ncad.show(\"new model\", cad.box({ width = width, depth = depth, height = height }))\n".into();
+        document.buffer = "--!strict\nlocal width: number = cad.number(20, {label = \"Width\", unit = \"mm\"})\nlocal depth: number = cad.number(20, {label = \"Depth\", unit = \"mm\"})\nlocal height: number = cad.number(20, {label = \"Height\", unit = \"mm\"})\ncad.show(\"new model\", cad.box({ width = width, depth = depth, height = height }))\n".into();
         document.saved_revision = None;
         document
     }

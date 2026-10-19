@@ -804,7 +804,12 @@ mod tests {
         let source = include_str!("../../models/measured-block.luau");
         for (source, height) in [
             (source.to_owned(), 20.0),
-            (source.replace("= 20", "= 24").replace("= 40", "= 55"), 24.0),
+            (
+                source
+                    .replace("cad.number(20,", "cad.number(24,")
+                    .replace("cad.number(40,", "cad.number(55,"),
+                24.0,
+            ),
         ] {
             let snapshot = crate::build_script_snapshot(&source, 1)?;
             assert_eq!(snapshot.annotations.faces.len(), 2);

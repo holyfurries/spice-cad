@@ -1,7 +1,7 @@
 --!strict
-local width: number = 120
-local depth: number = 60
-local wall: number = 6
+local width: number = cad.number(120, { label = "Width", unit = "mm" })
+local depth: number = cad.number(60, { label = "Depth", unit = "mm" })
+local wall: number = cad.number(6, { label = "Wall thickness", unit = "mm" })
 
 local base = cad.box({ width = width, depth = depth, height = wall })
 local back = cad.box({ width = width, depth = wall, height = 40 })

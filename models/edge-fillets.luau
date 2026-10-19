@@ -1,9 +1,9 @@
 --!strict
-local width: number = 60
-local depth: number = 30
-local height: number = 8
-local radius: number = 4
-local hole_radius: number = 3
+local width: number = cad.number(60, { label = "Width", unit = "mm" })
+local depth: number = cad.number(30, { label = "Depth", unit = "mm" })
+local height: number = cad.number(8, { label = "Height", unit = "mm" })
+local radius: number = cad.number(4, { label = "Corner radius", unit = "mm" })
+local hole_radius: number = cad.number(3, { label = "Hole radius", unit = "mm" })
 
 assert(radius < math.min(width, depth) / 2, "Corner radius must fit within the plate")
 assert(hole_radius < math.min(width, depth) / 4, "Hole needs surrounding material")

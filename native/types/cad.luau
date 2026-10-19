@@ -12,6 +12,8 @@ type BoxOptions = {
 	z: number?,
 }
 local cad: {
+	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
+	toggle: (boolean, { label: string? }) -> boolean,
 	polygon: ({ { x: number, y: number } }) -> Profile,
 	extrude: (Profile, { height: number }) -> Solid,
 	revolve: (Profile, { angle: number? }) -> Solid,

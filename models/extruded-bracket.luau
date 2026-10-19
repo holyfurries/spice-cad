@@ -1,10 +1,10 @@
 --!strict
-local width: number = 64
-local depth: number = 42
-local arm: number = 10
-local web: number = 24
-local thickness: number = 6
-local hole_radius: number = 2
+local width: number = cad.number(64, { label = "Width", unit = "mm" })
+local depth: number = cad.number(42, { label = "Depth", unit = "mm" })
+local arm: number = cad.number(10, { label = "Arm width", unit = "mm" })
+local web: number = cad.number(24, { label = "Web width", unit = "mm" })
+local thickness: number = cad.number(6, { label = "Thickness", unit = "mm" })
+local hole_radius: number = cad.number(2, { label = "Hole radius", unit = "mm" })
 
 assert(width > arm + web, "Width must leave room for the diagonal web")
 assert(depth > arm + web, "Depth must leave room for the diagonal web")

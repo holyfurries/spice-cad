@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return benchmark().map_err(Into::into);
     }
     let model_path = match arguments.as_slice() {
-        [] => Some(document::example_model(document::Example::Rack)?),
+        [] => Some(document::example_model(document::Example::RackParts)?),
         #[cfg(feature = "rack-tools")]
         [flag] if flag == "--rack" => None,
         [flag, path] if flag == "--model" => Some(std::path::PathBuf::from(path)),
@@ -2444,7 +2444,7 @@ mod tests {
     #[test]
     fn curved_models_export_native_step_and_closed_stl() -> Result<(), String> {
         let bracket = include_str!("../../models/mounting-bracket.luau");
-        let changed = bracket.replace("= 100", "= 120");
+        let changed = bracket.replace("cad.number(100,", "cad.number(120,");
         let cavity = "local a = cad.box({width=10, depth=10, height=10}); local b = cad.box({width=6, depth=6, height=6,x=2,y=2,z=2}); cad.show('hollow', cad.subtract(a,b))";
         let bushing = include_str!("../../models/revolved-bushing.luau").replace(
             "cad.revolve(section, { angle = sweep_angle })",
@@ -2657,14 +2657,8 @@ mod tests {
         for print_layout in [false, true] {
             let kernel = kernel::Kernel::new()?;
             let source = source
-                .replace(
-                    "local separation: number = 12",
-                    "local separation: number = 0",
-                )
-                .replace(
-                    "local print_layout: boolean = false",
-                    &format!("local print_layout: boolean = {print_layout}"),
-                );
+                .replace("cad.number(12,", "cad.number(0,")
+                .replace("cad.toggle(false,", &format!("cad.toggle({print_layout},"));
             let model = model::compile(&source)?;
             let mut bodies = model.build(&kernel)?;
             assert_eq!(model.parts.len(), 4);

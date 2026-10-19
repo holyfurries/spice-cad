@@ -121,7 +121,7 @@ mod tests {
     fn chamfers_preserve_holes_and_follow_parameter_changes() -> Result<(), String> {
         let source = include_str!("../../models/edge-chamfers.luau");
         for width in [60.0, 80.0] {
-            let source = source.replace("= 60", &format!("= {width}"));
+            let source = source.replace("cad.number(60,", &format!("cad.number({width},"));
             let snapshot = crate::build_script_snapshot(&source, 1)?;
             let expected_mm3 = width * 30.0 * 8.0
                 - std::f64::consts::PI * 3.0 * 3.0 * 8.0
@@ -188,7 +188,7 @@ mod tests {
     fn selected_fillets_follow_parameterized_edges_and_preserve_hole_rims() -> Result<(), String> {
         let source = include_str!("../../models/edge-fillets.luau");
         for width in [60.0, 80.0] {
-            let source = source.replace("= 60", &format!("= {width}"));
+            let source = source.replace("cad.number(60,", &format!("cad.number({width},"));
             let snapshot = crate::build_script_snapshot(&source, 1)?;
             let removed_mm3 = 2.0 * (1.0 - std::f64::consts::PI / 4.0) * 4.0 * 4.0 * 8.0;
             let expected_mm3 =

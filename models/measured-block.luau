@@ -1,7 +1,7 @@
 --!strict
-local width: number = 40
-local depth: number = 30
-local height: number = 20
+local width: number = cad.number(40, { label = "Width", unit = "mm" })
+local depth: number = cad.number(30, { label = "Depth", unit = "mm" })
+local height: number = cad.number(20, { label = "Height", unit = "mm" })
 
 local part = cad.box({ width = width, depth = depth, height = height })
 local top = cad.face(part, { name = "top", normal = "z+" })

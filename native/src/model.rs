@@ -123,6 +123,7 @@ pub fn compile(source: &str) -> Result<Model, String> {
     });
     let recipe = Rc::new(RefCell::new(Recipe::default()));
     let cad = lua.create_table().map_err(|error| error.to_string())?;
+    crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
         "edge",

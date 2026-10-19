@@ -180,7 +180,7 @@ nix develop -c cargo run --release --locked
 ```
 
 It uses egui/wgpu and native SMLib, with no browser, WebView, or WASM runtime.
-Launch without arguments for the Luau workspace and a personal spice-rack example;
+Launch without arguments for the Luau workspace and the four-part spice rack;
 use `-- --model FILE.luau` to open another model. The normal executable links
 SMLib without OpenCascade. The optional rack-tools build provides the older rack
 configurator and kernel comparison:
@@ -193,7 +193,7 @@ From the development shell, use `cargo run --release --locked -p spice-cad
 --features rack-tools -- --rack`. The original rack export CLI is explicitly selected
 with `cargo run --locked -p spice-rack`.
 The starter source is embedded in the executable and created once at
-`$XDG_DATA_HOME/spice-cad/models/rack.luau`, or under
+`$XDG_DATA_HOME/spice-cad/models/spice-rack.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
 **Examples → Spice rack · four parts** opens four named, colored rack pieces with
@@ -333,14 +333,29 @@ files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
 (default `~/.local/state/spice-cad/`).
 
 **Properties** in the toolbar opens editable source values in the properties
-pane. Top-level numeric locals such as `local width: number = 310` appear
-automatically; formulas and nested locals stay in code. Enter or leaving a field
-applies a finite decimal literal; Escape cancels the draft. Save and Run also
-commit the active field. Each edit changes only that literal and is one normal
-editor undo. Auto Preview rebuilds committed edits after a pause; Run also rebuilds
-explicitly. Invalid model dimensions use the existing
-validation path. Up to 64 parameters are shown from the first 4,096 top-level
-syntax nodes. See [navigation and parameter notes](evaluation/navigation.md).
+pane. Declare the values you want to expose; ordinary locals remain private:
+
+```lua
+local width: number = cad.number(310, { label = "Rack width", min = 100, max = 480, step = 1, unit = "mm" })
+local wall: number = cad.number(3, { label = "Wall thickness", unit = "mm" })
+local print_layout: boolean = cad.toggle(false, { label = "Print layout" })
+```
+
+Numbers with both `min` and `max` get a slider and editable value; other numbers
+get a numeric field. Booleans get a checkbox. Labels and units are optional;
+`step` defaults to 0.01. Runtime evaluation rejects non-finite values, invalid
+ranges, non-positive steps, and values outside declared bounds. Bounds describe
+individual controls; geometric constraints between properties still belong in code.
+
+Only top-level declarations with literal values and literal option tables become
+controls. Up to 64 properties are shown from the first 4,096 top-level syntax
+nodes; each declaration is limited to 4 KiB. Controls edit only the value literal,
+preserving the declaration and comments. A slider drag commits on release as one
+normal editor undo; checkboxes commit immediately. Enter or leaving a numeric field
+applies it; Escape cancels. Save and Run also commit the active field. Auto Preview
+rebuilds committed edits after a pause. Existing personal example files are preserved;
+the new startup file is `spice-rack.luau`, leaving older `rack.luau` and `rack-parts.luau`
+copies intact. See [navigation and parameter notes](evaluation/navigation.md).
 
 `models/mounting-bracket.luau` has rounded edges and four mounting holes, with
 parameter assertions that keep holes clear of walls. `models/bracket.luau`

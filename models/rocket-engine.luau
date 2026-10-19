@@ -1,10 +1,10 @@
 --!strict
-local print_layout: boolean = false
-local throat_radius: number = 8
-local wall: number = 4
-local chamber_top: number = 75
-local chamber_bottom: number = 30
-local bell_radius: number = 22
+local print_layout: boolean = cad.toggle(false, { label = "Print layout" })
+local throat_radius: number = cad.number(8, { label = "Throat radius", unit = "mm" })
+local wall: number = cad.number(4, { label = "Wall thickness", unit = "mm" })
+local chamber_top: number = cad.number(75, { label = "Chamber top", unit = "mm" })
+local chamber_bottom: number = cad.number(30, { label = "Chamber bottom", unit = "mm" })
+local bell_radius: number = cad.number(22, { label = "Bell radius", unit = "mm" })
 
 local chamber_section = cad.polygon({
 	{ x = throat_radius, y = chamber_bottom },

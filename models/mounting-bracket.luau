@@ -1,11 +1,11 @@
 --!strict
-local width: number = 100
-local depth: number = 50
-local height: number = 40
-local wall: number = 6
-local edge_radius: number = 1
-local hole_radius: number = 3
-local hole_inset: number = 15
+local width: number = cad.number(100, { label = "Width", unit = "mm" })
+local depth: number = cad.number(50, { label = "Depth", unit = "mm" })
+local height: number = cad.number(40, { label = "Height", unit = "mm" })
+local wall: number = cad.number(6, { label = "Wall thickness", unit = "mm" })
+local edge_radius: number = cad.number(1, { label = "Edge radius", unit = "mm" })
+local hole_radius: number = cad.number(3, { label = "Hole radius", unit = "mm" })
+local hole_inset: number = cad.number(15, { label = "Hole inset", unit = "mm" })
 
 assert(width > 2 * hole_inset + 2 * hole_radius)
 assert(depth > hole_inset + hole_radius + wall + edge_radius)

@@ -191,10 +191,7 @@ mod tests {
                 .is_err()
         );
         assert!(!folder.join("invalid-print").exists());
-        let print_source = source.replace(
-            "print_layout: boolean = false",
-            "print_layout: boolean = true",
-        );
+        let print_source = source.replace("cad.toggle(false,", "cad.toggle(true,");
         export::model_files(&print_source, &folder.join("print"), export::Target::Print)?;
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(folder.join("print/parts.json")).unwrap())

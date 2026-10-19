@@ -1,11 +1,11 @@
 --!strict
-local width: number = 310
-local steps: number = 5
-local rise: number = 42
-local wall: number = 3
-local lip: number = 8
-local jar_diameter: number = 50
-local jar_spacing: number = 1.5
+local width: number = cad.number(310, { label = "Rack width", unit = "mm" })
+local steps: number = cad.number(5, { label = "Steps", min = 3, max = 8, step = 1 })
+local rise: number = cad.number(42, { label = "Step rise", unit = "mm" })
+local wall: number = cad.number(3, { label = "Wall thickness", unit = "mm" })
+local lip: number = cad.number(8, { label = "Lip height", unit = "mm" })
+local jar_diameter: number = cad.number(50, { label = "Jar diameter", unit = "mm" })
+local jar_spacing: number = cad.number(1.5, { label = "Jar spacing", unit = "mm" })
 local tread_depth = jar_diameter + 2 * jar_spacing + wall
 local depth = steps * tread_depth + wall
 local height = (steps - 1) * rise + wall + lip
