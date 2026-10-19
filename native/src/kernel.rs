@@ -77,6 +77,12 @@ mod ffi {
         type SmLine;
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
+        unsafe fn spice_fillet_edges(
+            body: *mut SmBrep,
+            edges: *const *mut SmEdge,
+            count: usize,
+            radius: f64,
+        ) -> Result<i64>;
         unsafe fn Add(self: Pin<&mut SmCurveArray>, curve: *mut SmCurve) -> Result<u64>;
         unsafe fn SmApiCreateLineSegment(
             start: &SmVector3d,
@@ -396,7 +402,7 @@ impl Kernel {
 }
 
 impl Body<'_> {
-    pub fn edges(&self) -> Result<crate::inspection::Edges, String> {
+    fn boundary_edges(&self) -> Result<Vec<*mut ffi::SmEdge>, String> {
         let mut edges = std::collections::BTreeMap::new();
         for region in unsafe { topology_list(children(self.shape.as_ptr())) }? {
             let region_ref = unsafe { &*region.cast::<ffi::SmRegion>() };
@@ -437,13 +443,17 @@ impl Body<'_> {
                 }
             }
         }
+        Ok(edges
+            .into_iter()
+            .filter_map(|(edge, (_, shared))| shared.then_some(edge as *mut ffi::SmEdge))
+            .collect())
+    }
+
+    pub fn edges(&self) -> Result<crate::inspection::Edges, String> {
         let mut segments = Vec::new();
         let mut items = Vec::new();
-        for (edge, (_, shared)) in edges {
-            if !shared {
-                continue;
-            }
-            let edge = unsafe { &*(edge as *const ffi::SmEdge) };
+        for edge in self.boundary_edges()? {
+            let edge = unsafe { &*edge };
             let curve = unsafe { edge.GetCurve().as_ref() }.ok_or("Missing display curve")?;
             let (mut minimum, mut maximum) = (0.0, 0.0);
             let status = unsafe { ffi::SmApiEdgeParameterRange(edge, &mut minimum, &mut maximum) }
@@ -545,16 +555,76 @@ impl Body<'_> {
         Ok(())
     }
 
-    pub fn fillet(&mut self, radius: f64) -> Result<(), String> {
-        let [minimum, maximum] = self.bounds(false)?;
-        if radius >= (maximum - minimum).min_element() / 2.0 {
-            return Err(
-                "Fillet radius must be smaller than half the solid's smallest bounding dimension"
-                    .into(),
-            );
-        }
-        let status = unsafe { ffi::SmApiCircularFillet(self.shape.as_mut_ptr(), radius) }
-            .map_err(|error| error.to_string())?;
+    pub fn fillet(
+        &mut self,
+        radius: f64,
+        references: Option<&[&crate::edge_reference::Reference]>,
+    ) -> Result<(), String> {
+        assert!(radius.is_finite() && radius > 0.0);
+        let status = if let Some(references) = references {
+            assert!(!references.is_empty());
+            assert!(references.len() <= crate::edge_reference::COUNT_MAX);
+            let edges = self.boundary_edges()?;
+            let mut selected = vec![None; references.len()];
+            for edge in edges {
+                let curve = unsafe { (*edge).GetCurve().as_ref() }.ok_or("Missing fillet curve")?;
+                let (mut minimum, mut maximum) = (0.0, 0.0);
+                let status =
+                    unsafe { ffi::SmApiEdgeParameterRange(edge, &mut minimum, &mut maximum) }
+                        .map_err(|error| error.to_string())?;
+                if status != 1000 || !minimum.is_finite() || !maximum.is_finite() {
+                    return Err("Invalid fillet curve interval".into());
+                }
+                let mut samples = [glam::DVec3::ZERO; 17];
+                samples[0] = curve_point(curve, minimum)?;
+                samples[16] = curve_point(curve, maximum)?;
+                if !references
+                    .iter()
+                    .any(|reference| reference.matches_endpoints([samples[0], samples[16]]))
+                {
+                    continue;
+                }
+                for (index, sample) in samples.iter_mut().enumerate().take(16).skip(1) {
+                    *sample =
+                        curve_point(curve, minimum + (maximum - minimum) * index as f64 / 16.0)?;
+                }
+                for (index, reference) in references.iter().enumerate() {
+                    if reference.matches(&samples) {
+                        if selected[index].is_some() {
+                            return Err(format!(
+                                "Edge '{}' is ambiguous; its endpoints match multiple edges",
+                                reference.name
+                            ));
+                        }
+                        selected[index] = Some(edge);
+                    }
+                }
+            }
+            let mut edges = Vec::with_capacity(references.len());
+            for (index, edge) in selected.into_iter().enumerate() {
+                let edge = edge.ok_or_else(|| format!("Edge '{}' did not match a straight edge on its source solid; update its endpoint expressions", references[index].name))?;
+                if edges.contains(&edge) {
+                    return Err("Fillet references resolve to the same edge".into());
+                }
+                edges.push(edge);
+            }
+            unsafe {
+                ffi::spice_fillet_edges(
+                    self.shape.as_mut_ptr(),
+                    edges.as_ptr(),
+                    edges.len(),
+                    radius,
+                )
+            }
+            .map_err(|error| error.to_string())?
+        } else {
+            let [minimum, maximum] = self.bounds(false)?;
+            if radius >= (maximum - minimum).min_element() / 2.0 {
+                return Err("Fillet radius must be smaller than half the solid's smallest bounding dimension".into());
+            }
+            unsafe { ffi::SmApiCircularFillet(self.shape.as_mut_ptr(), radius) }
+                .map_err(|error| error.to_string())?
+        };
         if status != 1000 {
             return Err(format!(
                 "SMLib fillet failed: {status}; reduce the radius or fillet an earlier feature"

@@ -42,6 +42,7 @@ pub enum Command {
     Rack,
     Bracket,
     ExtrudedBracket,
+    EdgeFillets,
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
@@ -73,6 +74,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Rack, "Examples: spice rack", ""),
     (Command::Bracket, "Examples: mounting bracket", ""),
     (Command::ExtrudedBracket, "Examples: extruded bracket", ""),
+    (Command::EdgeFillets, "Examples: selected edge fillets", ""),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

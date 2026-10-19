@@ -15,6 +15,7 @@ mod code_editor;
 mod diagnostics;
 mod dimensions;
 mod document;
+mod edge_reference;
 mod export;
 mod files;
 mod inspection;
@@ -981,6 +982,9 @@ impl eframe::App for Editor {
                         Navigation::ExtrudedBracket => {
                             example_requested = Some(document::Example::ExtrudedBracket)
                         }
+                        Navigation::EdgeFillets => {
+                            example_requested = Some(document::Example::EdgeFillets)
+                        }
                     }
                 }
             }
@@ -1048,6 +1052,7 @@ impl eframe::App for Editor {
                         ("Mounting bracket", document::Example::MountingBracket),
                         ("Measured block", document::Example::MeasuredBlock),
                         ("Extruded bracket", document::Example::ExtrudedBracket),
+                        ("Selected edge fillets", document::Example::EdgeFillets),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -1363,6 +1368,14 @@ impl eframe::App for Editor {
                         }
                         for span in selection.spans().into_iter().flatten() {
                             ui.label(format!("{} ≈{:.3} mm", span.direction, span.distance_mm));
+                        }
+                        if let inspection::Selection::Edge(edge) = selection {
+                            if ui.button("Copy edge selector").on_hover_text("Straight edges only. Replace part with the source solid variable and choose a unique name. Use parameter expressions for endpoint coordinates that should follow edits.").clicked() {
+                                match edge_reference::selector(edge) {
+                                    Some(selector) => ui.ctx().copy_text(selector),
+                                    None => self.message = "Only straight edges support modeling selectors; no selector was copied".into(),
+                                }
+                            }
                         }
                         if let Some(face) = selection.latest() {
                             if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
@@ -2336,6 +2349,11 @@ mod tests {
                 3,
                 include_str!("../../models/extruded-bracket.luau"),
                 [64.0, 42.0, 6.0],
+            ),
+            (
+                4,
+                include_str!("../../models/edge-fillets.luau"),
+                [60.0, 30.0, 8.0],
             ),
         ] {
             let folder =

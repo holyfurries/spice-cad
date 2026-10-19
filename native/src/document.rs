@@ -72,6 +72,7 @@ impl Drop for Watcher {
 
 #[derive(Clone, Copy)]
 pub enum Example {
+    EdgeFillets,
     ExtrudedBracket,
     MeasuredBlock,
     Rack,
@@ -85,6 +86,10 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             .join(".local/share"),
     };
     let (name, source) = match example {
+        Example::EdgeFillets => (
+            "edge-fillets.luau",
+            include_str!("../../models/edge-fillets.luau"),
+        ),
         Example::ExtrudedBracket => (
             "extruded-bracket.luau",
             include_str!("../../models/extruded-bracket.luau"),

@@ -8,12 +8,21 @@ fn main() {
 #include <SmApiBrep.h>
 #include <SmApiGeneral.h>
 #include <SmVector3d.h>
+#include <SmFilletExecutive.h>
 #include <cstddef>
 #include <memory>
 using SmFailureArray = SmTArray<SmTessellationFailure>;
 using SmCurveArray = SmTArray<SmCurve*>;
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());
+}
+inline long spice_fillet_edges(SmBrep* body, SmEdge* const* edges, size_t count, double radius) {
+    SmTArray<SmEdge*> selected(count, const_cast<SmEdge**>(edges), count);
+    SmFilletExecutive executive(*SmApiGetOrCreateContext(), body);
+    auto status = executive.SetFilletParameters(body, selected, SM_FSG_CIRCULAR,
+        SM_FS_CONST_RADIUS, radius, nullptr, 0.0, 0.0, 0.0, 0.0);
+    if (status != SM_SUCCESS) { return status; }
+    return executive.DoFillet();
 }
 static_assert(sizeof(SmVector3d) == 24);
 static_assert(offsetof(SmVector3d, x) == 0);

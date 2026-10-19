@@ -164,7 +164,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
     Ok(definitions)
 }
 
-fn valid_name(name: &str) -> mlua::Result<()> {
+pub(crate) fn valid_name(name: &str) -> mlua::Result<()> {
     if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err(mlua::Error::RuntimeError(
             "Names must contain 1–80 bytes without control characters".into(),

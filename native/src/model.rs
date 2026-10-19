@@ -41,7 +41,16 @@ enum Operation {
 enum Modification {
     Translate([f64; 3]),
     Rotate { axis: [f64; 3], angle: f64 },
-    Fillet(f64),
+    Fillet(usize),
+}
+
+enum FilletEdges {
+    All,
+    Selected(Vec<usize>),
+}
+struct Fillet {
+    radius: f64,
+    edges: FilletEdges,
 }
 
 #[derive(Clone, Copy)]
@@ -51,8 +60,13 @@ impl UserData for Solid {}
 struct Profile(usize);
 impl UserData for Profile {}
 
+struct Edge(usize);
+impl UserData for Edge {}
+
 #[derive(Default)]
 struct Recipe {
+    edges: Vec<crate::edge_reference::Reference>,
+    fillets: Vec<Fillet>,
     profiles: Vec<crate::profile::Polygon>,
     operations: Vec<Operation>,
     output: Option<(String, usize)>,
@@ -102,15 +116,36 @@ pub fn compile(source: &str) -> Result<Model, String> {
     let cad = lua.create_table().map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
+        "edge",
+        lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
+            let reference =
+                crate::edge_reference::Reference::from_table(solid.borrow::<Solid>()?.0, options)?;
+            let mut recipe = state.borrow_mut();
+            if recipe.edges.len() >= crate::edge_reference::COUNT_MAX
+                || recipe.edges.iter().any(|edge| edge.name == reference.name)
+            {
+                return Err(mlua::Error::RuntimeError(
+                    "Edge names must be unique; at most 64 are supported".into(),
+                ));
+            }
+            let index = recipe.edges.len();
+            recipe.edges.push(reference);
+            Ok(Edge(index))
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
         "polygon",
         lua.create_function(move |_, points: Table| {
+            let polygon = crate::profile::Polygon::from_table(points)?;
             let mut recipe = state.borrow_mut();
             if recipe.profiles.len() >= OPERATION_COUNT_MAX {
                 return Err(mlua::Error::RuntimeError(
                     "Model exceeds 256 profiles".into(),
                 ));
             }
-            let polygon = crate::profile::Polygon::from_table(points)?;
             let index = recipe.profiles.len();
             recipe.profiles.push(polygon);
             Ok(Profile(index))
@@ -248,8 +283,39 @@ pub fn compile(source: &str) -> Result<Model, String> {
                         Modification::Rotate { axis, angle }
                     }
                     "fillet" => {
-                        options_fields(&options, &["radius"])?;
-                        Modification::Fillet(dimension(&options, "radius")?)
+                        options_fields(&options, &["radius", "edges"])?;
+                        let radius = dimension(&options, "radius")?;
+                        let supplied_edges = options.get::<Option<Table>>("edges")?;
+                        let mut recipe = state.borrow_mut();
+                        if recipe.fillets.len() >= OPERATION_COUNT_MAX {
+                            return Err(mlua::Error::RuntimeError("Model exceeds 256 fillets".into()));
+                        }
+                        let edges = if let Some(edges) = supplied_edges {
+                            let count = edges.raw_len();
+                            if !(1..=crate::edge_reference::COUNT_MAX).contains(&count) {
+                                return Err(mlua::Error::RuntimeError("Fillet edges needs 1–64 references; omit edges to fillet all eligible edges".into()));
+                            }
+                            let mut entry_count = 0;
+                            for pair in edges.clone().pairs::<mlua::Value, mlua::Value>() {
+                                let (key, _) = pair?;
+                                if !matches!(key, mlua::Value::Integer(index) if index >= 1 && index as usize <= count) {
+                                    return Err(mlua::Error::RuntimeError("Fillet edges must be a dense array".into()));
+                                }
+                                entry_count += 1;
+                            }
+                            if entry_count != count { return Err(mlua::Error::RuntimeError("Fillet edges must be a dense array".into())); }
+                            let mut selected = Vec::with_capacity(count);
+                            for index in 1..=count {
+                                let reference = edges.raw_get::<AnyUserData>(index)?.borrow::<Edge>()?.0;
+                                if recipe.edges[reference].solid != source { return Err(mlua::Error::RuntimeError(format!("Edge '{}' belongs to a different source solid; select it on the solid passed to cad.fillet", recipe.edges[reference].name))); }
+                                if selected.contains(&reference) { return Err(mlua::Error::RuntimeError("Fillet edges must not repeat a reference".into())); }
+                                selected.push(reference);
+                            }
+                            FilletEdges::Selected(selected)
+                        } else { FilletEdges::All };
+                        let index = recipe.fillets.len();
+                        recipe.fillets.push(Fillet { radius, edges });
+                        Modification::Fillet(index)
                     }
                     _ => unreachable!(),
                 };
@@ -419,7 +485,19 @@ impl Model {
                         match modification {
                             Modification::Translate(offset) => body.translate(offset)?,
                             Modification::Rotate { axis, angle } => body.rotate(axis, angle)?,
-                            Modification::Fillet(radius) => body.fillet(radius)?,
+                            Modification::Fillet(index) => {
+                                let fillet = &self.recipe.fillets[index];
+                                match &fillet.edges {
+                                    FilletEdges::All => body.fillet(fillet.radius, None)?,
+                                    FilletEdges::Selected(indices) => {
+                                        let references: Vec<_> = indices
+                                            .iter()
+                                            .map(|index| &self.recipe.edges[*index])
+                                            .collect();
+                                        body.fillet(fillet.radius, Some(&references))?;
+                                    }
+                                }
+                            }
                         }
                         bodies.push(body);
                     } else {
@@ -453,5 +531,17 @@ impl Model {
         }
         assert_eq!(bodies.len(), 1);
         bodies.pop().ok_or("Model produced no solid".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn options_can_call_cad_functions_without_reentrant_recipe_borrows() -> Result<(), String> {
+        let source = "local point:any=setmetatable({y=0},{__index=function(_,key) if key=='x' then cad.polygon({{x=0,y=0},{x=1,y=0},{x=0,y=1}});return 0 end;return nil end});local profile=cad.polygon({point,{x=10,y=0},{x=0,y=10}});cad.show('profile',cad.extrude(profile,{height=2}))";
+        assert!((crate::build_script_snapshot(source, 1)?.volume_mm3 - 100.0).abs() < 0.001);
+        let source = "local part=cad.box({width=40,depth=20,height=8});local options:any=setmetatable({radius=2},{__index=function(_,key) if key=='edges' then return {cad.edge(part,{name='corner',from={x=40,y=0,z=0},to={x=40,y=0,z=8}})} end;return nil end});cad.show('fillet',cad.fillet(part,options))";
+        assert!(crate::build_script_snapshot(source, 1)?.volume_mm3 > 0.0);
+        Ok(())
     }
 }

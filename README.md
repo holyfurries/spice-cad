@@ -351,9 +351,33 @@ with its base centre at the supplied coordinates. `cad.translate(solid, { x?,
 y?, z? })` offsets a solid; `cad.rotate(solid, { axis = "x", angle = -90 })`
 rotates it about a global axis through the origin, in degrees. Translate after
 rotating when placing a hole. `cad.fillet(solid, { radius = 1 })` applies circular
-fillets to all eligible edges of that solid. Fillet a named feature before
-cutting holes when the hole rims should stay sharp. Selective edge references
-are not implemented yet.
+fillets to all eligible edges of that solid when `edges` is omitted.
+To round specific straight edges, use named references and an explicit edge list:
+
+```lua
+local part = cad.box({ width = 40, depth = 20, height = 8 })
+local corner = cad.edge(part, {
+    name = "front_right",
+    from = { x = 40, y = 0, z = 0 },
+    to = { x = 40, y = 0, z = 8 },
+})
+cad.show("Rounded corner", cad.fillet(part, { radius = 2, edges = { corner } }))
+```
+
+**Examples → Selected edge fillets** rounds two plate corners while preserving
+the mounting hole rims. Select a straight edge and click **Copy edge selector**
+in Properties to copy the `cad.edge(...)` expression. Replace `part` with the
+solid variable being filleted and give the reference a unique name. Use parameter
+expressions for endpoints that should follow dimension edits; copied coordinates
+are literals. Endpoint order is irrelevant.
+
+References resolve on their source solid when used, matching a complete straight
+edge within 0.001 mm. Missing or ambiguous matches, duplicate selections, and
+handles from a different solid fail explicitly. Define references after booleans
+and transforms, before the fillet consuming them. There are at most 64 named edge
+references and 1–64 selected edges per fillet; an empty list is rejected.
+These references do not track arbitrary topology changes. Circular-edge modeling
+selectors and selective chamfers remain future work.
 
 **Examples → Extruded bracket** demonstrates a concave polygon profile, a diagonal
 web, and mounting holes. `cad.polygon(points)` snapshots a closed XY outline;
