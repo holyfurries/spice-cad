@@ -12,6 +12,10 @@ const OPERATION_COUNT_MAX: usize = 256;
 const EVALUATION_COUNT_MAX: usize = 512;
 const PART_COUNT_MAX: usize = 32;
 
+#[path = "geometry_cache.rs"]
+mod cache;
+pub use cache::Cache;
+
 #[derive(Clone)]
 pub struct Part {
     pub assembly: crate::placement::Placement,
@@ -93,7 +97,7 @@ struct Recipe {
 }
 
 pub struct Model {
-    recipe: Recipe,
+    recipe: Rc<Recipe>,
     definitions: crate::dimensions::Definitions,
     pub name: String,
     pub parts: Vec<Part>,
@@ -472,7 +476,7 @@ pub fn compile(source: &str) -> Result<Model, String> {
         "Assembly".into()
     };
     Ok(Model {
-        recipe,
+        recipe: Rc::new(recipe),
         definitions: std::mem::take(&mut *definitions.borrow_mut()),
         name,
         parts,
@@ -538,12 +542,12 @@ impl Model {
 
     pub fn annotations(
         &self,
-        meshes: &[crate::mesh::Mesh],
+        meshes: &[&crate::mesh::Mesh],
     ) -> Result<crate::dimensions::Annotations, String> {
-        assert_eq!(meshes.len(), self.parts.len());
         if self.definitions.is_empty() {
             return Ok(crate::dimensions::Annotations::default());
         }
+        assert_eq!(meshes.len(), self.parts.len());
         let (mesh, ranges) = crate::mesh::Mesh::combine(meshes)?;
         assert_eq!(self.parts.len(), ranges.len());
         let outputs: Vec<_> = self

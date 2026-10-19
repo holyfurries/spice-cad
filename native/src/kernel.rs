@@ -2,13 +2,13 @@ use cxx::UniquePtr;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum EdgeTreatment {
     Fillet { radius_mm: f64 },
     Chamfer { width_mm: f64 },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ProfileSweep {
     Extrude { height_mm: f64 },
     Revolve { angle_deg: f64 },
@@ -89,6 +89,7 @@ mod ffi {
         type SmLine;
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
+        fn spice_copy_brep(body: &SmBrep) -> Result<UniquePtr<SmBrep>>;
         unsafe fn spice_treat_edges(
             body: *mut SmBrep,
             edges: *const *mut SmEdge,
@@ -449,6 +450,18 @@ impl Kernel {
 }
 
 impl Body<'_> {
+    pub fn try_clone(&self) -> Result<Self, String> {
+        let shape = ffi::spice_copy_brep(self.shape.as_ref().ok_or("Missing source body")?)
+            .map_err(|error| error.to_string())?;
+        if shape.is_null() {
+            return Err("SMLib body copy failed".into());
+        }
+        Ok(Self {
+            shape,
+            _kernel: self._kernel,
+        })
+    }
+
     fn boundary_edges(&self) -> Result<Vec<*mut ffi::SmEdge>, String> {
         let mut edges = std::collections::BTreeMap::new();
         for region in unsafe { topology_list(children(self.shape.as_ptr())) }? {

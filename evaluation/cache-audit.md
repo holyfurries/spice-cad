@@ -91,6 +91,28 @@ individual diagnostic samples, not controlled before/after medians. Volume work
 moved into the scene interval, so individual stage timings are not comparable
 with the earlier breakdown.
 
+Second follow-up implemented: a worker-owned cache retains at most the current
+32 final part subtrees, including canonical native bodies, display meshes,
+sampled edges and volume. It compares full operation dependencies, numeric
+inputs, profiles and edge targets without hashes; names, colors, placements and
+comments are excluded. Removed parts are evicted. It deliberately does not retain
+every intermediate Boolean result. Native geometry is opaque, so the 32-entry
+limit is not a precise byte limit on kernel memory.
+
+The worker keeps its serialized SMLib context for its lifetime. Preview bounds
+and exports use independent native body copies; canonical cache entries never
+receive placement or STEP conversion. Game meshes still use their own tolerance.
+Type checking and assembly constraints rerun on cache hits. Preview source strings
+move into the snapshot without a second full copy. Cold CLI exports keep their
+direct construction path; native editor exports reuse the worker cache.
+
+All 121 tests pass, including dependency invalidation, selected-edge/profile
+keys, eviction, recovery after failure, changed constraints on a cache hit, and
+preview/export/preview through the actual worker. Native Vulkan checks reused all
+four rack parts after changing separation, measuring 27.4 ms total (16.2 ms
+analysis, 1.4 ms script, 2.8 ms kernel copies, 7.1 ms scene work). This is one
+warm diagnostic sample; debounce, file watching and presentation add latency.
+
 1. Tessellate canonical parts once per build and derive rigidly transformed scene
    meshes/edges; reuse canonical volume. Preserve tight bounds, face IDs, normals,
    constraint coordinates, and mesh tolerances with rotated/curved regressions.

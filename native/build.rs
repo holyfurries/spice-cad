@@ -16,6 +16,9 @@ using SmCurveArray = SmTArray<SmCurve*>;
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());
 }
+inline std::unique_ptr<SmBrep> spice_copy_brep(const SmBrep& body) {
+    return std::unique_ptr<SmBrep>(new (*SmApiGetOrCreateContext()) SmBrep(body, nullptr, nullptr, TRUE, FALSE));
+}
 inline long spice_treat_edges(SmBrep* body, SmEdge* const* edges, size_t count, double size_mm, bool chamfer) {
     SmTArray<SmEdge*> selected(count, const_cast<SmEdge**>(edges), count);
     SmFilletExecutive executive(*SmApiGetOrCreateContext(), body);

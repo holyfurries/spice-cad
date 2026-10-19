@@ -181,6 +181,7 @@ struct Scene {
     mesh: Arc<mesh::Mesh>,
 }
 struct Snapshot {
+    cached_parts: usize,
     scene: Scene,
     alternate: Option<Scene>,
     checks: dimensions::Annotations,
@@ -230,25 +231,27 @@ impl Worker {
         std::thread::Builder::new()
             .name("cad-kernel".into())
             .spawn(move || {
+                let kernel = kernel::Kernel::new();
+                let mut cache = kernel.as_ref().map(model::Cache::new);
                 while let Ok(command) = requests.recv() {
-                    let result = match command {
-                        Command::ExportScript { source, folder, target } => export::model_files(&source, &folder, target).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
+                    let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
+                        Command::ExportScript { source, folder, target } => export::model_files_cached(&source, &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
                         Command::Script { source, editor_revision, revision, saved_at } => {
                             let source = source.to_string();
-                            build_script_snapshot(&source, revision).map(|mut snapshot| { snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot)) })
+                            build_script_snapshot_cached(source, revision, cache).map(|mut snapshot| { snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot)) })
                         }
                         Command::Build {
                             parameters,
                             revision,
-                        } => kernel::Kernel::new()
-                            .and_then(|kernel| build_snapshot(&kernel, parameters, revision))
+                        } => kernel.as_ref().map_err(Clone::clone)
+                            .and_then(|kernel| build_snapshot(kernel, parameters, revision))
                             .map(|snapshot| Outcome::Model(Box::new(snapshot))),
                         #[cfg(feature = "rack-tools")]
                         Command::Export { parameters } => {
                             export_parts(parameters, std::path::Path::new("output/native"))
                                 .map(|()| Outcome::Exported("Exported four rack parts, four fit samples, and assembled STEP to output/native".into()))
                         }
-                    };
+                    });
                     let result = result.map_err(|message| {
                         if message.len() <= 8192 { return message; }
                         let head = &message[..message.floor_char_boundary(4096)];
@@ -284,6 +287,7 @@ fn build_snapshot(
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        cached_parts: 0,
         scene: Scene {
             part_segments: Vec::new(),
             layout: placement::Layout::Assembly,
@@ -315,27 +319,25 @@ fn build_snapshot(
 }
 
 fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String> {
+    let kernel = kernel::Kernel::new()?;
+    build_script_snapshot_cached(source.into(), revision, &mut model::Cache::new(&kernel))
+}
+
+fn build_script_snapshot_cached(
+    source: String,
+    revision: u64,
+    cache: &mut model::Cache<'_>,
+) -> Result<Snapshot, String> {
     assert!(revision > 0);
     let total = Instant::now();
-    let model = model::compile(source)?;
-    let kernel = kernel::Kernel::new()?;
+    let model = model::compile(&source)?;
+    let prepared = cache.prepare(&model)?;
+    let mut bodies = prepared.bodies;
+    let geometry = prepared.geometry;
+    let build_ms = prepared.build_ms;
     let start = Instant::now();
-    let mut bodies = model.build(&kernel)?;
-    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let start = Instant::now();
-    let meshes = model.meshes(&mut bodies, false)?;
+    let meshes: Vec<_> = geometry.iter().map(|geometry| &geometry.mesh).collect();
     let checks = model.annotations(&meshes)?;
-    let geometry = bodies
-        .iter_mut()
-        .zip(meshes)
-        .map(|(body, mesh)| {
-            Ok(model::Geometry {
-                mesh,
-                edges: body.edges()?,
-                volume_mm3: body.volume()?,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
     let volume_mm3 = geometry.iter().map(|geometry| geometry.volume_mm3).sum();
     let scene = build_scene(
         &model,
@@ -355,8 +357,9 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     } else {
         None
     };
-    let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let tessellation_ms = prepared.tessellation_ms + start.elapsed().as_secs_f64() * 1000.0;
     Ok(Snapshot {
+        cached_parts: prepared.hits,
         scene,
         alternate,
         checks,
@@ -366,7 +369,7 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
         analysis_ms: model.analysis_ms,
         script_ms: model.script_ms,
         total_ms: total.elapsed().as_secs_f64() * 1000.0,
-        source: ModelSource::Script(source.into()),
+        source: ModelSource::Script(source),
         name: model.name,
         volume_mm3,
         build_ms,
@@ -378,7 +381,7 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
 fn build_scene(
     model: &model::Model,
     bodies: &mut [kernel::Body<'_>],
-    geometry: &[model::Geometry],
+    geometry: &[std::rc::Rc<model::Geometry>],
     layout: placement::Layout,
     checks: &dimensions::Annotations,
 ) -> Result<Scene, String> {
@@ -397,7 +400,8 @@ fn build_scene(
                 .placed(part.placement(layout).matrix(), part.color)
         })
         .collect();
-    let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
+    let mesh_refs: Vec<_> = meshes.iter().collect();
+    let (mesh, part_faces) = mesh::Mesh::combine(&mesh_refs)?;
     let mut outputs = Vec::with_capacity(model.parts.len() + 64);
     let mut part_bounds = Vec::with_capacity(model.parts.len());
     let mut bounds = [
@@ -1601,6 +1605,11 @@ impl eframe::App for Editor {
                             snapshot.build_ms, snapshot.tessellation_ms
                         ));
                         ui.label(format!("Build pipeline {:.1} ms", snapshot.total_ms));
+                        ui.label(format!(
+                            "{} / {} parts reused",
+                            snapshot.cached_parts,
+                            snapshot.parts.len()
+                        ));
                         ui.label(format!("Upload CPU {:.2} ms", metrics.upload_ms));
                         if let Some(saved_ms) = metrics.saved_ms {
                             ui.label(format!("Save → upload {:.1} ms", saved_ms));
@@ -3416,6 +3425,71 @@ mod tests {
                 .line,
             2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn worker_reuses_parts_after_edits_and_exports_without_mutating_cache() -> Result<(), String> {
+        let worker = Worker::new(egui::Context::default())?;
+        let source = "local a=cad.box({width=10,depth=10,height=2});local b=cad.face(a,{name='bottom',normal='z-'});local t=cad.face(a,{name='top',normal='z+'});cad.measure('height',{from=b,to=t,min=1,max=3});cad.show('part',a,{print={}})";
+        let folder =
+            std::env::temp_dir().join(format!("spice-cad-cached-export-{}", std::process::id()));
+        for revision in 1..=4 {
+            let source = if revision == 2 {
+                source.replace("max=3", "max=1")
+            } else {
+                format!("-- revision {revision}\n{source}")
+            };
+            worker
+                .commands
+                .send(Command::Script {
+                    source: source.into(),
+                    editor_revision: revision,
+                    revision,
+                    saved_at: None,
+                })
+                .map_err(|error| error.to_string())?;
+            let result = worker
+                .results
+                .recv_timeout(Duration::from_secs(20))
+                .map_err(|error| error.to_string())?;
+            if revision == 2 {
+                assert!(
+                    result
+                        .err()
+                        .ok_or("Constraint must fail on cache hit")?
+                        .contains("Constraint 'height'")
+                );
+                continue;
+            }
+            let Outcome::Model(snapshot) = result? else {
+                return Err("Expected model".into());
+            };
+            assert_eq!(snapshot.cached_parts, usize::from(revision != 1));
+            assert!((snapshot.volume_mm3 - 200.0).abs() < 0.001);
+            if revision == 3 {
+                worker
+                    .commands
+                    .send(Command::ExportScript {
+                        source: match snapshot.source {
+                            ModelSource::Script(source) => source,
+                            _ => unreachable!(),
+                        },
+                        folder: folder.clone(),
+                        target: export::Target::Print,
+                    })
+                    .map_err(|error| error.to_string())?;
+                assert!(matches!(
+                    worker
+                        .results
+                        .recv_timeout(Duration::from_secs(20))
+                        .map_err(|error| error.to_string())??,
+                    Outcome::Exported(_)
+                ));
+                assert!(folder.join("model.step").is_file());
+            }
+        }
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         Ok(())
     }
 

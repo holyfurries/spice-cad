@@ -1,4 +1,8 @@
-use crate::{game_asset, kernel::Kernel, model};
+use crate::{
+    game_asset,
+    kernel::{Body, Kernel},
+    model,
+};
 use std::path::Path;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,22 +25,50 @@ pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), St
     let kernel = Kernel::new()?;
     let mut bodies = model.build(&kernel)?;
     let canonical_meshes = if target == Target::Print || model.has_annotations() {
-        let meshes = model.meshes(&mut bodies, false)?;
-        model.annotations(&meshes)?;
-        meshes
+        model.meshes(&mut bodies, false)?
     } else {
         Vec::new()
     };
+    let meshes: Vec<_> = canonical_meshes.iter().collect();
+    write_model(source, folder, target, &model, &mut bodies, &meshes)
+}
+
+pub fn model_files_cached(
+    source: &str,
+    folder: &Path,
+    target: Target,
+    cache: &mut model::Cache<'_>,
+) -> Result<(), String> {
+    let model = model::compile(source)?;
+    let prepared = cache.prepare(&model)?;
+    let mut bodies = prepared.bodies;
+    let meshes: Vec<_> = prepared
+        .geometry
+        .iter()
+        .map(|geometry| &geometry.mesh)
+        .collect();
+    write_model(source, folder, target, &model, &mut bodies, &meshes)
+}
+
+fn write_model(
+    source: &str,
+    folder: &Path,
+    target: Target,
+    model: &model::Model,
+    bodies: &mut [Body<'_>],
+    canonical_meshes: &[&crate::mesh::Mesh],
+) -> Result<(), String> {
+    model.annotations(canonical_meshes)?;
     let layout = if target == Target::Print {
         crate::placement::Layout::Print
     } else {
         crate::placement::Layout::Assembly
     };
-    for (part, body) in model.parts.iter().zip(&mut bodies) {
+    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
         part.placement(layout).apply(body, false)?;
     }
     let meshes = if target == Target::Game {
-        model.meshes(&mut bodies, true)?
+        model.meshes(bodies, true)?
     } else {
         canonical_meshes
             .iter()

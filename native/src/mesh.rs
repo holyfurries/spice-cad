@@ -61,7 +61,7 @@ impl Mesh {
         }
     }
 
-    pub fn combine(meshes: &[Self]) -> Result<(Self, Vec<std::ops::RangeInclusive<u32>>), String> {
+    pub fn combine(meshes: &[&Self]) -> Result<(Self, Vec<std::ops::RangeInclusive<u32>>), String> {
         let count: usize = meshes.iter().map(|mesh| mesh.vertices.len()).sum();
         if meshes.is_empty() || meshes.len() > 32 || count > 300000 {
             return Err("Assembly exceeds its part or triangle budget".into());
