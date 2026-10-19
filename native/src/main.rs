@@ -1190,7 +1190,7 @@ impl eframe::App for Editor {
                             .add_enabled(
                                 available,
                                 egui::Button::selectable(selected, label)
-                                    .min_size(egui::vec2(56.0, interface::CONTROL_HEIGHT)),
+                                    .min_size(egui::vec2(72.0, interface::CONTROL_HEIGHT)),
                             )
                             .on_hover_text(match label {
                                 "Code" => "Ctrl+1 · Focus the code editor",
@@ -1209,7 +1209,7 @@ impl eframe::App for Editor {
             ui.horizontal_wrapped(|ui| {
                 if let Some(script) = &self.script {
                     ui.allocate_ui_with_layout(
-                        egui::vec2(180.0, 28.0),
+                        egui::vec2(180.0, interface::CONTROL_HEIGHT),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.add(
@@ -1236,22 +1236,31 @@ impl eframe::App for Editor {
                             .color(interface::MUTED),
                     );
                     ui.add_space(8.0);
+                    open_requested |= ui
+                        .button("Open…")
+                        .on_hover_text("Ctrl+O · Open a model file")
+                        .clicked();
                     save_requested |= ui
-                        .button("Save")
+                        .add(
+                            egui::Button::new("Save")
+                                .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
+                        )
                         .on_hover_text("Ctrl+S · Save and rebuild")
                         .clicked();
+                    ui.separator();
                     run_requested |= ui
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Run").color(interface::ON_ACCENT),
                             )
-                            .fill(interface::ACCENT),
+                            .fill(interface::ACCENT)
+                            .min_size(egui::vec2(80.0, interface::CONTROL_HEIGHT)),
                         )
                         .on_hover_text("Ctrl+Enter · Preview editor buffer")
                         .clicked();
                     let mut automatic = self.preview.automatic();
                     if ui
-                        .toggle_value(&mut automatic, "Auto Preview")
+                        .checkbox(&mut automatic, "Auto preview")
                         .on_hover_text("Update geometry after a 250 ms typing pause")
                         .changed()
                     {
@@ -1262,6 +1271,7 @@ impl eframe::App for Editor {
                         );
                     }
                 }
+                ui.separator();
                 let can_export = self.can_export();
                 if self.script.is_some() {
                     ui.add_enabled_ui(can_export, |ui| {
@@ -1287,8 +1297,14 @@ impl eframe::App for Editor {
                 if self.script.is_some() {
                     ui.separator();
                     if ui
-                        .selectable_label(self.show_inspector && !self.focus_editor, "Parameters")
-                        .on_hover_text("Edit named Luau values in the properties pane")
+                        .add(
+                            egui::Button::selectable(
+                                self.show_inspector && !self.focus_editor,
+                                "Properties",
+                            )
+                            .min_size(egui::vec2(100.0, interface::CONTROL_HEIGHT)),
+                        )
+                        .on_hover_text("Show parts, source parameters, and selected geometry")
                         .clicked()
                     {
                         self.show_inspector = !self.show_inspector || self.focus_editor;
@@ -1299,6 +1315,8 @@ impl eframe::App for Editor {
             ui.add_space(3.0);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
             ui.horizontal(|ui| {
                 if let Some(diagnostics) = &self.diagnostics {
                     let (status, color) = diagnostics.status();
@@ -1403,33 +1421,16 @@ impl eframe::App for Editor {
         }
         let mut parameter_edit = None;
         if self.show_inspector && !self.focus_editor {
-            egui::Panel::right("inspector").default_size(280.0).min_size(240.0).max_size(380.0).show(ui, |ui| {
+            egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(14.0)).show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt("properties_scroll").show(ui, |ui| {
             if self.script.is_some() {
                 interface::section(ui, "MODEL");
                 ui.heading(self.snapshot.as_ref().map_or("Luau model", |snapshot| snapshot.name.as_str()));
                 ui.small("Solid parts · millimetres");
                 ui.separator();
-                if let Some(script) = &self.script {
-                    let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
-                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some());
-                }
                 if let Some(snapshot) = &self.snapshot {
-                    interface::section(ui, "PARTS");
-                    for (part, faces) in snapshot.parts.iter().zip(&snapshot.part_faces) {
-                        let selected = self.selected.as_ref().and_then(|selection| selection.latest()).is_some_and(|face| faces.contains(&face.id));
-                        ui.horizontal(|ui| {
-                            let color: egui::Color32 = egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2]).into();
-                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                            ui.painter().rect_filled(swatch, 2.0, color);
-                            ui.label(if selected { format!("{} · selected", part.name) } else { part.name.clone() });
-                        });
-                    }
-                    interface::section(ui, "GEOMETRY");
-                    ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
-                    ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
-                    interface::section(ui, "SELECTION");
                     if let Some(selection) = &self.selected {
+                        interface::section(ui, "SELECTION");
                         if let Some(latest) = selection.latest() {
                             ui.label(snapshot.annotations.faces.iter().find(|named| named.id == latest.id).map_or("Unnamed face", |named| named.name.as_str()));
                             ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
@@ -1459,8 +1460,34 @@ impl eframe::App for Editor {
                                 }
                             }
                         }
-                    } else { ui.label("Click a model face or edge to see its dimensions"); }
-                    ui.small("Shift-click a parallel planar face to measure separation. Click empty space to clear.");
+                        ui.small("Shift-click a parallel face to measure separation. Click empty space to clear.");
+                    }
+                    interface::section(ui, "PARTS");
+                    egui::ScrollArea::vertical().id_salt("assembly_parts").max_height(160.0).show(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for (part, faces) in snapshot.parts.iter().zip(&snapshot.part_faces) {
+                        let selected = self.selected.as_ref().and_then(|selection| selection.latest()).is_some_and(|face| faces.contains(&face.id));
+                        egui::Frame::NONE.fill(if selected { interface::SELECTION } else { egui::Color32::TRANSPARENT }).corner_radius(4.0).inner_margin(egui::vec2(6.0, 2.0)).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let color: egui::Color32 = egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2]).into();
+                                let (swatch, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                                ui.painter().rect_filled(swatch, 3.0, color);
+                                ui.add(egui::Label::new(&part.name).truncate()).on_hover_text(&part.name);
+                            });
+                        });
+                    }
+                    });
+                }
+                if let Some(script) = &self.script {
+                    let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
+                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some());
+                }
+                if let Some(snapshot) = &self.snapshot {
+                    interface::section(ui, "GEOMETRY");
+                    ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
+                    ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
                     interface::section(ui, "DESIGN CHECKS");
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
                         ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
@@ -1544,7 +1571,7 @@ impl eframe::App for Editor {
                 .max_size(if self.focus_editor {
                     ui.available_width()
                 } else {
-                    (ui.available_width() - 240.0).max(240.0)
+                    (ui.available_width() - 320.0).max(240.0)
                 })
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -1807,8 +1834,8 @@ impl eframe::App for Editor {
                 );
                 interface::axes(ui.painter(), rect, self.camera.eye() - self.camera.target);
                 let toolbar = egui::Rect::from_min_size(
-                    rect.left_top() + egui::vec2(12.0, 6.0),
-                    egui::vec2((rect.width() - 24.0).max(0.0), 76.0),
+                    rect.left_top() + egui::vec2(16.0, 10.0),
+                    egui::vec2((rect.width() - 32.0).max(0.0), 112.0),
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(toolbar), |ui| {
                     ui.horizontal_wrapped(|ui| {
@@ -1849,15 +1876,15 @@ impl eframe::App for Editor {
                     egui::Frame::NONE
                         .fill(interface::PANEL)
                         .stroke(egui::Stroke::new(1.0, interface::BORDER))
-                        .corner_radius(4.0)
-                        .inner_margin(4.0)
+                        .corner_radius(8.0)
+                        .inner_margin(8.0)
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.visuals_mut().button_frame = false;
                                 if ui
                                     .add(
                                         egui::Button::new("Frame · F")
-                                            .min_size(egui::vec2(76.0, interface::CONTROL_HEIGHT)),
+                                            .min_size(egui::vec2(88.0, interface::CONTROL_HEIGHT)),
                                     )
                                     .clicked()
                                 {
@@ -1869,7 +1896,7 @@ impl eframe::App for Editor {
                                 if ui
                                     .add(
                                         egui::Button::new("Front")
-                                            .min_size(egui::vec2(52.0, interface::CONTROL_HEIGHT)),
+                                            .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
                                     )
                                     .clicked()
                                 {
@@ -1879,7 +1906,7 @@ impl eframe::App for Editor {
                                 if ui
                                     .add(
                                         egui::Button::new("Top")
-                                            .min_size(egui::vec2(52.0, interface::CONTROL_HEIGHT)),
+                                            .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
                                     )
                                     .clicked()
                                 {

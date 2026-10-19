@@ -1,39 +1,44 @@
 use eframe::egui::{self, Color32, FontId, Stroke, TextStyle};
 
-pub const ACCENT: Color32 = Color32::from_rgb(121, 207, 187);
-pub const ON_ACCENT: Color32 = Color32::from_rgb(15, 35, 30);
-pub const MUTED: Color32 = Color32::from_rgb(139, 148, 158);
-pub const TEXT: Color32 = Color32::from_rgb(218, 224, 231);
-pub const PANEL: Color32 = Color32::from_rgb(25, 28, 32);
-pub const SURFACE: Color32 = Color32::from_rgb(32, 36, 41);
-pub const INPUT: Color32 = Color32::from_rgb(20, 23, 27);
-pub const BORDER: Color32 = Color32::from_rgb(47, 53, 60);
-pub const VIEWPORT: Color32 = Color32::from_rgb(43, 47, 53);
+pub const ACCENT: Color32 = Color32::from_rgb(118, 167, 249);
+pub const ON_ACCENT: Color32 = Color32::from_rgb(14, 24, 42);
+pub const MUTED: Color32 = Color32::from_rgb(152, 160, 173);
+pub const TEXT: Color32 = Color32::from_rgb(228, 232, 239);
+pub const PANEL: Color32 = Color32::from_rgb(24, 26, 29);
+pub const SURFACE: Color32 = Color32::from_rgb(35, 38, 43);
+pub const INPUT: Color32 = Color32::from_rgb(19, 21, 25);
+pub const BORDER: Color32 = Color32::from_rgb(53, 58, 66);
+pub const VIEWPORT: Color32 = Color32::from_rgb(40, 42, 46);
 pub const WARNING: Color32 = Color32::from_rgb(220, 191, 126);
 pub const ERROR: Color32 = Color32::from_rgb(238, 144, 144);
-pub const SELECTION: Color32 = Color32::from_rgb(47, 76, 82);
-pub const CONTROL_HEIGHT: f32 = 28.0;
+pub const SELECTION: Color32 = Color32::from_rgb(44, 63, 90);
+pub const CONTROL_HEIGHT: f32 = 36.0;
 
 pub fn configure(context: &egui::Context) {
     let mut style = (*context.style_of(egui::Theme::Dark)).clone();
     style
         .text_styles
-        .insert(TextStyle::Body, FontId::proportional(13.0));
+        .insert(TextStyle::Body, FontId::proportional(14.0));
     style
         .text_styles
-        .insert(TextStyle::Button, FontId::proportional(13.0));
+        .insert(TextStyle::Button, FontId::proportional(14.0));
     style
         .text_styles
-        .insert(TextStyle::Heading, FontId::proportional(17.0));
+        .insert(TextStyle::Heading, FontId::proportional(18.0));
     style
         .text_styles
-        .insert(TextStyle::Small, FontId::proportional(11.0));
+        .insert(TextStyle::Small, FontId::proportional(12.0));
     style
         .text_styles
         .insert(TextStyle::Monospace, FontId::monospace(14.0));
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.interact_size.y = CONTROL_HEIGHT;
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 8.0);
+    style.spacing.interact_size = egui::vec2(40.0, CONTROL_HEIGHT);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.window_margin = egui::Margin::same(12);
+    style.spacing.icon_width = 18.0;
+    style.spacing.icon_width_inner = 10.0;
+    style.spacing.icon_spacing = 8.0;
     style.animation_time = 0.0;
     let visuals = &mut style.visuals;
     *visuals = egui::Visuals::dark();
@@ -46,7 +51,7 @@ pub fn configure(context: &egui::Context) {
     visuals.error_fg_color = ERROR;
     visuals.selection.bg_fill = SELECTION;
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
-    visuals.window_corner_radius = 4.into();
+    visuals.window_corner_radius = 6.into();
     visuals.window_highlight_topmost = false;
     visuals.window_stroke = Stroke::new(1.0, BORDER);
     visuals.text_cursor.stroke = Stroke::new(1.5, ACCENT);
@@ -55,13 +60,13 @@ pub fn configure(context: &egui::Context) {
         &mut visuals.widgets.hovered,
         &mut visuals.widgets.active,
     ] {
-        widget.corner_radius = 4.into();
+        widget.corner_radius = 6.into();
         widget.bg_stroke = Stroke::new(1.0, BORDER);
         widget.fg_stroke = Stroke::new(1.0, TEXT);
     }
     visuals.widgets.inactive.bg_fill = SURFACE;
     visuals.widgets.inactive.weak_bg_fill = SURFACE;
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 52, 59);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(48, 54, 64);
     visuals.widgets.hovered.weak_bg_fill = visuals.widgets.hovered.bg_fill;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, MUTED);
     visuals.widgets.active.bg_fill = SELECTION;
@@ -76,7 +81,7 @@ pub fn configure(context: &egui::Context) {
 pub fn panel_title(ui: &mut egui::Ui, title: &str) {
     ui.add_sized(
         egui::vec2(0.0, CONTROL_HEIGHT),
-        egui::Label::new(egui::RichText::new(title).size(11.0).strong().color(MUTED)),
+        egui::Label::new(egui::RichText::new(title).size(12.0).strong().color(MUTED)),
     );
 }
 
@@ -97,9 +102,9 @@ pub fn display_settings(ui: &mut egui::Ui, edges: &mut bool, width_px: &mut f32)
 }
 
 pub fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(14.0);
-    ui.label(egui::RichText::new(title).size(11.0).strong().color(MUTED));
-    ui.add_space(2.0);
+    ui.add_space(16.0);
+    ui.label(egui::RichText::new(title).size(12.0).strong().color(MUTED));
+    ui.add_space(4.0);
 }
 
 pub fn grid(

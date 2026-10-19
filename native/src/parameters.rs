@@ -160,7 +160,7 @@ impl State {
         let label_width = (ui.available_width() - 110.0).max(40.0);
         egui::Grid::new("source_parameters")
             .num_columns(2)
-            .spacing([8.0, 6.0])
+            .spacing([10.0, 8.0])
             .show(ui, |ui| {
                 for (index, parameter) in parameters.iter().enumerate() {
                     ui.add_sized(
@@ -180,7 +180,8 @@ impl State {
                                 .id_salt((&parameter.name, parameter.line))
                                 .char_limit(LITERAL_BYTES_MAX)
                                 .desired_width(76.0)
-                                .margin(egui::vec2(8.0, 6.0)),
+                                .min_size(egui::vec2(76.0, crate::interface::CONTROL_HEIGHT))
+                                .margin(egui::vec2(10.0, 8.0)),
                         )
                         .on_hover_text("Enter or leave the field to apply · Esc to cancel");
                     let cancel = response.has_focus()

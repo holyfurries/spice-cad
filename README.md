@@ -327,7 +327,7 @@ generated and hidden directories and symlinks are skipped. The most recent 20
 files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
 (default `~/.local/state/spice-cad/`).
 
-**Parameters** in the toolbar opens editable source values in the properties
+**Properties** in the toolbar opens editable source values in the properties
 pane. Top-level numeric locals such as `local width: number = 310` appear
 automatically; formulas and nested locals stay in code. Enter or leaving a field
 applies a finite decimal literal; Escape cancels the draft. Save and Run also
@@ -558,10 +558,15 @@ The first load and unsaved draft runs have no save-latency measurement. Volume d
 models is the kernel's solid volume; curved mesh volume is an approximation.
 
 Native interface colors, typography and control sizing live in
-`native/src/interface.rs`. Controls use a shared 28-point height, four-point
-corners and subtle borders. Teal marks primary actions, selection and focus;
-secondary labels use muted text. Code, model and diagnostics share panel-title
-styling. Keep new controls on these defaults instead of adding local themes.
+`native/src/interface.rs`. Main controls use a shared 36-point height, six-point
+corners, and subtle borders. Blue marks primary actions, selection, and focus;
+secondary labels use muted text. The Properties pane puts selection details first,
+followed by a bounded part list, source parameters, and geometry/check summaries.
+Code, model, and diagnostics share panel-title styling; editor text remains 14-point
+monospace. Keep new controls on these defaults instead of adding local themes.
+The grouping and neutral surfaces draw from Plasticity's
+[interface overview](https://doc.plasticity.xyz/plasticity-essentials/plasticity-interface/user-interface-overview),
+with larger text and controls for this code-based workspace.
 
 Editing, saving, and execution accept UTF-8 sources up to 16 MiB. Analysis has a
 5-second request deadline. The background language server has a 1 GiB address-space
