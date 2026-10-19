@@ -985,6 +985,9 @@ impl eframe::App for Editor {
                         Navigation::EdgeFillets => {
                             example_requested = Some(document::Example::EdgeFillets)
                         }
+                        Navigation::EdgeChamfers => {
+                            example_requested = Some(document::Example::EdgeChamfers)
+                        }
                     }
                 }
             }
@@ -1053,6 +1056,7 @@ impl eframe::App for Editor {
                         ("Measured block", document::Example::MeasuredBlock),
                         ("Extruded bracket", document::Example::ExtrudedBracket),
                         ("Selected edge fillets", document::Example::EdgeFillets),
+                        ("Selected edge chamfers", document::Example::EdgeChamfers),
                     ] {
                         if ui.button(label).clicked() {
                             example_requested = Some(example);
@@ -2353,6 +2357,11 @@ mod tests {
             (
                 4,
                 include_str!("../../models/edge-fillets.luau"),
+                [60.0, 30.0, 8.0],
+            ),
+            (
+                5,
+                include_str!("../../models/edge-chamfers.luau"),
                 [60.0, 30.0, 8.0],
             ),
         ] {

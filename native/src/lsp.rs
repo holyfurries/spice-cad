@@ -628,6 +628,10 @@ mod tests {
             "{items:?}"
         );
         assert!(items.iter().any(|item| item.label == "edge"), "{items:?}");
+        assert!(
+            items.iter().any(|item| item.label == "chamfer"),
+            "{items:?}"
+        );
         let source = Buffer::from(
             "--!strict\nlocal width: number = 'bad'\ncad.show('plate',cad.box({width=10,depth=10,height=10}))",
         );

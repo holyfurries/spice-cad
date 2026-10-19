@@ -43,6 +43,7 @@ pub enum Command {
     Bracket,
     ExtrudedBracket,
     EdgeFillets,
+    EdgeChamfers,
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
@@ -75,6 +76,11 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Bracket, "Examples: mounting bracket", ""),
     (Command::ExtrudedBracket, "Examples: extruded bracket", ""),
     (Command::EdgeFillets, "Examples: selected edge fillets", ""),
+    (
+        Command::EdgeChamfers,
+        "Examples: selected edge chamfers",
+        "",
+    ),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]

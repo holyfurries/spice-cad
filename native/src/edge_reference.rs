@@ -78,6 +78,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selective_chamfer_width_measures_the_flat_face_and_preserves_other_edges()
+    -> Result<(), String> {
+        let source = "local part=cad.box({width=40,depth=20,height=8});local edge=cad.edge(part,{name='corner',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});cad.show('chamfer',cad.chamfer(part,{width=4,edges={edge}}))";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        let expected_mm3 = 40.0 * 20.0 * 8.0 - 4.0 * 4.0 / 4.0 * 8.0;
+        assert!(
+            (snapshot.volume_mm3 - expected_mm3).abs() < 0.001,
+            "{} vs {expected_mm3}",
+            snapshot.volume_mm3
+        );
+        snapshot.mesh.validate()?;
+        assert_eq!(
+            snapshot
+                .inspected_edges
+                .iter()
+                .filter(|edge| edge.spans()[0]
+                    .is_some_and(|span| (span.distance_mm - 4.0).abs() < 0.001))
+                .count(),
+            2
+        );
+        assert!(snapshot.inspected_edges.iter().any(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.y==20.0 && point.x==0.0))));
+        let source = "local p=cad.polygon({{x=0,y=0},{x=40,y=0},{x=20,y=20}});local part=cad.extrude(p,{height=8});local e=cad.edge(part,{name='acute',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});cad.show('acute',cad.chamfer(part,{width=4,edges={e}}))";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        let setback_mm = 4.0 / (2.0 * (std::f64::consts::PI / 8.0).sin());
+        let removed_mm3 = 0.5 * setback_mm.powi(2) * (std::f64::consts::PI / 4.0).sin() * 8.0;
+        assert!((snapshot.volume_mm3 - (3200.0 - removed_mm3)).abs() < 0.001);
+        assert_eq!(
+            snapshot
+                .inspected_edges
+                .iter()
+                .filter(|edge| edge.spans()[0]
+                    .is_some_and(|span| (span.distance_mm - 4.0).abs() < 0.001))
+                .count(),
+            2
+        );
+        snapshot.mesh.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn chamfers_preserve_holes_and_follow_parameter_changes() -> Result<(), String> {
+        let source = include_str!("../../models/edge-chamfers.luau");
+        for width in [60.0, 80.0] {
+            let source = source.replace("= 60", &format!("= {width}"));
+            let snapshot = crate::build_script_snapshot(&source, 1)?;
+            let expected_mm3 = width * 30.0 * 8.0
+                - std::f64::consts::PI * 3.0 * 3.0 * 8.0
+                - 2.0 * 4.0 * 4.0 / 4.0 * 8.0;
+            assert!((snapshot.volume_mm3 - expected_mm3).abs() < 0.001);
+            snapshot.mesh.validate()?;
+            assert_eq!(snapshot.inspected_edges.iter().filter(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Circle { radial, .. } if (radial.length()-3.0).abs()<0.001)).count(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concave_chamfers_fill_inside_corners_and_mix_with_fillets() -> Result<(), String> {
+        let source = "local p=cad.polygon({{x=0,y=0},{x=40,y=0},{x=40,y=8},{x=8,y=8},{x=8,y=30},{x=0,y=30}});local part=cad.extrude(p,{height=8});local e=cad.edge(part,{name='inside',from={x=8,y=8,z=0},to={x=8,y=8,z=8}});cad.show('inside',cad.chamfer(part,{width=4,edges={e}}))";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert!((snapshot.volume_mm3 - 4000.0).abs() < 0.001);
+        snapshot.mesh.validate()?;
+        let source = "local part=cad.box({width=40,depth=20,height=8});local a=cad.edge(part,{name='round',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});part=cad.fillet(part,{radius=2,edges={a}});local b=cad.edge(part,{name='bevel',from={x=0,y=20,z=0},to={x=0,y=20,z=8}});cad.show('mixed',cad.chamfer(part,{width=4,edges={b}}))";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        let expected = 6400.0 - (1.0 - std::f64::consts::PI / 4.0) * 4.0 * 8.0 - 32.0;
+        assert!((snapshot.volume_mm3 - expected).abs() < 0.001);
+        snapshot.mesh.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn whole_solid_chamfers_work_and_invalid_sizes_and_handles_are_rejected() -> Result<(), String>
+    {
+        let source = "local part=cad.box({width=20,depth=20,height=20});cad.show('all',cad.chamfer(part,{width=2}))";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert!(snapshot.volume_mm3 < 8000.0);
+        assert!(snapshot.volume_mm3 > 7000.0);
+        snapshot.mesh.validate()?;
+        let base = "local part=cad.box({width=40,depth=20,height=8});local e=cad.edge(part,{name='corner',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});";
+        for options in [
+            "{width=0}",
+            "{width=-1}",
+            "{width=0/0}",
+            "{width=1001}",
+            "{radius=2}",
+            "{width=2,edges={}}",
+            "{width=2,edges={e,e}}",
+            "{width=2,edges={part}}",
+        ] {
+            assert!(
+                crate::model::compile(&format!(
+                    "{base}cad.show('bad',cad.chamfer(part,{options}))"
+                ))
+                .is_err()
+            );
+        }
+        let missing = format!(
+            "{base}cad.show('bad',cad.chamfer(cad.translate(part,{{x=1}}),{{width=2,edges={{e}}}}))"
+        );
+        assert!(
+            crate::model::compile(&missing)
+                .err()
+                .is_some_and(|error| error.contains("different source solid"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn selected_fillets_follow_parameterized_edges_and_preserve_hole_rims() -> Result<(), String> {
         let source = include_str!("../../models/edge-fillets.luau");
         for width in [60.0, 80.0] {

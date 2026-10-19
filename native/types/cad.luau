@@ -18,6 +18,7 @@ local cad: {
 	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
 	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,
 	fillet: (Solid, { radius: number, edges: { Edge }? }) -> Solid,
+	chamfer: (Solid, { width: number, edges: { Edge }? }) -> Solid,
 	edge: (Solid, { name: string, from: Point, to: Point }) -> Edge,
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,

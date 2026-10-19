@@ -1,6 +1,12 @@
 use cxx::UniquePtr;
 use std::marker::PhantomData;
 use std::rc::Rc;
+
+#[derive(Clone, Copy)]
+pub enum EdgeTreatment {
+    Fillet { radius_mm: f64 },
+    Chamfer { width_mm: f64 },
+}
 #[path = "step.rs"]
 mod step;
 
@@ -77,11 +83,12 @@ mod ffi {
         type SmLine;
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
-        unsafe fn spice_fillet_edges(
+        unsafe fn spice_treat_edges(
             body: *mut SmBrep,
             edges: *const *mut SmEdge,
             count: usize,
-            radius: f64,
+            size_mm: f64,
+            chamfer: bool,
         ) -> Result<i64>;
         unsafe fn Add(self: Pin<&mut SmCurveArray>, curve: *mut SmCurve) -> Result<u64>;
         unsafe fn SmApiCreateLineSegment(
@@ -194,6 +201,7 @@ mod ffi {
             angle: f64,
         ) -> Result<i64>;
         unsafe fn SmApiCircularFillet(body: *mut SmBrep, radius: f64) -> Result<i64>;
+        unsafe fn SmApiChamferFillet(body: *mut SmBrep, width: f64) -> Result<i64>;
         unsafe fn SmApiBooleanUnion(
             first: *mut SmBrep,
             second: *mut SmBrep,
@@ -555,25 +563,31 @@ impl Body<'_> {
         Ok(())
     }
 
-    pub fn fillet(
+    pub fn apply_edge_treatment(
         &mut self,
-        radius: f64,
+        treatment: EdgeTreatment,
         references: Option<&[&crate::edge_reference::Reference]>,
     ) -> Result<(), String> {
-        assert!(radius.is_finite() && radius > 0.0);
+        let (name, size_mm, chamfer) = match treatment {
+            EdgeTreatment::Fillet { radius_mm } => ("fillet", radius_mm, false),
+            EdgeTreatment::Chamfer { width_mm } => ("chamfer", width_mm, true),
+        };
+        assert!(size_mm.is_finite());
+        assert!(size_mm > 0.0);
         let status = if let Some(references) = references {
             assert!(!references.is_empty());
             assert!(references.len() <= crate::edge_reference::COUNT_MAX);
             let edges = self.boundary_edges()?;
             let mut selected = vec![None; references.len()];
             for edge in edges {
-                let curve = unsafe { (*edge).GetCurve().as_ref() }.ok_or("Missing fillet curve")?;
+                let curve =
+                    unsafe { (*edge).GetCurve().as_ref() }.ok_or("Missing edge treatment curve")?;
                 let (mut minimum, mut maximum) = (0.0, 0.0);
                 let status =
                     unsafe { ffi::SmApiEdgeParameterRange(edge, &mut minimum, &mut maximum) }
                         .map_err(|error| error.to_string())?;
                 if status != 1000 || !minimum.is_finite() || !maximum.is_finite() {
-                    return Err("Invalid fillet curve interval".into());
+                    return Err("Invalid edge treatment curve interval".into());
                 }
                 let mut samples = [glam::DVec3::ZERO; 17];
                 samples[0] = curve_point(curve, minimum)?;
@@ -604,30 +618,42 @@ impl Body<'_> {
             for (index, edge) in selected.into_iter().enumerate() {
                 let edge = edge.ok_or_else(|| format!("Edge '{}' did not match a straight edge on its source solid; update its endpoint expressions", references[index].name))?;
                 if edges.contains(&edge) {
-                    return Err("Fillet references resolve to the same edge".into());
+                    return Err(format!("{name} references resolve to the same edge"));
                 }
                 edges.push(edge);
             }
             unsafe {
-                ffi::spice_fillet_edges(
+                ffi::spice_treat_edges(
                     self.shape.as_mut_ptr(),
                     edges.as_ptr(),
                     edges.len(),
-                    radius,
+                    size_mm,
+                    chamfer,
                 )
             }
             .map_err(|error| error.to_string())?
         } else {
             let [minimum, maximum] = self.bounds(false)?;
-            if radius >= (maximum - minimum).min_element() / 2.0 {
-                return Err("Fillet radius must be smaller than half the solid's smallest bounding dimension".into());
+            if size_mm >= (maximum - minimum).min_element() / 2.0 {
+                return Err(format!(
+                    "Whole-solid {name} size must be smaller than half the solid's smallest bounding dimension"
+                ));
             }
-            unsafe { ffi::SmApiCircularFillet(self.shape.as_mut_ptr(), radius) }
-                .map_err(|error| error.to_string())?
+            unsafe {
+                match treatment {
+                    EdgeTreatment::Fillet { radius_mm } => {
+                        ffi::SmApiCircularFillet(self.shape.as_mut_ptr(), radius_mm)
+                    }
+                    EdgeTreatment::Chamfer { width_mm } => {
+                        ffi::SmApiChamferFillet(self.shape.as_mut_ptr(), width_mm)
+                    }
+                }
+            }
+            .map_err(|error| error.to_string())?
         };
         if status != 1000 {
             return Err(format!(
-                "SMLib fillet failed: {status}; reduce the radius or fillet an earlier feature"
+                "SMLib {name} failed: {status}; reduce its size or apply it to an earlier feature"
             ));
         }
         Ok(())

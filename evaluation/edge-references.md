@@ -33,7 +33,8 @@ literal endpoints; replace these with parameter expressions to follow edits.
 Define references after the booleans/transforms producing their source solid,
 then pass them to its fillet. Reusing a handle on a later operation is rejected.
 This provides deterministic geometric selection, not arbitrary topology tracking.
-Circular selectors and selective chamfers remain outside this slice.
+Circular selectors remain outside this slice. Selective chamfers now reuse this
+reference path; see [chamfer notes](chamfers.md).
 The embedded Selected edge fillets example demonstrates the workflow.
 
 ## Verification

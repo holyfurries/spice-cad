@@ -377,7 +377,16 @@ handles from a different solid fail explicitly. Define references after booleans
 and transforms, before the fillet consuming them. There are at most 64 named edge
 references and 1–64 selected edges per fillet; an empty list is rejected.
 These references do not track arbitrary topology changes. Circular-edge modeling
-selectors and selective chamfers remain future work.
+selectors remain future work.
+
+Use `cad.chamfer(part, { width = 2, edges = { corner } })` to bevel the selected
+straight edges. **Examples → Selected edge chamfers** preserves sharp hole rims
+while beveling two plate corners. `width` is measured across the flat bevel face,
+not along either neighboring face: at a right-angle corner, a 2 mm bevel has
+approximately 1.414 mm setback on each face. Omit `edges` to chamfer all eligible
+edges. Widths must be finite and 0.01–1000 mm; whole-solid operations also require
+a size smaller than half the solid's smallest bounding dimension. Use new edge
+references on each resulting solid when combining fillets and chamfers.
 
 **Examples → Extruded bracket** demonstrates a concave polygon profile, a diagonal
 web, and mounting holes. `cad.polygon(points)` snapshots a closed XY outline;

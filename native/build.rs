@@ -16,12 +16,21 @@ using SmCurveArray = SmTArray<SmCurve*>;
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());
 }
-inline long spice_fillet_edges(SmBrep* body, SmEdge* const* edges, size_t count, double radius) {
+inline long spice_treat_edges(SmBrep* body, SmEdge* const* edges, size_t count, double size_mm, bool chamfer) {
     SmTArray<SmEdge*> selected(count, const_cast<SmEdge**>(edges), count);
     SmFilletExecutive executive(*SmApiGetOrCreateContext(), body);
-    auto status = executive.SetFilletParameters(body, selected, SM_FSG_CIRCULAR,
-        SM_FS_CONST_RADIUS, radius, nullptr, 0.0, 0.0, 0.0, 0.0);
+    auto status = executive.SetFilletParameters(body, selected,
+        chamfer ? SM_FSG_LINEAR : SM_FSG_CIRCULAR,
+        chamfer ? SM_FS_CONST_DIST : SM_FS_CONST_RADIUS, size_mm, nullptr, 0.0, 0.0, 0.0, 0.0);
     if (status != SM_SUCCESS) { return status; }
+    if (chamfer) {
+        status = executive.CreateFilletCorners();
+        if (status != SM_SUCCESS) { return status; }
+        auto& corners = executive.GetFilletCorners();
+        if (corners.GetSize() > count * 2) { return SM_ERR_INVALID_INPUT; }
+        for (size_t index = 0; index < corners.GetSize(); ++index) { corners[index]->SetBevel(TRUE); }
+        return executive.DoFilleting();
+    }
     return executive.DoFillet();
 }
 static_assert(sizeof(SmVector3d) == 24);
