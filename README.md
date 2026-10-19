@@ -737,6 +737,11 @@ or `WGPU_BACKEND=gl` can select a backend for controlled comparisons.
 See [performance goals and measurements](evaluation/performance.md) for the
 measurement method, installation limits, and next priorities. A Linux X11
 startup, idle-CPU, memory, and resize harness is in `evaluation/profile-native.rs`.
+The [cache audit](evaluation/cache-audit.md) records ownership, invalidation,
+heap profiles, and remaining repeated work. **Debug → Performance** and
+`--profile` expose GPU geometry uploads, buffer allocations, retained capacity,
+and uniform uploads. Both layouts retain GPU buffers; revisiting a cached layout
+does not transfer geometry, and rebuilds reuse buffer capacity when it fits.
 
 ## Browser prototype
 

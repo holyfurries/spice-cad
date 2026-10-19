@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-19",
+  "profile": "development release",
+  "workloads": [
+    {
+      "source": "models/rack-parts.luau",
+      "uninstrumented_samples": 3,
+      "total_ms": [233.4, 240.9, 239.2],
+      "kernel_ms": [148.3, 148.5, 146.5],
+      "scene_pipeline_ms": [72.3, 70.0, 70.5],
+      "heaptrack": {
+        "allocation_calls": 974151,
+        "smos_calloc_calls": 842328,
+        "peak_heap_mb_decimal_rounded": 6.05
+      }
+    },
+    {
+      "source": "models/rocket-engine.luau",
+      "uninstrumented_samples": 3,
+      "total_ms": [214.5, 219.8, 236.8],
+      "kernel_ms": [29.9, 32.7, 33.2],
+      "scene_pipeline_ms": [173.0, 175.7, 192.0],
+      "heaptrack": {
+        "allocation_calls": 839872,
+        "smos_calloc_calls": 807083,
+        "peak_heap_mb_decimal_rounded": 6.45
+      }
+    }
+  ],
+  "native_gpu_checks": {
+    "adapter": "NVIDIA GeForce RTX 3070",
+    "backend": "Vulkan",
+    "initial_two_layout_uploads": 2,
+    "uploads_after_repeated_switching": 2,
+    "uploads_after_edit_and_visiting_both_layouts": 4,
+    "buffer_allocations_initial_and_final": 4,
+    "geometry_capacity_bytes_initial_and_final": 294912,
+    "ui_frames_final_sample": 306,
+    "uniform_writes_final_sample": 18,
+    "part_focus_and_layout_retention_passed": true
+  },
+  "validation": {
+    "workspace_tests_passed": 117,
+    "clippy_all_targets_all_features_deny_warnings": true,
+    "rustfmt": true,
+    "release_build": true
+  },
+  "limits": [
+    "Small local samples; OS caches were not flushed.",
+    "Scene pipeline combines both layouts, checks, inspection, and thumbnails.",
+    "Heap profiles include CLI process setup and exclude analyzer child and GUI heaps.",
+    "Heap profiler timings are excluded from the uninstrumented latency samples.",
+    "UI frame count is not viewport callback count; uniform hit rate is not inferred.",
+    "GPU capacity excludes staging, uniforms, textures, and render targets."
+  ]
+}

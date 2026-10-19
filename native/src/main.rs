@@ -1547,6 +1547,7 @@ impl eframe::App for Editor {
                 .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 70.0))
                 .open(&mut self.show_performance)
                 .show(ui.ctx(), |ui| {
+                    let metrics = viewport::metrics(frame);
                     if let Some(snapshot) = &self.snapshot {
                         ui.label(format!(
                             "Analyze {:.1} ms · script {:.1} ms",
@@ -1557,17 +1558,21 @@ impl eframe::App for Editor {
                             snapshot.build_ms, snapshot.tessellation_ms
                         ));
                         ui.label(format!("Build pipeline {:.1} ms", snapshot.total_ms));
-                        let (_, upload_ms, saved_ms) = viewport::upload_metrics(frame);
-                        ui.label(format!("Upload CPU {:.2} ms", upload_ms));
-                        if let Some(saved_ms) = saved_ms {
+                        ui.label(format!("Upload CPU {:.2} ms", metrics.upload_ms));
+                        if let Some(saved_ms) = metrics.saved_ms {
                             ui.label(format!("Save → upload {:.1} ms", saved_ms));
                         }
                     }
                     ui.label(format!(
                         "UI CPU {:.2} ms · {} uploads",
-                        self.ui_ms,
-                        viewport::upload_count(frame)
+                        self.ui_ms, metrics.uploads
                     ));
+                    ui.label(format!(
+                        "{} geometry allocations · {:.2} MiB GPU capacity",
+                        metrics.buffer_allocations,
+                        metrics.geometry_bytes as f64 / 1048576.0
+                    ));
+                    ui.label(format!("{} uniform uploads", metrics.uniform_writes));
                     ui.small("CPU timings exclude GPU completion and presentation.");
                 });
         }
@@ -2515,7 +2520,7 @@ impl eframe::App for Editor {
             profile.frame(
                 [size.x as u32, size.y as u32],
                 self.ui_ms,
-                viewport::upload_count(frame),
+                viewport::metrics(frame),
             );
         }
         if matches!(self.work, WorkerState::Idle) {

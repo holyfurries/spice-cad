@@ -89,19 +89,72 @@ pub struct Draw {
     pub selected_edge: Option<[u32; 2]>,
 }
 struct Gpu {
-    layout: crate::placement::Layout,
+    scenes: [GpuScene; 2],
     line_pipeline: wgpu::RenderPipeline,
-    lines: wgpu::Buffer,
-    line_count: u32,
-    upload_ms: f64,
-    saved_ms: Option<f64>,
     pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    vertices: wgpu::Buffer,
+    uniform_previous: Option<[u32; 32]>,
+    metrics: Metrics,
+}
+
+#[derive(Default)]
+struct GpuScene {
+    vertices: Option<wgpu::Buffer>,
+    lines: Option<wgpu::Buffer>,
     revision: u64,
     count: u32,
+    line_count: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Metrics {
     pub uploads: u64,
+    pub buffer_allocations: u64,
+    pub uniform_writes: u64,
+    pub geometry_bytes: u64,
+    pub upload_ms: f64,
+    pub saved_ms: Option<f64>,
+}
+
+fn layout_index(layout: crate::placement::Layout) -> usize {
+    match layout {
+        crate::placement::Layout::Assembly => 0,
+        crate::placement::Layout::Print => 1,
+    }
+}
+
+fn upload_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &mut Option<wgpu::Buffer>,
+    bytes: &[u8],
+    bytes_max: u64,
+    label: &str,
+) -> bool {
+    let required = bytes.len() as u64;
+    assert!(required <= bytes_max);
+    assert!(required.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT));
+    if bytes.is_empty() {
+        return false;
+    }
+    let allocate = buffer
+        .as_ref()
+        .is_none_or(|buffer| buffer.size() < required);
+    if allocate {
+        *buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: required.next_power_of_two().min(bytes_max),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+    }
+    queue.write_buffer(
+        buffer.as_ref().expect("Allocated geometry buffer"),
+        0,
+        bytes,
+    );
+    allocate
 }
 
 pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
@@ -217,12 +270,6 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
             resource: uniform.as_entire_binding(),
         }],
     });
-    let vertices = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Empty model"),
-        size: 28,
-        usage: wgpu::BufferUsages::VERTEX,
-        mapped_at_creation: false,
-    });
     let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("CAD edge outlines"),
         layout: Some(&pipeline_layout),
@@ -265,26 +312,14 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         multiview_mask: None,
         cache: None,
     });
-    let lines = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Empty CAD edges"),
-        size: 24,
-        usage: wgpu::BufferUsages::VERTEX,
-        mapped_at_creation: false,
-    });
     state.renderer.write().callback_resources.insert(Gpu {
-        layout: crate::placement::Layout::Assembly,
+        scenes: Default::default(),
         line_pipeline,
-        lines,
-        line_count: 0,
-        upload_ms: 0.0,
-        saved_ms: None,
         pipeline,
         group,
         uniform,
-        vertices,
-        revision: 0,
-        count: 0,
-        uploads: 0,
+        uniform_previous: None,
+        metrics: Metrics::default(),
     });
     Ok(())
 }
@@ -301,27 +336,32 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get_mut::<Gpu>()
             .expect("Viewport initialized before drawing");
-        if gpu.revision != self.revision || gpu.layout != self.layout {
+        assert!(self.revision > 0);
+        let scene = &mut gpu.scenes[layout_index(self.layout)];
+        if scene.revision != self.revision {
             let started = std::time::Instant::now();
-            gpu.vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("CAD triangles"),
-                contents: bytemuck::cast_slice(&self.mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            gpu.count = u32::try_from(self.mesh.vertices.len()).expect("Mesh budget checked");
-            if !self.edges.is_empty() {
-                gpu.lines = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("CAD curve segments"),
-                    contents: bytemuck::cast_slice(self.edges.as_slice()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-            }
-            gpu.line_count = u32::try_from(self.edges.len()).expect("Edge budget checked");
-            gpu.revision = self.revision;
-            gpu.layout = self.layout;
-            gpu.uploads += 1;
-            gpu.upload_ms = started.elapsed().as_secs_f64() * 1000.0;
-            gpu.saved_ms = self
+            gpu.metrics.buffer_allocations += u64::from(upload_buffer(
+                device,
+                queue,
+                &mut scene.vertices,
+                bytemuck::cast_slice(&self.mesh.vertices),
+                300000 * std::mem::size_of::<crate::mesh::Vertex>() as u64,
+                "CAD triangles",
+            ));
+            gpu.metrics.buffer_allocations += u64::from(upload_buffer(
+                device,
+                queue,
+                &mut scene.lines,
+                bytemuck::cast_slice(self.edges.as_slice()),
+                131072 * std::mem::size_of::<EdgeSegment>() as u64,
+                "CAD curve segments",
+            ));
+            scene.count = u32::try_from(self.mesh.vertices.len()).expect("Mesh budget checked");
+            scene.line_count = u32::try_from(self.edges.len()).expect("Edge budget checked");
+            scene.revision = self.revision;
+            gpu.metrics.uploads += 1;
+            gpu.metrics.upload_ms = started.elapsed().as_secs_f64() * 1000.0;
+            gpu.metrics.saved_ms = self
                 .saved_at
                 .and_then(|saved| std::time::SystemTime::now().duration_since(saved).ok())
                 .map(|elapsed| elapsed.as_secs_f64() * 1000.0);
@@ -340,7 +380,12 @@ impl egui_wgpu::CallbackTrait for Draw {
         uniform[26] = f32::from(self.edges_enabled);
         uniform[28] = self.selected_part[0] as f32;
         uniform[29] = self.selected_part[1] as f32;
-        queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
+        let bits = uniform.map(f32::to_bits);
+        if gpu.uniform_previous != Some(bits) {
+            queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
+            gpu.uniform_previous = Some(bits);
+            gpu.metrics.uniform_writes += 1;
+        }
         Vec::new()
     }
 
@@ -353,23 +398,30 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get::<Gpu>()
             .expect("Viewport initialized before drawing");
+        let scene = &gpu.scenes[layout_index(self.layout)];
+        assert_eq!(scene.revision, self.revision);
         pass.set_pipeline(&gpu.pipeline);
         pass.set_bind_group(0, &gpu.group, &[]);
-        pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-        pass.draw(0..gpu.count, 0..1);
-        if self.edges_enabled || self.selected_edge.is_some() {
+        if scene.count > 0 {
+            pass.set_vertex_buffer(
+                0,
+                scene
+                    .vertices
+                    .as_ref()
+                    .expect("Uploaded triangles")
+                    .slice(..),
+            );
+            pass.draw(0..scene.count, 0..1);
+        }
+        if scene.line_count > 0 && (self.edges_enabled || self.selected_edge.is_some()) {
             pass.set_pipeline(&gpu.line_pipeline);
-            pass.set_vertex_buffer(0, gpu.lines.slice(..));
-            pass.draw(0..6, 0..gpu.line_count);
+            pass.set_vertex_buffer(0, scene.lines.as_ref().expect("Uploaded edges").slice(..));
+            pass.draw(0..6, 0..scene.line_count);
         }
     }
 }
 
-pub fn upload_count(frame: &eframe::Frame) -> u64 {
-    upload_metrics(frame).0
-}
-
-pub fn upload_metrics(frame: &eframe::Frame) -> (u64, f64, Option<f64>) {
+pub fn metrics(frame: &eframe::Frame) -> Metrics {
     frame
         .wgpu_render_state()
         .and_then(|state| {
@@ -378,7 +430,16 @@ pub fn upload_metrics(frame: &eframe::Frame) -> (u64, f64, Option<f64>) {
                 .read()
                 .callback_resources
                 .get::<Gpu>()
-                .map(|gpu| (gpu.uploads, gpu.upload_ms, gpu.saved_ms))
+                .map(|gpu| Metrics {
+                    geometry_bytes: gpu
+                        .scenes
+                        .iter()
+                        .flat_map(|scene| [&scene.vertices, &scene.lines])
+                        .flatten()
+                        .map(wgpu::Buffer::size)
+                        .sum(),
+                    ..gpu.metrics
+                })
         })
-        .unwrap_or((0, 0.0, None))
+        .unwrap_or_default()
 }
