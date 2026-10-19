@@ -1,4 +1,4 @@
-use crate::{game_asset, kernel::Kernel, mesh::Mesh, model};
+use crate::{game_asset, kernel::Kernel, model};
 use std::path::Path;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -20,10 +20,16 @@ pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), St
     let model = model::compile(source)?;
     let kernel = Kernel::new()?;
     let mut bodies = model.build(&kernel)?;
+    model.annotations(&mut bodies)?;
+    let layout = if target == Target::Print {
+        crate::placement::Layout::Print
+    } else {
+        crate::placement::Layout::Assembly
+    };
+    for (part, body) in model.parts.iter().zip(&mut bodies) {
+        part.placement(layout).apply(body, false)?;
+    }
     let meshes = model.meshes(&mut bodies, target == Target::Game)?;
-    let (combined, ranges) = Mesh::combine(&meshes)?;
-    model.annotations(&combined, &ranges)?;
-    drop(combined);
     let mut files = Vec::new();
     if target == Target::Game {
         files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));

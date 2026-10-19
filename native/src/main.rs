@@ -30,6 +30,7 @@ mod model;
 mod palette;
 mod parameters;
 mod performance;
+mod placement;
 mod preview;
 mod profile;
 mod save;
@@ -65,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}: {:.3} mm³ · {} triangles · analyze {:.1} ms · script {:.1} ms · kernel {:.1} ms · mesh {:.1} ms · total {:.1} ms",
                 snapshot.name,
                 snapshot.volume_mm3,
-                snapshot.mesh.vertices.len() / 3,
+                snapshot.scene.mesh.vertices.len() / 3,
                 snapshot.analysis_ms,
                 snapshot.script_ms,
                 snapshot.build_ms,
@@ -166,28 +167,51 @@ impl ModelRevision {
         }
     }
 }
-struct Snapshot {
+struct Scene {
+    part_segments: Vec<std::ops::Range<u32>>,
+    layout: placement::Layout,
     outputs: Arc<Vec<inline_output::Entry>>,
-    parts: Vec<model::Part>,
     part_faces: Vec<std::ops::RangeInclusive<u32>>,
     part_bounds: Vec<[glam::Vec3; 2]>,
     inspected_edges: Vec<inspection::Edge>,
     faces: std::collections::BTreeMap<u32, inspection::Face>,
     bounds: [glam::Vec3; 2],
     annotations: dimensions::Annotations,
-    editor_revision: Option<u64>,
     edges: Arc<Vec<mesh::EdgeSegment>>,
+    mesh: Arc<mesh::Mesh>,
+}
+struct Snapshot {
+    scene: Scene,
+    alternate: Option<Scene>,
+    checks: dimensions::Annotations,
+    parts: Vec<model::Part>,
+    editor_revision: Option<u64>,
     saved_at: Option<std::time::SystemTime>,
     analysis_ms: f64,
     script_ms: f64,
     total_ms: f64,
     source: ModelSource,
     name: String,
-    mesh: Arc<mesh::Mesh>,
     volume_mm3: f64,
     build_ms: f64,
     tessellation_ms: f64,
     revision: u64,
+}
+impl Snapshot {
+    fn set_layout(&mut self, layout: placement::Layout) -> bool {
+        if self.scene.layout == layout {
+            return false;
+        }
+        let Some(alternate) = self
+            .alternate
+            .as_mut()
+            .filter(|scene| scene.layout == layout)
+        else {
+            return false;
+        };
+        std::mem::swap(&mut self.scene, alternate);
+        true
+    }
 }
 #[derive(PartialEq)]
 enum ModelSource {
@@ -260,23 +284,29 @@ fn build_snapshot(
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
-        outputs: Arc::new(Vec::new()),
+        scene: Scene {
+            part_segments: Vec::new(),
+            layout: placement::Layout::Assembly,
+            outputs: Arc::new(Vec::new()),
+            part_faces: Vec::new(),
+            part_bounds: Vec::new(),
+            inspected_edges: edges.items,
+            faces,
+            bounds: body.bounds(true)?.map(|point| point.as_vec3()),
+            annotations: dimensions::Annotations::default(),
+            edges: Arc::new(edges.segments),
+            mesh: Arc::new(mesh),
+        },
         parts: Vec::new(),
-        part_faces: Vec::new(),
-        part_bounds: Vec::new(),
-        inspected_edges: edges.items,
-        faces,
-        bounds: body.bounds(true)?.map(|point| point.as_vec3()),
-        annotations: dimensions::Annotations::default(),
+        alternate: None,
+        checks: dimensions::Annotations::default(),
         editor_revision: None,
-        edges: Arc::new(edges.segments),
         saved_at: None,
         analysis_ms: 0.0,
         script_ms: 0.0,
         total_ms: build_ms + tessellation_ms,
         source: ModelSource::Rack(parameters),
         name: "Spice rack".into(),
-        mesh: Arc::new(mesh),
         volume_mm3,
         build_ms,
         tessellation_ms,
@@ -292,32 +322,74 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let start = Instant::now();
     let mut bodies = model.build(&kernel)?;
     let mut volume_mm3 = 0.0;
+    for body in &bodies {
+        volume_mm3 += body.volume()?;
+    }
+    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let start = Instant::now();
+    let checks = model.annotations(&mut bodies)?;
+    let scene = build_scene(&model, &mut bodies, placement::Layout::Assembly, &checks)?;
+    let alternate = if model.parts.iter().any(|part| part.print.is_some()) {
+        Some(build_scene(
+            &model,
+            &mut bodies,
+            placement::Layout::Print,
+            &checks,
+        )?)
+    } else {
+        None
+    };
+    let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(Snapshot {
+        scene,
+        alternate,
+        checks,
+        parts: model.parts,
+        editor_revision: None,
+        saved_at: None,
+        analysis_ms: model.analysis_ms,
+        script_ms: model.script_ms,
+        total_ms: total.elapsed().as_secs_f64() * 1000.0,
+        source: ModelSource::Script(source.into()),
+        name: model.name,
+        volume_mm3,
+        build_ms,
+        tessellation_ms,
+        revision,
+    })
+}
+
+fn build_scene(
+    model: &model::Model,
+    bodies: &mut [kernel::Body<'_>],
+    layout: placement::Layout,
+    checks: &dimensions::Annotations,
+) -> Result<Scene, String> {
+    assert_eq!(bodies.len(), model.parts.len());
+    assert!(!bodies.is_empty());
+    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
+        part.placement(layout).apply(body, false)?;
+    }
+    let meshes = model.meshes(bodies, false)?;
+    let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
+    let mut outputs = Vec::with_capacity(model.parts.len() + 64);
+    let mut part_bounds = Vec::with_capacity(model.parts.len());
     let mut bounds = [
         glam::Vec3::splat(f32::INFINITY),
         glam::Vec3::splat(f32::NEG_INFINITY),
     ];
-    for body in &bodies {
-        volume_mm3 += body.volume()?;
-        let part_bounds = body.bounds(true)?.map(|point| point.as_vec3());
-        bounds[0] = bounds[0].min(part_bounds[0]);
-        bounds[1] = bounds[1].max(part_bounds[1]);
-    }
-    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let start = Instant::now();
-    let meshes = model.meshes(&mut bodies, false)?;
-    let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
-    let mut outputs = Vec::with_capacity(model.parts.len() + 64);
-    let mut part_bounds = Vec::with_capacity(model.parts.len());
     let mut remaining = thumbnail::PIXEL_VISITS_MAX;
-    for ((part, body), mesh) in model.parts.iter().zip(&bodies).zip(&meshes) {
-        let bounds = body.bounds(true)?.map(|point| point.as_vec3());
-        part_bounds.push(bounds);
+    for ((part, body), mesh) in model.parts.iter().zip(bodies.iter()).zip(&meshes) {
+        let part_box = body.bounds(true)?.map(|point| point.as_vec3());
+        bounds[0] = bounds[0].min(part_box[0]);
+        bounds[1] = bounds[1].max(part_box[1]);
+        part_bounds.push(part_box);
         outputs.push(inline_output::Entry {
             line: part.line,
             name: part.name.clone(),
             content: inline_output::Content::Part {
-                image: thumbnail::render(mesh, bounds, &mut remaining),
-                dimensions: bounds[1] - bounds[0],
+                image: thumbnail::render(mesh, part_box, &mut remaining),
+                dimensions: part_box[1] - part_box[0],
                 volume_mm3: body.volume()?,
             },
         });
@@ -326,9 +398,11 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
         items: Vec::new(),
         segments: Vec::new(),
     };
-    for body in &mut bodies {
+    let mut part_segments = Vec::with_capacity(bodies.len());
+    for body in bodies.iter_mut() {
         let part_edges = body.edges()?;
         let offset = edges.segments.len() as u32;
+        part_segments.push(offset..offset + part_edges.segments.len() as u32);
         if edges.segments.len() + part_edges.segments.len() > 131072 {
             return Err("Assembly exceeds its display edge budget".into());
         }
@@ -341,12 +415,19 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
         edges.segments.extend(part_edges.segments);
     }
     let faces = inspection::faces(&mesh)?;
-    let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let annotations = model.annotations(&mesh, &part_faces)?;
-    for measurement in &annotations.measurements {
+    let annotations = if layout == placement::Layout::Assembly {
+        checks.clone()
+    } else {
+        dimensions::Annotations::default()
+    };
+    for measurement in &checks.measurements {
         outputs.push(inline_output::Entry {
             line: measurement.line,
-            name: measurement.name.clone(),
+            name: if layout == placement::Layout::Print {
+                format!("Assembly · {}", measurement.name)
+            } else {
+                measurement.name.clone()
+            },
             content: inline_output::Content::Measurement {
                 distance_mm: measurement.distance_mm,
                 checked: measurement.checked,
@@ -354,28 +435,21 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
         });
     }
     outputs.sort_by_key(|output| output.line);
-    Ok(Snapshot {
+    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
+        part.placement(layout).apply(body, true)?;
+    }
+    Ok(Scene {
+        part_segments,
+        layout,
         outputs: Arc::new(outputs),
         part_bounds,
         inspected_edges: edges.items,
         faces,
         bounds,
-        parts: model.parts,
         part_faces,
         annotations,
-        editor_revision: None,
         edges: Arc::new(edges.segments),
-        saved_at: None,
-        analysis_ms: model.analysis_ms,
-        script_ms: model.script_ms,
-        total_ms: total.elapsed().as_secs_f64() * 1000.0,
-        source: ModelSource::Script(source.into()),
-        name: model.name,
-        volume_mm3,
         mesh: Arc::new(mesh),
-        build_ms,
-        tessellation_ms,
-        revision,
     })
 }
 
@@ -788,11 +862,16 @@ impl Editor {
                     context.request_repaint();
                 } else {
                     match result {
-                        Ok(Outcome::Model(snapshot)) => {
+                        Ok(Outcome::Model(mut snapshot)) => {
+                            if self.snapshot.as_ref().is_some_and(|previous| {
+                                previous.scene.layout == placement::Layout::Print
+                            }) {
+                                snapshot.set_layout(placement::Layout::Print);
+                            }
                             if let Some(revision) = snapshot.editor_revision {
                                 self.code_state
                                     .outputs
-                                    .set(revision, Arc::clone(&snapshot.outputs));
+                                    .set(revision, Arc::clone(&snapshot.scene.outputs));
                             }
                             if self.script.is_some()
                                 && self.frame_next_model
@@ -970,6 +1049,8 @@ impl eframe::App for Editor {
                 file_dialog_requested = Some(save::Mode::NewModel);
             }
         }
+        let mut layout_requested = None;
+        let mut frame_layout = false;
         let mut save_requested = shortcuts_enabled
             && ui.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -1083,6 +1164,12 @@ impl eframe::App for Editor {
                         }
                         Navigation::RocketEngine => {
                             example_requested = Some(document::Example::RocketEngine)
+                        }
+                        Navigation::AssemblyLayout => {
+                            layout_requested = Some(placement::Layout::Assembly)
+                        }
+                        Navigation::PrintLayout => {
+                            layout_requested = Some(placement::Layout::Print)
                         }
                     }
                 }
@@ -1316,6 +1403,35 @@ impl eframe::App for Editor {
                     }
                 }
                 ui.separator();
+                if let Some(snapshot) = &self.snapshot {
+                    if snapshot.alternate.is_some() {
+                        ui.menu_button(
+                            if snapshot.scene.layout == placement::Layout::Assembly {
+                                "Layout · Assembly"
+                            } else {
+                                "Layout · Print"
+                            },
+                            |ui| {
+                                for (layout, label) in [
+                                    (placement::Layout::Assembly, "Assembly"),
+                                    (placement::Layout::Print, "Print"),
+                                ] {
+                                    if ui
+                                        .selectable_label(snapshot.scene.layout == layout, label)
+                                        .clicked()
+                                    {
+                                        layout_requested = Some(layout);
+                                        ui.close();
+                                    }
+                                }
+                            },
+                        )
+                        .response
+                        .on_hover_text(
+                            "Switch cached placements without changing source or rebuilding solids",
+                        );
+                    }
+                }
                 let can_export = self.can_export();
                 if self.script.is_some() {
                     ui.add_enabled_ui(can_export, |ui| {
@@ -1463,6 +1579,26 @@ impl eframe::App for Editor {
                     interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px)
                 });
         }
+        if let Some(layout) = layout_requested {
+            if let Some(snapshot) = &mut self.snapshot {
+                if snapshot.set_layout(layout) {
+                    if let Some(revision) = snapshot.editor_revision {
+                        self.code_state
+                            .outputs
+                            .set(revision, Arc::clone(&snapshot.scene.outputs));
+                    }
+                    self.selected = None;
+                    self.focus_editor = false;
+                    frame_layout = true;
+                    self.message = if layout == placement::Layout::Print {
+                        "Print layout · export checks each part separately"
+                    } else {
+                        "Assembly layout"
+                    }
+                    .into();
+                }
+            }
+        }
         let mut parameter_edit = None;
         if self.show_inspector && !self.focus_editor {
             egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(14.0)).show(ui, |ui| {
@@ -1479,7 +1615,7 @@ impl eframe::App for Editor {
                             ui.label(&snapshot.parts[*index as usize].name);
                             ui.small("Selected part · X/Y/Z bounds");
                         } else if let Some(latest) = selection.latest() {
-                            ui.label(snapshot.annotations.faces.iter().find(|named| named.id == latest.id).map_or("Unnamed face", |named| named.name.as_str()));
+                            ui.label(snapshot.scene.annotations.faces.iter().find(|named| named.id == latest.id).map_or("Unnamed face", |named| named.name.as_str()));
                             ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
                         } else {
                             ui.label("Selected edge");
@@ -1493,7 +1629,7 @@ impl eframe::App for Editor {
                         }
                         if let inspection::Selection::Edge(edge) = selection {
                             if ui.button("Copy edge selector").on_hover_text("Straight edges only. Replace part with the source solid variable and choose a unique name. Use parameter expressions for endpoint coordinates that should follow edits.").clicked() {
-                                match edge_reference::selector(edge) {
+                                match source_edge_selector(snapshot, edge) {
                                     Some(selector) => ui.ctx().copy_text(selector),
                                     None => self.message = "Only straight edges support modeling selectors; no selector was copied".into(),
                                 }
@@ -1501,7 +1637,7 @@ impl eframe::App for Editor {
                         }
                         if let Some(face) = selection.latest() {
                             if ui.button("Copy face selector").on_hover_text("Axis-aligned planar faces only. Replace part with your final solid variable and choose a unique name.").clicked() {
-                                match dimensions::selector(&snapshot.mesh, face.id) {
+                                match source_face_selector(snapshot, face.id) {
                                     Some(selector) => ui.ctx().copy_text(selector),
                                     None => self.message = "This face is not axis-aligned and planar; no selector was copied".into(),
                                 }
@@ -1513,7 +1649,7 @@ impl eframe::App for Editor {
                     egui::ScrollArea::vertical().id_salt("assembly_parts").max_height(160.0).show(ui, |ui| {
                     ui.spacing_mut().interact_size.y = 24.0;
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    for (part, faces) in snapshot.parts.iter().zip(&snapshot.part_faces) {
+                    for (part, faces) in snapshot.parts.iter().zip(&snapshot.scene.part_faces) {
                         let selected = self.selected.as_ref().is_some_and(|selection| match selection {
                             inspection::Selection::Part { faces: selected, .. } => selected == &[*faces.start(), *faces.end()],
                             _ => selection.latest().is_some_and(|face| faces.contains(&face.id)),
@@ -1537,15 +1673,15 @@ impl eframe::App for Editor {
                 if let Some(snapshot) = &self.snapshot {
                     interface::section(ui, "GEOMETRY");
                     ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
-                    ui.label(format!("{} faces · {} triangles", snapshot.mesh.face_count, snapshot.mesh.vertices.len() / 3));
-                    interface::section(ui, "DESIGN CHECKS");
+                    ui.label(format!("{} faces · {} triangles", snapshot.scene.mesh.face_count, snapshot.scene.mesh.vertices.len() / 3));
+                    interface::section(ui, "ASSEMBLY CHECKS");
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
                         ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
                     }
-                    let checked = snapshot.annotations.measurements.iter().filter(|measurement| measurement.checked).count();
+                    let checked = snapshot.checks.measurements.iter().filter(|measurement| measurement.checked).count();
                     ui.label(if checked == 0 { "No explicit distance checks".into() } else { format!("{checked} distance checks passed") });
                     ui.small("Code defines shape. Checks validate declared limits; no constraint solver is active.");
-                    for measurement in &snapshot.annotations.measurements {
+                    for measurement in &snapshot.checks.measurements {
                         ui.label(format!("{} ≈{:.3} mm · {}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }));
                     }
                 }
@@ -1574,7 +1710,7 @@ impl eframe::App for Editor {
             ui.separator();
             if let Err(error) = self.parameters.layout() { ui.colored_label(interface::WARNING, error); }
             if let Some(snapshot) = &self.snapshot {
-                ui.label(format!("{} triangles · {} faces", snapshot.mesh.vertices.len()/3, snapshot.mesh.face_count));
+                ui.label(format!("{} triangles · {} faces", snapshot.scene.mesh.vertices.len()/3, snapshot.scene.mesh.face_count));
                 ui.label(format!("Volume {:.0} mm³", snapshot.volume_mm3));
                 if snapshot.source != ModelSource::Rack(self.parameters) { ui.colored_label(interface::WARNING, "Showing the previous valid geometry"); }
             }
@@ -1822,6 +1958,9 @@ impl eframe::App for Editor {
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
                 if rect.width() <= 0.0 || rect.height() <= 0.0 { return; }
                 self.viewport_aspect = rect.width().max(1.0) / rect.height().max(1.0);
+                if frame_layout {
+                    if let Some(snapshot) = &self.snapshot { self.camera = snapshot_camera(snapshot, self.viewport_aspect); }
+                }
                 if rect.width() >= 100.0 {
                     if let Some(request) = self.code_state.outputs.take_focus() {
                         if let (Some(snapshot), Some(script)) = (&self.snapshot, &self.script) {
@@ -1856,16 +1995,16 @@ impl eframe::App for Editor {
                         if let Some(position) = response.interact_pointer_pos() {
                             let extend = ui.input(|input| input.modifiers.shift);
                             let edge = if self.show_edges && !extend {
-                                inspection::pick_edge(&snapshot.inspected_edges, &snapshot.edges, &snapshot.mesh, matrix, [rect.width(), rect.height()], [position.x - rect.left(), position.y - rect.top()])
+                                inspection::pick_edge(&snapshot.scene.inspected_edges, &snapshot.scene.edges, &snapshot.scene.mesh, matrix, [rect.width(), rect.height()], [position.x - rect.left(), position.y - rect.top()])
                             } else { None };
                             if let Some(edge) = edge {
                                 self.selected = Some(inspection::Selection::Edge(edge));
                                 self.message = "Edge dimensions · reference measurements".into();
-                            } else if let Some(hit) = snapshot.mesh.pick(matrix, [
+                            } else if let Some(hit) = snapshot.scene.mesh.pick(matrix, [
                                 (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
                                 1.0 - (position.y - rect.top()) / rect.height() * 2.0,
                             ]) {
-                                let face = *snapshot.faces.get(&hit.face_id).expect("Mesh face inspection cache");
+                                let face = *snapshot.scene.faces.get(&hit.face_id).expect("Mesh face inspection cache");
                                 match inspection::Selection::select(self.selected.as_ref(), face, extend) {
                                     Ok(selection) => {
                                         self.message = if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement".into() } else { "Face dimensions · reference measurements".into() };
@@ -1879,8 +2018,9 @@ impl eframe::App for Editor {
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                         rect,
                         viewport::Draw {
+                            layout: snapshot.scene.layout,
                             edge_width_px: self.edge_width_px,
-                            edges: Arc::clone(&snapshot.edges),
+                            edges: Arc::clone(&snapshot.scene.edges),
                             edges_enabled: self.show_edges,
                             eye: self.camera.eye(),
                             viewport_size: [
@@ -1888,7 +2028,7 @@ impl eframe::App for Editor {
                                 rect.height() * ui.ctx().pixels_per_point(),
                             ],
                             saved_at: snapshot.saved_at,
-                            mesh: Arc::clone(&snapshot.mesh),
+                            mesh: Arc::clone(&snapshot.scene.mesh),
                             revision: snapshot.revision,
                             matrix,
                             selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
@@ -1897,7 +2037,7 @@ impl eframe::App for Editor {
                         },
                     ));
                     if self.show_dimensions || self.selected.is_some() {
-                        dimensions::draw(ui, rect, matrix, snapshot.bounds, &snapshot.annotations, self.selected.as_ref());
+                        dimensions::draw(ui, rect, matrix, snapshot.scene.bounds, &snapshot.scene.annotations, self.selected.as_ref());
                     }
                 }
                 ui.painter().text(
@@ -2391,6 +2531,61 @@ impl eframe::App for Editor {
     }
 }
 
+fn source_face_selector(snapshot: &Snapshot, id: u32) -> Option<String> {
+    let index = snapshot
+        .scene
+        .part_faces
+        .iter()
+        .position(|range| range.contains(&id))?;
+    let inverse = snapshot.parts[index]
+        .placement(snapshot.scene.layout)
+        .matrix()
+        .inverse();
+    let vertices = snapshot
+        .scene
+        .mesh
+        .vertices
+        .iter()
+        .filter(|vertex| vertex.face_id == id)
+        .map(|vertex| {
+            let mut vertex = *vertex;
+            vertex.position = inverse
+                .transform_point3(glam::Vec3::from_array(vertex.position))
+                .to_array();
+            vertex.normal = inverse
+                .transform_vector3(glam::Vec3::from_array(vertex.normal))
+                .normalize()
+                .to_array();
+            vertex
+        })
+        .collect();
+    dimensions::selector(
+        &mesh::Mesh {
+            vertices,
+            face_count: 1,
+        },
+        id,
+    )
+}
+
+fn source_edge_selector(snapshot: &Snapshot, edge: &inspection::Edge) -> Option<String> {
+    let index = snapshot
+        .scene
+        .part_segments
+        .iter()
+        .position(|range| range.contains(&edge.segments[0]))?;
+    let inverse = snapshot.parts[index]
+        .placement(snapshot.scene.layout)
+        .matrix()
+        .inverse();
+    let mut edge = *edge;
+    if let inspection::EdgeGeometry::Line(points) = edge.geometry {
+        edge.geometry =
+            inspection::EdgeGeometry::Line(points.map(|point| inverse.transform_point3(point)));
+    }
+    edge_reference::selector(&edge)
+}
+
 fn focus_part(
     snapshot: &Snapshot,
     request: &inline_output::Focus,
@@ -2407,8 +2602,8 @@ fn focus_part(
         .parts
         .iter()
         .position(|part| part.name == request.name)?;
-    let faces = snapshot.part_faces.get(index)?;
-    let bounds = *snapshot.part_bounds.get(index)?;
+    let faces = snapshot.scene.part_faces.get(index)?;
+    let bounds = *snapshot.scene.part_bounds.get(index)?;
     let mut camera = viewport::Camera::rack((bounds[1] - bounds[0]).as_dvec3().to_array());
     camera.target = (bounds[0] + bounds[1]) / 2.0;
     camera.distance /= aspect.min(1.0);
@@ -2427,7 +2622,7 @@ fn focus_part(
 fn snapshot_camera(snapshot: &Snapshot, aspect: f32) -> viewport::Camera {
     assert!(aspect.is_finite());
     assert!(aspect > 0.0);
-    let [minimum, maximum] = snapshot.bounds;
+    let [minimum, maximum] = snapshot.scene.bounds;
     let mut camera = viewport::Camera::rack((maximum - minimum).as_dvec3().to_array());
     camera.target = (minimum + maximum) / 2.0;
     camera.distance /= aspect.min(1.0);
@@ -2502,6 +2697,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_layouts_preserve_assembly_checks_and_select_print_placements_for_export()
+    -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=10,height=2})\nlocal b=cad.box({width=10,depth=10,height=2})\nlocal top=cad.face(a,{name='top',normal='z+',at=2})\nlocal bottom=cad.face(b,{name='bottom',normal='z-',at=0})\ncad.measure('gap',{from=top,to=bottom,min=7.5,max=8.5})\ncad.show('a',a,{assembly={rotation={y=90},position={x=20}},print={}})\ncad.show('b',b,{assembly={rotation={y=90},position={x=30}},print={position={x=40}}})";
+        let mut snapshot = build_script_snapshot(source, 1)?;
+        snapshot.editor_revision = Some(17);
+        let assembly_mesh = Arc::clone(&snapshot.scene.mesh);
+        let print_mesh = Arc::clone(
+            &snapshot
+                .alternate
+                .as_ref()
+                .ok_or("Missing print cache")?
+                .mesh,
+        );
+        assert_eq!(snapshot.checks.measurements[0].distance_mm, 8.0);
+        assert!(
+            (snapshot.scene.part_bounds[0][0] - glam::vec3(20.0, 0.0, -10.0))
+                .abs()
+                .max_element()
+                < 0.001
+        );
+        assert!(
+            (snapshot.scene.part_bounds[0][1] - glam::vec3(22.0, 10.0, 0.0))
+                .abs()
+                .max_element()
+                < 0.001
+        );
+        for _ in 0..8 {
+            assert!(snapshot.set_layout(placement::Layout::Print));
+            assert!(Arc::ptr_eq(&snapshot.scene.mesh, &print_mesh));
+            assert!(snapshot.scene.annotations.measurements.is_empty());
+            assert!(
+                snapshot
+                    .scene
+                    .part_bounds
+                    .iter()
+                    .all(|bounds| bounds[0].z.abs() < 0.001)
+            );
+            assert_eq!(snapshot.checks.measurements[0].distance_mm, 8.0);
+            assert_eq!(snapshot.editor_revision, Some(17));
+            assert_eq!(snapshot.revision, 1);
+            let request = inline_output::Focus {
+                revision: 17,
+                name: "b".into(),
+            };
+            let (_, camera) = focus_part(
+                &snapshot,
+                &request,
+                17,
+                1.0,
+                &snapshot_camera(&snapshot, 1.0),
+            )
+            .ok_or("Print part focus")?;
+            assert_eq!(camera.target, glam::vec3(45.0, 5.0, 1.0));
+            assert!(snapshot.set_layout(placement::Layout::Assembly));
+            assert!(Arc::ptr_eq(&snapshot.scene.mesh, &assembly_mesh));
+            assert!(!snapshot.set_layout(placement::Layout::Assembly));
+        }
+        for layout in [placement::Layout::Assembly, placement::Layout::Print] {
+            snapshot.set_layout(layout);
+            let face = source_face_selector(&snapshot, snapshot.checks.faces[0].id)
+                .ok_or("Source face selector")?;
+            assert!(face.contains("normal = \"z+\""), "{face}");
+            let copied = format!(
+                "local part=cad.box({{width=10,depth=10,height=2}});local face={face};cad.show('copy',part)"
+            );
+            build_script_snapshot(&copied, 2)?;
+            let edge = source_edge_selector(&snapshot, &snapshot.scene.inspected_edges[0])
+                .ok_or("Source edge selector")?;
+            let copied = format!(
+                "local part=cad.box({{width=10,depth=10,height=2}});local edge={edge};part=cad.fillet(part,{{radius=0.2,edges={{edge}}}});cad.show('copy',part)"
+            );
+            build_script_snapshot(&copied, 3)?;
+        }
+        let folder = std::env::temp_dir().join(format!("spice-cad-layout-{}", std::process::id()));
+        export::model_files(source, &folder, export::Target::Print)?;
+        for index in 1..=2 {
+            let shape = opencascade::primitives::Shape::read_step(
+                folder.join(format!("part-{index:02}.step")),
+            )
+            .map_err(|error| error.to_string())?;
+            let bounds = opencascade::bounding_box::aabb(&shape);
+            assert!(bounds.min().z.abs() < 0.001);
+            assert!(
+                (bounds.max() - bounds.min() - glam::dvec3(10.0, 10.0, 2.0))
+                    .abs()
+                    .max_element()
+                    < 0.001
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(folder.join("model.luau")).map_err(|error| error.to_string())?,
+            source
+        );
+        std::fs::remove_dir_all(&folder).map_err(|error| error.to_string())?;
+        let invalid = source.replace("position={x=30}", "position={x=35}");
+        assert!(
+            build_script_snapshot(&invalid, 2)
+                .err()
+                .ok_or("Assembly check must fail")?
+                .contains("Constraint 'gap'")
+        );
+        assert!(export::model_files(&invalid, &folder, export::Target::Print).is_err());
+        assert!(!folder.exists());
+        Ok(())
+    }
+
+    #[test]
     fn inline_focus_selects_the_named_part_and_frames_its_bounds_without_rebuilding()
     -> Result<(), String> {
         let mut snapshot = build_script_snapshot(
@@ -2513,7 +2815,7 @@ mod tests {
             revision: 41,
             name: "far".into(),
         };
-        let mesh = Arc::clone(&snapshot.mesh);
+        let mesh = Arc::clone(&snapshot.scene.mesh);
         let mut previous = snapshot_camera(&snapshot, 1.0);
         previous.yaw = 0.4;
         previous.pitch = -0.15;
@@ -2532,11 +2834,11 @@ mod tests {
             assert_eq!(
                 faces,
                 [
-                    *snapshot.part_faces[1].start(),
-                    *snapshot.part_faces[1].end()
+                    *snapshot.scene.part_faces[1].start(),
+                    *snapshot.scene.part_faces[1].end()
                 ]
             );
-            assert!(faces[0] > *snapshot.part_faces[0].end());
+            assert!(faces[0] > *snapshot.scene.part_faces[0].end());
             assert_eq!(camera.target, glam::vec3(210.0, -40.0, 45.0));
             assert_eq!([camera.yaw, camera.pitch], [previous.yaw, previous.pitch]);
             assert_eq!(selection.ids(), [0; 2]);
@@ -2559,13 +2861,13 @@ mod tests {
                     }
                 }
             }
-            let face = snapshot.faces[&faces[0]];
+            let face = snapshot.scene.faces[&faces[0]];
             assert_eq!(
                 inspection::Selection::select(Some(&selection), face, true)?.ids(),
                 [face.id, 0]
             );
         }
-        assert!(Arc::ptr_eq(&mesh, &snapshot.mesh));
+        assert!(Arc::ptr_eq(&mesh, &snapshot.scene.mesh));
         assert!(focus_part(&snapshot, &request, 42, 1.0, &previous).is_none());
         let missing = inline_output::Focus {
             revision: 41,
@@ -2737,7 +3039,7 @@ mod tests {
                 std::fs::read(folder.join("model.stl")).map_err(|error| error.to_string())?;
             let count = u32::from_le_bytes(bytes[80..84].try_into().expect("STL count"));
             assert_eq!(bytes.len(), 84 + count as usize * 50);
-            assert_eq!(count as usize * 3, expected.mesh.vertices.len());
+            assert_eq!(count as usize * 3, expected.scene.mesh.vertices.len());
             let mut decoded = Vec::with_capacity(count as usize * 3);
             for triangle in bytes[84..].as_chunks::<50>().0 {
                 let values: [f32; 12] = std::array::from_fn(|index| {
@@ -2761,7 +3063,7 @@ mod tests {
                 face_count: 1,
             };
             decoded.validate()?;
-            assert!((decoded.volume_mm3() - expected.mesh.volume_mm3()).abs() < 0.01);
+            assert!((decoded.volume_mm3() - expected.scene.mesh.volume_mm3()).abs() < 0.01);
             assert!(export::model_files(source, &folder, crate::export::Target::Print).is_err());
             std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         }
@@ -2794,7 +3096,7 @@ mod tests {
         for snapshot in [&bracket, &cylinder] {
             for aspect in [0.25, 0.5, 1.0, 2.0] {
                 let matrix = snapshot_camera(snapshot, aspect).matrix(aspect);
-                for vertex in &snapshot.mesh.vertices {
+                for vertex in &snapshot.scene.mesh.vertices {
                     let point = matrix * glam::Vec3::from_array(vertex.position).extend(1.0);
                     assert!(point.w > 0.0);
                     assert!(point.x.abs() <= point.w);
@@ -2834,13 +3136,14 @@ mod tests {
     fn rack_parts_match_the_reference_and_export_on_the_p1s_bed() -> Result<(), String> {
         let source = include_str!("../../models/rack-parts.luau");
         let reference = spice_rack::printing::build_parts(PARAMETERS)?;
-        for print_layout in [false, true] {
+        for layout in [placement::Layout::Assembly, placement::Layout::Print] {
             let kernel = kernel::Kernel::new()?;
-            let source = source
-                .replace("cad.number(12,", "cad.number(0,")
-                .replace("cad.toggle(false,", &format!("cad.toggle({print_layout},"));
+            let source = source.replace("cad.number(12,", "cad.number(0,");
             let model = model::compile(&source)?;
             let mut bodies = model.build(&kernel)?;
+            for (part, body) in model.parts.iter().zip(&mut bodies) {
+                part.placement(layout).apply(body, false)?;
+            }
             assert_eq!(model.parts.len(), 4);
             assert_eq!(bodies.len(), reference.len());
             let meshes = model.meshes(&mut bodies, false)?;
@@ -2859,7 +3162,7 @@ mod tests {
                     .sum();
                 assert!((body.volume()? - volume).abs() < 0.01, "Part {index}");
                 let [minimum, maximum] = body.bounds(true)?;
-                if print_layout {
+                if layout == placement::Layout::Print {
                     assert!(minimum.z.abs() < 0.001);
                     let (_, dimensions) = reference.on_bed()?;
                     assert!(((maximum - minimum) - dimensions).abs().max_element() < 0.001);
@@ -2872,7 +3175,7 @@ mod tests {
             }
             drop(bodies);
             drop(kernel);
-            if print_layout {
+            if layout == placement::Layout::Print {
                 let folder = std::env::temp_dir()
                     .join(format!("spice-cad-rack-parts-{}", std::process::id()));
                 export::model_files(&source, &folder, export::Target::Print)?;
@@ -3094,12 +3397,12 @@ mod tests {
                 })
                 .sum();
             assert!((snapshot.volume_mm3 - volume).abs() < volume * 1e-6);
-            assert!(snapshot.mesh.face_count > 6);
+            assert!(snapshot.scene.mesh.face_count > 6);
             let layout = parameters.layout()?;
             let camera = viewport::Camera::rack(layout.dimensions_mm.to_array());
             let matrix = camera.matrix(1.5);
-            assert!(snapshot.mesh.pick(matrix, [0.0, 0.0]).is_some());
-            assert_eq!(snapshot.mesh.pick(matrix, [-0.99, 0.99]), None);
+            assert!(snapshot.scene.mesh.pick(matrix, [0.0, 0.0]).is_some());
+            assert_eq!(snapshot.scene.mesh.pick(matrix, [-0.99, 0.99]), None);
         }
         Ok(())
     }

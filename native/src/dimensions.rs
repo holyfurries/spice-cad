@@ -31,11 +31,14 @@ pub struct Definitions {
     faces: Vec<Selector>,
     measurements: Vec<Requirement>,
 }
+#[derive(Clone)]
 pub struct NamedFace {
     pub name: String,
     pub id: u32,
     pub point: Vec3,
+    normal: Vec3,
 }
+#[derive(Clone)]
 pub struct Measurement {
     pub line: usize,
     pub name: String,
@@ -45,7 +48,7 @@ pub struct Measurement {
     pub distance_mm: f32,
     pub checked: bool,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Annotations {
     pub faces: Vec<NamedFace>,
     pub measurements: Vec<Measurement>,
@@ -214,10 +217,14 @@ fn planes(mesh: &Mesh) -> BTreeMap<u32, Plane> {
 }
 
 impl Definitions {
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+
     pub fn resolve(
         &self,
         mesh: &Mesh,
-        outputs: &[(usize, std::ops::RangeInclusive<u32>)],
+        outputs: &[(usize, std::ops::RangeInclusive<u32>, Mat4)],
     ) -> Result<Annotations, String> {
         assert!(self.faces.len() <= COUNT_MAX);
         assert!(self.measurements.len() <= COUNT_MAX);
@@ -227,9 +234,9 @@ impl Definitions {
         }
         let planes = planes(mesh);
         for selector in &self.faces {
-            let (_, range) = outputs
+            let (_, range, placement) = outputs
                 .iter()
-                .find(|(solid, _)| *solid == selector.solid)
+                .find(|(solid, _, _)| *solid == selector.solid)
                 .ok_or_else(|| {
                     format!(
                         "Face '{}': select faces on the final solid passed to cad.show",
@@ -258,13 +265,16 @@ impl Definitions {
             annotations.faces.push(NamedFace {
                 name: selector.name.clone(),
                 id: *id,
-                point: (plane.minimum + plane.maximum) * 0.5,
+                point: placement.transform_point3((plane.minimum + plane.maximum) * 0.5),
+                normal: placement
+                    .transform_vector3(Vec3::AXES[selector.axis])
+                    .normalize(),
             });
         }
         for requirement in &self.measurements {
-            let first = &self.faces[requirement.first];
-            let second = &self.faces[requirement.second];
-            if first.axis != second.axis {
+            let first = &annotations.faces[requirement.first];
+            let second = &annotations.faces[requirement.second];
+            if first.normal.cross(second.normal).length_squared() > 1e-8 {
                 return Err(format!(
                     "Measurement '{}': faces must be parallel",
                     requirement.name
@@ -274,7 +284,8 @@ impl Definitions {
                 annotations.faces[requirement.first].point,
                 annotations.faces[requirement.second].point,
             ];
-            let distance_mm = (points[1][first.axis] - points[0][first.axis]).abs();
+            let signed_distance = (points[1] - points[0]).dot(first.normal);
+            let distance_mm = signed_distance.abs();
             if requirement
                 .minimum
                 .is_some_and(|minimum| f64::from(distance_mm + TOLERANCE_MM) < minimum)
@@ -294,17 +305,18 @@ impl Definitions {
                         .map_or("unbounded".into(), |value| value.to_string())
                 ));
             }
-            for axis in [0, 1, 2] {
-                if axis != first.axis {
-                    let center = (points[0][axis] + points[1][axis]) * 0.5;
-                    points[0][axis] = center;
-                    points[1][axis] = center;
-                }
-            }
+            let middle = (points[0] + points[1]) * 0.5;
+            points = [
+                middle - first.normal * signed_distance * 0.5,
+                middle + first.normal * signed_distance * 0.5,
+            ];
+            let axis = (0..3)
+                .find(|axis| first.normal[*axis].abs() > 0.99999)
+                .unwrap_or(3);
             annotations.measurements.push(Measurement {
                 line: requirement.line,
                 name: requirement.name.clone(),
-                axis: first.axis,
+                axis,
                 faces: [
                     annotations.faces[requirement.first].id,
                     annotations.faces[requirement.second].id,
@@ -380,7 +392,7 @@ pub fn draw(
                     && measurement.faces.iter().any(|id| ids.contains(id))
             })
             .map(|measurement| DisplayDimension {
-                direction: ["X", "Y", "Z"][measurement.axis],
+                direction: ["X", "Y", "Z", "Distance"][measurement.axis],
                 points: measurement.points,
                 name: &measurement.name,
                 distance_mm: measurement.distance_mm,
@@ -465,7 +477,7 @@ pub fn draw(
         .map(|measurement| {
             lanes[measurement.axis] += 1;
             DisplayDimension {
-                direction: ["X", "Y", "Z"][measurement.axis],
+                direction: ["X", "Y", "Z", "Distance"][measurement.axis],
                 points: anchors(
                     measurement.axis,
                     measurement.points.map(|point| point[measurement.axis]),
@@ -821,14 +833,15 @@ mod tests {
             ),
         ] {
             let snapshot = crate::build_script_snapshot(&source, 1)?;
-            assert_eq!(snapshot.annotations.faces.len(), 2);
-            assert_eq!(snapshot.annotations.faces[0].name, "top");
-            assert!((snapshot.annotations.faces[0].point.z - height).abs() < TOLERANCE_MM);
+            assert_eq!(snapshot.scene.annotations.faces.len(), 2);
+            assert_eq!(snapshot.scene.annotations.faces[0].name, "top");
+            assert!((snapshot.scene.annotations.faces[0].point.z - height).abs() < TOLERANCE_MM);
             assert!(
-                (snapshot.annotations.measurements[0].distance_mm - height).abs() < TOLERANCE_MM
+                (snapshot.scene.annotations.measurements[0].distance_mm - height).abs()
+                    < TOLERANCE_MM
             );
-            assert!(snapshot.annotations.measurements[0].checked);
-            let selector = selector(&snapshot.mesh, snapshot.annotations.faces[0].id)
+            assert!(snapshot.scene.annotations.measurements[0].checked);
+            let selector = selector(&snapshot.scene.mesh, snapshot.scene.annotations.faces[0].id)
                 .ok_or("Missing selector")?;
             assert!(selector.contains("normal = \"z+\""));
         }
@@ -844,7 +857,7 @@ mod tests {
         assert!(error.contains("ambiguous selector"), "{error}");
         let source = source.replace("normal='z+'", "normal='z+',at=20");
         let snapshot = crate::build_script_snapshot(&source, 1)?;
-        assert!((snapshot.annotations.faces[0].point.z - 20.0).abs() < TOLERANCE_MM);
+        assert!((snapshot.scene.annotations.faces[0].point.z - 20.0).abs() < TOLERANCE_MM);
         let error = crate::build_script_snapshot(&source.replace("at=20", "at=30"), 1)
             .err()
             .ok_or("Expected missing face")?;
@@ -879,7 +892,7 @@ mod tests {
         }
         let reference = source.replace(", min = 2, max = 25", "");
         let snapshot = crate::build_script_snapshot(&reference, 1)?;
-        assert!(!snapshot.annotations.measurements[0].checked);
+        assert!(!snapshot.scene.annotations.measurements[0].checked);
         let perpendicular = source.replace(
             "name = \"top\", normal = \"z+\"",
             "name = \"top\", normal = \"x+\"",

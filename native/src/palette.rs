@@ -31,6 +31,8 @@ pub enum Command {
     Code,
     Split,
     Model,
+    AssemblyLayout,
+    PrintLayout,
     Parameters,
     Diagnostics,
     Display,
@@ -64,6 +66,8 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Code, "View: focus code", "Ctrl+1"),
     (Command::Split, "View: split code and model", "Ctrl+2"),
     (Command::Model, "View: focus model", "Ctrl+3"),
+    (Command::AssemblyLayout, "Model: assembly layout", ""),
+    (Command::PrintLayout, "Model: print layout", ""),
     (Command::Parameters, "View: parameters and properties", ""),
     (
         Command::Diagnostics,

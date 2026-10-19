@@ -74,6 +74,7 @@ impl Camera {
 }
 
 pub struct Draw {
+    pub layout: crate::placement::Layout,
     pub edge_width_px: f32,
     pub edges: Arc<Vec<EdgeSegment>>,
     pub edges_enabled: bool,
@@ -88,6 +89,7 @@ pub struct Draw {
     pub selected_edge: Option<[u32; 2]>,
 }
 struct Gpu {
+    layout: crate::placement::Layout,
     line_pipeline: wgpu::RenderPipeline,
     lines: wgpu::Buffer,
     line_count: u32,
@@ -270,6 +272,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         mapped_at_creation: false,
     });
     state.renderer.write().callback_resources.insert(Gpu {
+        layout: crate::placement::Layout::Assembly,
         line_pipeline,
         lines,
         line_count: 0,
@@ -298,7 +301,7 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get_mut::<Gpu>()
             .expect("Viewport initialized before drawing");
-        if gpu.revision != self.revision {
+        if gpu.revision != self.revision || gpu.layout != self.layout {
             let started = std::time::Instant::now();
             gpu.vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("CAD triangles"),
@@ -315,6 +318,7 @@ impl egui_wgpu::CallbackTrait for Draw {
             }
             gpu.line_count = u32::try_from(self.edges.len()).expect("Edge budget checked");
             gpu.revision = self.revision;
+            gpu.layout = self.layout;
             gpu.uploads += 1;
             gpu.upload_ms = started.elapsed().as_secs_f64() * 1000.0;
             gpu.saved_ms = self

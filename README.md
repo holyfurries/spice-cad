@@ -193,14 +193,15 @@ From the development shell, use `cargo run --release --locked -p spice-cad
 --features rack-tools -- --rack`. The original rack export CLI is explicitly selected
 with `cargo run --locked -p spice-rack`.
 The starter source is embedded in the executable and created once at
-`$XDG_DATA_HOME/spice-cad/models/spice-rack.luau`, or under
+`$XDG_DATA_HOME/spice-cad/models/spice-rack-layouts.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
 **Examples → Spice rack · four parts** opens four named, colored rack pieces with
 the same dovetail dimensions and 0.2 mm clearance as the dedicated rack exporter.
 Set `separation = 0` to inspect the assembly, or increase it to expose the joints.
-Set `print_layout = true`, then choose **Export → 3D print · STEP + STL** to export
-four bed-oriented parts. `parts.json` maps the numbered files to their part names;
+Use **Layout · Assembly / Print** in the toolbar to inspect either arrangement.
+**Export → 3D print · STEP + STL** always exports the four bed-oriented parts,
+regardless of the displayed layout. `parts.json` maps the numbered files to their part names;
 slice each part separately. The original **Spice rack** example remains an unsplit
 blank. Examples open through the normal unsaved-change guard and preserve existing
 personal copies; the new source is `models/rack-parts.luau` in this checkout.
@@ -354,8 +355,34 @@ preserving the declaration and comments. A slider drag commits on release as one
 normal editor undo; checkboxes commit immediately. Enter or leaving a numeric field
 applies it; Escape cancels. Save and Run also commit the active field. Auto Preview
 rebuilds committed edits after a pause. Existing personal example files are preserved;
-the new startup file is `spice-rack.luau`, leaving older `rack.luau` and `rack-parts.luau`
-copies intact. See [navigation and parameter notes](evaluation/navigation.md).
+the new startup file is `spice-rack-layouts.luau`, leaving older rack copies intact.
+See [navigation and parameter notes](evaluation/navigation.md).
+
+Declare part placements alongside the geometry, instead of branching the geometry
+on a layout boolean:
+
+```lua
+local plate = cad.box({ width = 30, depth = 20, height = 4 })
+cad.show("Plate", plate, {
+    assembly = { position = { z = 40 } },
+    print = { rotation = { x = 90 }, position = { y = 4 } },
+})
+```
+
+Rotations are degrees about the solid's source origin, applied X, then Y, then Z;
+translation follows in millimetres. Omitted assembly placement means identity.
+If any part declares a print placement, every part must declare one (`print = {}`
+means identity). Without print placements, exports use the assembly placement.
+The worker builds solids once and caches both scenes; layout switches change no
+source and perform no kernel work. Source edits refresh both caches and retain the
+active layout. A switch uploads the selected cached mesh once to the GPU.
+
+Named face selectors use the original geometry's coordinates. Design checks run in
+assembly coordinates, including rotated and translated parts. Print-layout inline
+measurements are labeled **Assembly**; selecting geometry still measures its actual
+print placement. Copied face/edge selectors convert back to source coordinates.
+Game exports always use assembly placements; print exports always use print placements.
+Print layouts are arrangements of separate parts, which should be sliced separately.
 
 The code pane's **Results** toggle shows collapsible output cards below executed
 `cad.show` and `cad.measure` calls, including multiline calls and calls inside loops.
@@ -523,8 +550,8 @@ declared dimension checks still apply. Each named part exports as a separate obj
 with its own color material. UVs, textures, collision meshes, rigging, and animation
 remain future work. These are static hard-surface asset workflows.
 
-Use **Examples → Rocket engine assembly** to try a three-part asset. Set
-`print_layout` to `true` in its source to place each part on Z=0 for print export.
+Use **Examples → Rocket engine assembly** to try a three-part asset. Its toolbar
+layout switch shows the assembly or each part on Z=0; no source edit is needed for print export.
 The model is a static visual asset.
 
 Multiple `cad.show` calls build an assembly without fusing its solids:

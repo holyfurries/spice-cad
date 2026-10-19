@@ -84,11 +84,11 @@ mod tests {
     fn runtime_outputs_attach_to_calls_and_thumbnails_are_bounded() -> Result<(), String> {
         let source = "local part = cad.box({width=40,depth=30,height=20})\nlocal bottom = cad.face(part,{name='bottom',normal='z-'})\nlocal top = cad.face(part,{name='top',normal='z+'})\ncad.measure('height',{from=bottom,to=top,min=10,max=25})\ncad.show('block',part)\n";
         let snapshot = crate::build_script_snapshot(source, 1)?;
-        assert_eq!(snapshot.outputs.len(), 2);
-        assert_eq!(snapshot.outputs[0].line, 3);
-        assert_eq!(snapshot.outputs[1].line, 4);
+        assert_eq!(snapshot.scene.outputs.len(), 2);
+        assert_eq!(snapshot.scene.outputs[0].line, 3);
+        assert_eq!(snapshot.scene.outputs[1].line, 4);
         assert!(matches!(
-            snapshot.outputs[0].content,
+            snapshot.scene.outputs[0].content,
             Content::Measurement {
                 distance_mm: 20.0,
                 checked: true
@@ -98,7 +98,7 @@ mod tests {
             image: Some(image),
             dimensions,
             volume_mm3,
-        } = &snapshot.outputs[1].content
+        } = &snapshot.scene.outputs[1].content
         else {
             panic!("Expected part thumbnail")
         };
@@ -114,7 +114,7 @@ mod tests {
                 > 1000
         );
         let mut remaining = 0;
-        assert!(render(&snapshot.mesh, snapshot.bounds, &mut remaining).is_none());
+        assert!(render(&snapshot.scene.mesh, snapshot.scene.bounds, &mut remaining).is_none());
         assert_eq!(remaining, 0);
         let moved = crate::build_script_snapshot(
             "local part=cad.box({width=40,depth=30,height=20});cad.show('moved',cad.translate(part,{x=100,y=-50,z=35}))",
@@ -123,7 +123,7 @@ mod tests {
         let Content::Part {
             image: Some(moved_image),
             ..
-        } = &moved.outputs[0].content
+        } = &moved.scene.outputs[0].content
         else {
             panic!("Expected translated thumbnail")
         };

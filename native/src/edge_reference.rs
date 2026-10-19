@@ -88,9 +88,10 @@ mod tests {
             "{} vs {expected_mm3}",
             snapshot.volume_mm3
         );
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         assert_eq!(
             snapshot
+                .scene
                 .inspected_edges
                 .iter()
                 .filter(|edge| edge.spans()[0]
@@ -98,7 +99,7 @@ mod tests {
                 .count(),
             2
         );
-        assert!(snapshot.inspected_edges.iter().any(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.y==20.0 && point.x==0.0))));
+        assert!(snapshot.scene.inspected_edges.iter().any(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.y==20.0 && point.x==0.0))));
         let source = "local p=cad.polygon({{x=0,y=0},{x=40,y=0},{x=20,y=20}});local part=cad.extrude(p,{height=8});local e=cad.edge(part,{name='acute',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});cad.show('acute',cad.chamfer(part,{width=4,edges={e}}))";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         let setback_mm = 4.0 / (2.0 * (std::f64::consts::PI / 8.0).sin());
@@ -106,6 +107,7 @@ mod tests {
         assert!((snapshot.volume_mm3 - (3200.0 - removed_mm3)).abs() < 0.001);
         assert_eq!(
             snapshot
+                .scene
                 .inspected_edges
                 .iter()
                 .filter(|edge| edge.spans()[0]
@@ -113,7 +115,7 @@ mod tests {
                 .count(),
             2
         );
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         Ok(())
     }
 
@@ -127,8 +129,8 @@ mod tests {
                 - std::f64::consts::PI * 3.0 * 3.0 * 8.0
                 - 2.0 * 4.0 * 4.0 / 4.0 * 8.0;
             assert!((snapshot.volume_mm3 - expected_mm3).abs() < 0.001);
-            snapshot.mesh.validate()?;
-            assert_eq!(snapshot.inspected_edges.iter().filter(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Circle { radial, .. } if (radial.length()-3.0).abs()<0.001)).count(), 2);
+            snapshot.scene.mesh.validate()?;
+            assert_eq!(snapshot.scene.inspected_edges.iter().filter(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Circle { radial, .. } if (radial.length()-3.0).abs()<0.001)).count(), 2);
         }
         Ok(())
     }
@@ -138,12 +140,12 @@ mod tests {
         let source = "local p=cad.polygon({{x=0,y=0},{x=40,y=0},{x=40,y=8},{x=8,y=8},{x=8,y=30},{x=0,y=30}});local part=cad.extrude(p,{height=8});local e=cad.edge(part,{name='inside',from={x=8,y=8,z=0},to={x=8,y=8,z=8}});cad.show('inside',cad.chamfer(part,{width=4,edges={e}}))";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert!((snapshot.volume_mm3 - 4000.0).abs() < 0.001);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         let source = "local part=cad.box({width=40,depth=20,height=8});local a=cad.edge(part,{name='round',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});part=cad.fillet(part,{radius=2,edges={a}});local b=cad.edge(part,{name='bevel',from={x=0,y=20,z=0},to={x=0,y=20,z=8}});cad.show('mixed',cad.chamfer(part,{width=4,edges={b}}))";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         let expected = 6400.0 - (1.0 - std::f64::consts::PI / 4.0) * 4.0 * 8.0 - 32.0;
         assert!((snapshot.volume_mm3 - expected).abs() < 0.001);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         Ok(())
     }
 
@@ -154,7 +156,7 @@ mod tests {
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert!(snapshot.volume_mm3 < 8000.0);
         assert!(snapshot.volume_mm3 > 7000.0);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         let base = "local part=cad.box({width=40,depth=20,height=8});local e=cad.edge(part,{name='corner',from={x=40,y=0,z=0},to={x=40,y=0,z=8}});";
         for options in [
             "{width=0}",
@@ -198,9 +200,9 @@ mod tests {
                 "{} vs {expected_mm3}",
                 snapshot.volume_mm3
             );
-            snapshot.mesh.validate()?;
-            assert_eq!(snapshot.inspected_edges.iter().filter(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Circle { radial, .. } if (radial.length()-3.0).abs()<0.001)).count(), 2);
-            assert!(snapshot.inspected_edges.iter().any(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.y==30.0 && point.x==0.0))));
+            snapshot.scene.mesh.validate()?;
+            assert_eq!(snapshot.scene.inspected_edges.iter().filter(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Circle { radial, .. } if (radial.length()-3.0).abs()<0.001)).count(), 2);
+            assert!(snapshot.scene.inspected_edges.iter().any(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.y==30.0 && point.x==0.0))));
         }
         Ok(())
     }
@@ -274,7 +276,7 @@ mod tests {
     fn copied_straight_edge_selector_builds_a_selective_fillet() -> Result<(), String> {
         let base = "local part=cad.box({width=40,depth=20,height=8});";
         let snapshot = crate::build_script_snapshot(&format!("{base}cad.show('base',part)"), 1)?;
-        let edge = snapshot.inspected_edges.iter().find(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.x==40.0 && point.y==0.0))).ok_or("Missing vertical edge")?;
+        let edge = snapshot.scene.inspected_edges.iter().find(|edge| matches!(edge.geometry, crate::inspection::EdgeGeometry::Line(points) if points.iter().all(|point| point.x==40.0 && point.y==0.0))).ok_or("Missing vertical edge")?;
         let selector = selector(edge).ok_or("Missing selector")?;
         let output = crate::build_script_snapshot(
             &format!(
@@ -284,7 +286,7 @@ mod tests {
         )?;
         let expected = 40.0 * 20.0 * 8.0 - (1.0 - std::f64::consts::PI / 4.0) * 4.0 * 8.0;
         assert!((output.volume_mm3 - expected).abs() < expected * 1e-5);
-        output.mesh.validate()?;
+        output.scene.mesh.validate()?;
         Ok(())
     }
 }

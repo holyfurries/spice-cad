@@ -1,5 +1,4 @@
 --!strict
-local print_layout: boolean = cad.toggle(false, { label = "Print layout" })
 local throat_radius: number = cad.number(8, { label = "Throat radius", unit = "mm" })
 local wall: number = cad.number(4, { label = "Wall thickness", unit = "mm" })
 local chamber_top: number = cad.number(75, { label = "Chamber top", unit = "mm" })
@@ -22,10 +21,12 @@ local bell_section = cad.polygon({
 local bell = cad.revolve(bell_section, {})
 local mount = cad.box({ width = 56, depth = 56, height = 5, x = -28, y = -28, z = chamber_top })
 mount = cad.subtract(mount, cad.cylinder({ radius = throat_radius, height = 7, z = chamber_top - 1 }))
-if print_layout then
-	chamber = cad.translate(chamber, { x = 60, z = -chamber_bottom })
-	mount = cad.translate(mount, { x = 120, z = -chamber_top })
-end
-cad.show("Combustion chamber", chamber, { color = { r = 0.24, g = 0.30, b = 0.38 } })
-cad.show("Bell nozzle", bell, { color = { r = 0.58, g = 0.26, b = 0.10 } })
-cad.show("Mount plate", mount, { color = { r = 0.90, g = 0.50, b = 0.12 } })
+cad.show("Combustion chamber", chamber, {
+	color = { r = 0.24, g = 0.30, b = 0.38 },
+	print = { position = { x = 60, z = -chamber_bottom } },
+})
+cad.show("Bell nozzle", bell, { color = { r = 0.58, g = 0.26, b = 0.10 }, print = {} })
+cad.show("Mount plate", mount, {
+	color = { r = 0.90, g = 0.50, b = 0.12 },
+	print = { position = { x = 120, z = -chamber_top } },
+})

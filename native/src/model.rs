@@ -14,10 +14,21 @@ const PART_COUNT_MAX: usize = 32;
 
 #[derive(Clone)]
 pub struct Part {
+    pub assembly: crate::placement::Placement,
+    pub print: Option<crate::placement::Placement>,
     pub line: usize,
     pub name: String,
     pub color: [f32; 3],
     solid: usize,
+}
+
+impl Part {
+    pub fn placement(&self, layout: crate::placement::Layout) -> crate::placement::Placement {
+        match layout {
+            crate::placement::Layout::Assembly => self.assembly,
+            crate::placement::Layout::Print => self.print.unwrap_or(self.assembly),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -377,8 +388,12 @@ pub fn compile(source: &str) -> Result<Model, String> {
                 ));
             }
             let mut color = crate::mesh::DEFAULT_COLOR;
+            let mut assembly = crate::placement::Placement::default();
+            let mut print = None;
             if let Some(options) = options {
-                options_fields(&options, &["color"])?;
+                options_fields(&options, &["color", "assembly", "print"])?;
+                if let Some(options) = options.get::<Option<Table>>("assembly")? { assembly = crate::placement::Placement::from_table(options)?; }
+                if let Some(options) = options.get::<Option<Table>>("print")? { print = Some(crate::placement::Placement::from_table(options)?); }
                 if let Some(rgb) = options.get::<Option<Table>>("color")? {
                     options_fields(&rgb, &["r", "g", "b"])?;
                     for (index, key) in ["r", "g", "b"].into_iter().enumerate() {
@@ -404,7 +419,7 @@ pub fn compile(source: &str) -> Result<Model, String> {
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
             let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten().unwrap_or(1).saturating_sub(1);
-            state.outputs.push(Part { line, name, color, solid });
+            state.outputs.push(Part { assembly, print, line, name, color, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,
@@ -434,6 +449,14 @@ pub fn compile(source: &str) -> Result<Model, String> {
         .map_err(|error| error.to_string())?;
     let mut recipe = std::mem::take(&mut *recipe.borrow_mut());
     let parts = std::mem::take(&mut recipe.outputs);
+    if parts.iter().any(|part| part.print.is_some()) {
+        if let Some(part) = parts.iter().find(|part| part.print.is_none()) {
+            return Err(format!(
+                "Part '{}': declare a print placement for every part",
+                part.name
+            ));
+        }
+    }
     let first = parts
         .first()
         .ok_or("Model must call cad.show(name, solid)")?;
@@ -505,17 +528,22 @@ fn push_operation(recipe: &RefCell<Recipe>, operation: Operation) -> mlua::Resul
 impl Model {
     pub fn annotations(
         &self,
-        mesh: &crate::mesh::Mesh,
-        ranges: &[std::ops::RangeInclusive<u32>],
+        bodies: &mut [Body<'_>],
     ) -> Result<crate::dimensions::Annotations, String> {
+        assert_eq!(bodies.len(), self.parts.len());
+        if self.definitions.is_empty() {
+            return Ok(crate::dimensions::Annotations::default());
+        }
+        let meshes = self.meshes(bodies, false)?;
+        let (mesh, ranges) = crate::mesh::Mesh::combine(&meshes)?;
         assert_eq!(self.parts.len(), ranges.len());
         let outputs: Vec<_> = self
             .parts
             .iter()
-            .zip(ranges)
-            .map(|(part, range)| (part.solid, range.clone()))
+            .zip(&ranges)
+            .map(|(part, range)| (part.solid, range.clone(), part.assembly.matrix()))
             .collect();
-        self.definitions.resolve(mesh, &outputs)
+        self.definitions.resolve(&mesh, &outputs)
     }
     pub fn build<'kernel>(&self, kernel: &'kernel Kernel) -> Result<Vec<Body<'kernel>>, String> {
         assert!(!self.parts.is_empty());
@@ -660,16 +688,17 @@ mod tests {
         assert_eq!(snapshot.parts.len(), 2);
         assert_eq!(snapshot.parts[0].name, "red");
         assert_eq!(snapshot.parts[1].name, "blue");
-        assert_eq!(snapshot.mesh.face_count, 12);
-        assert_eq!(snapshot.faces.len(), 12);
-        assert_eq!(snapshot.inspected_edges.len(), 24);
+        assert_eq!(snapshot.scene.mesh.face_count, 12);
+        assert_eq!(snapshot.scene.faces.len(), 12);
+        assert_eq!(snapshot.scene.inspected_edges.len(), 24);
         assert!((snapshot.volume_mm3 - 2000.0).abs() < 1e-6);
         assert_eq!(
-            snapshot.bounds,
+            snapshot.scene.bounds,
             [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
         );
-        for vertex in &snapshot.mesh.vertices {
+        for vertex in &snapshot.scene.mesh.vertices {
             let index = snapshot
+                .scene
                 .part_faces
                 .iter()
                 .position(|range| range.contains(&vertex.face_id))
@@ -678,13 +707,13 @@ mod tests {
                 vertex.color,
                 crate::mesh::vertex_color(snapshot.parts[index].color)
             );
-            assert!(snapshot.faces.contains_key(&vertex.face_id));
+            assert!(snapshot.scene.faces.contains_key(&vertex.face_id));
         }
-        for edge in &snapshot.inspected_edges {
+        for edge in &snapshot.scene.inspected_edges {
             assert!(edge.segments[0] < edge.segments[1]);
-            assert!(edge.segments[1] as usize <= snapshot.edges.len());
+            assert!(edge.segments[1] as usize <= snapshot.scene.edges.len());
         }
-        assert!(snapshot.mesh.validate().is_err());
+        assert!(snapshot.scene.mesh.validate().is_err());
         Ok(())
     }
 
@@ -692,11 +721,11 @@ mod tests {
     fn named_faces_resolve_on_their_parts_and_measure_across_parts() -> Result<(), String> {
         let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{z=20});local first=cad.face(a,{name='first top',normal='z+'});local second=cad.face(b,{name='second top',normal='z+'});cad.measure('top separation',{from=first,to=second,min=19,max=21});cad.show('lower',a);cad.show('upper',b)";
         let snapshot = crate::build_script_snapshot(source, 1)?;
-        assert_eq!(snapshot.annotations.faces.len(), 2);
-        assert!(snapshot.part_faces[0].contains(&snapshot.annotations.faces[0].id));
-        assert!(snapshot.part_faces[1].contains(&snapshot.annotations.faces[1].id));
-        assert_eq!(snapshot.annotations.measurements[0].distance_mm, 20.0);
-        assert!(snapshot.annotations.measurements[0].checked);
+        assert_eq!(snapshot.scene.annotations.faces.len(), 2);
+        assert!(snapshot.scene.part_faces[0].contains(&snapshot.scene.annotations.faces[0].id));
+        assert!(snapshot.scene.part_faces[1].contains(&snapshot.scene.annotations.faces[1].id));
+        assert_eq!(snapshot.scene.annotations.measurements[0].distance_mm, 20.0);
+        assert!(snapshot.scene.annotations.measurements[0].checked);
         let error = crate::build_script_snapshot(&source.replace("max=21", "max=19"), 1)
             .err()
             .expect("Failed cross-part check");

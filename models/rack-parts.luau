@@ -1,5 +1,4 @@
 --!strict
-local print_layout: boolean = cad.toggle(false, { label = "Print layout" })
 local separation: number = cad.number(12, { label = "Part separation", min = 0, max = 100, step = 1, unit = "mm" })
 local width: number = cad.number(310, { label = "Rack width", min = 100, max = 480, step = 1, unit = "mm" })
 local steps: number = cad.number(5, { label = "Steps", min = 3, max = 8, step = 1 })
@@ -89,20 +88,21 @@ for side = 0, 1 do
 			)
 			part = if section == 0 then cad.union(part, joint) else cad.subtract(part, joint)
 		end
-		if print_layout then
-			part = cad.rotate(part, { axis = "y", angle = if side == 0 then -90 else 90 })
-			part = cad.translate(part, {
-				x = (if side == 0 then section_height else 0) + side * 210,
-				y = section * 210 - y,
-				z = if side == 0 then 0 else width,
-			})
-		else
-			part = cad.translate(part, { x = side * separation, y = section * separation })
-		end
 		local name = (if section == 0 then "Front" else "Rear") .. (if side == 0 then " left" else " right")
 		local color = if side == 0
 			then (if section == 0 then { r = 0.25, g = 0.48, b = 0.68 } else { r = 0.30, g = 0.62, b = 0.44 })
 			else (if section == 0 then { r = 0.80, g = 0.45, b = 0.18 } else { r = 0.60, g = 0.35, b = 0.65 })
-		cad.show(name, part, { color = color })
+		cad.show(name, part, {
+			color = color,
+			assembly = { position = { x = side * separation, y = section * separation } },
+			print = {
+				rotation = { y = if side == 0 then -90 else 90 },
+				position = {
+					x = (if side == 0 then section_height else 0) + side * 210,
+					y = section * 210 - y,
+					z = if side == 0 then 0 else width,
+				},
+			},
+		})
 	end
 end

@@ -94,8 +94,8 @@ impl Client {
                 directory.join("cad.d.luau"),
                 include_str!("../types/cad.luau")
                     .replace("local cad:", "declare cad:")
-                    .split(" =\n")
-                    .next()
+                    .rsplit_once(" =\n")
+                    .map(|(definitions, _)| definitions)
                     .ok_or("Invalid CAD definitions")?
                     .to_owned()
                     + "\n",

@@ -154,13 +154,13 @@ mod tests {
                     "inner={inner}, angle={angle}: {} vs {expected}",
                     snapshot.volume_mm3
                 );
-                snapshot.mesh.validate()?;
-                assert!(snapshot.bounds[0].z.abs() < 0.001);
-                assert!((snapshot.bounds[1].z - 20.0).abs() < 0.001);
+                snapshot.scene.mesh.validate()?;
+                assert!(snapshot.scene.bounds[0].z.abs() < 0.001);
+                assert!((snapshot.scene.bounds[1].z - 20.0).abs() < 0.001);
                 if angle == 90.0 {
-                    assert!(snapshot.bounds[0].truncate().abs().max_element() < 0.001);
-                    assert!((snapshot.bounds[1].x - 10.0).abs() < 0.001);
-                    assert!((snapshot.bounds[1].y - 10.0).abs() < 0.001);
+                    assert!(snapshot.scene.bounds[0].truncate().abs().max_element() < 0.001);
+                    assert!((snapshot.scene.bounds[1].x - 10.0).abs() < 0.001);
+                    assert!((snapshot.scene.bounds[1].y - 10.0).abs() < 0.001);
                 }
             }
         }
@@ -186,7 +186,7 @@ mod tests {
             )?;
             let expected = volume_over_pi * std::f64::consts::PI;
             assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
-            snapshot.mesh.validate()?;
+            snapshot.scene.mesh.validate()?;
         }
         Ok(())
     }
@@ -198,7 +198,7 @@ mod tests {
             crate::build_script_snapshot(include_str!("../../models/revolved-bushing.luau"), 1)?;
         let expected = std::f64::consts::PI * ((256.0 - 25.0) * 4.0 + (100.0 - 25.0) * 16.0);
         assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         for points in [
             "{{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}}",
             "{{x=5,y=20},{x=10,y=20},{x=10,y=0},{x=5,y=0}}",
@@ -209,13 +209,13 @@ mod tests {
             let snapshot = crate::build_script_snapshot(&source, 1)?;
             let expected = 2.0 * std::f64::consts::PI * 75.0 * 20.0 / 4.0;
             assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-5);
-            snapshot.mesh.validate()?;
+            snapshot.scene.mesh.validate()?;
         }
         let source = "local p=cad.polygon({{x=5,y=0},{x=10,y=0},{x=10,y=20},{x=5,y=20}});local part=cad.revolve(p,{angle=90});part=cad.subtract(part,cad.box({width=5,depth=20,height=20,x=5}));cad.show('cut',part)";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert!(snapshot.volume_mm3 > 0.0);
         assert!(snapshot.volume_mm3 < std::f64::consts::PI * 75.0 * 20.0 / 4.0);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         Ok(())
     }
 
@@ -274,7 +274,7 @@ mod tests {
         let area_mm2 = 64.0 * 10.0 + (42.0 - 10.0) * 10.0 + 24.0 * 24.0 * 0.5;
         let expected_mm3 = (area_mm2 - 2.0 * std::f64::consts::PI * 2.0 * 2.0) * 6.0;
         assert!((snapshot.volume_mm3 - expected_mm3).abs() < expected_mm3 * 1e-6);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         {
             let kernel = crate::kernel::Kernel::new()?;
             let points = vec![
@@ -296,7 +296,7 @@ mod tests {
         let source = "--!strict\nlocal p=cad.polygon({{x=0,y=0},{x=10,y=0},{x=0,y=10}})\nlocal a=cad.extrude(p,{height=4})\nlocal b=cad.translate(cad.extrude(p,{height=8}),{x=20})\nlocal part=cad.rotate(cad.union(a,b),{axis='x',angle=90})\ncad.show('reused',part)";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert!((snapshot.volume_mm3 - 600.0).abs() < 1e-4);
-        snapshot.mesh.validate()?;
+        snapshot.scene.mesh.validate()?;
         Ok(())
     }
 

@@ -552,30 +552,36 @@ mod tests {
             let point = matrix.project_point3(point);
             [(point.x + 1.0) * 300.0, (1.0 - point.y) * 300.0]
         };
-        let top = snapshot.inspected_edges.iter().find(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 8.0) && (points[0].y-points[1].y).abs()<TOLERANCE_MM)).ok_or("Top edge")?;
+        let top = snapshot.scene.inspected_edges.iter().find(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 8.0) && (points[0].y-points[1].y).abs()<TOLERANCE_MM)).ok_or("Top edge")?;
         let position = project(top.center());
         let pick = |edges: &[Edge], position| {
             pick_edge(
                 edges,
-                &snapshot.edges,
-                &snapshot.mesh,
+                &snapshot.scene.edges,
+                &snapshot.scene.mesh,
                 matrix,
                 [600.0; 2],
                 position,
             )
         };
         let selected =
-            pick(&snapshot.inspected_edges, position).ok_or("Visible edge not picked")?;
+            pick(&snapshot.scene.inspected_edges, position).ok_or("Visible edge not picked")?;
         assert!((selected.center().z - 8.0).abs() < TOLERANCE_MM);
-        assert!(pick(&snapshot.inspected_edges, [position[0], position[1] + 12.0]).is_none());
         assert!(
             pick(
-                &snapshot.inspected_edges,
+                &snapshot.scene.inspected_edges,
+                [position[0], position[1] + 12.0]
+            )
+            .is_none()
+        );
+        assert!(
+            pick(
+                &snapshot.scene.inspected_edges,
                 project(Vec3::new(20.0, 10.0, 8.0))
             )
             .is_none()
         );
-        let hidden = snapshot.inspected_edges.iter().copied().filter(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 0.0))).collect::<Vec<_>>();
+        let hidden = snapshot.scene.inspected_edges.iter().copied().filter(|edge| matches!(edge.geometry, EdgeGeometry::Line(points) if points.iter().all(|point| point.z == 0.0))).collect::<Vec<_>>();
         assert_eq!(hidden.len(), 4);
         for edge in &hidden {
             assert!(pick(&hidden, project(edge.center())).is_none());
@@ -592,8 +598,8 @@ mod tests {
                 assert!(
                     pick_edge(
                         &hidden,
-                        &snapshot.edges,
-                        &snapshot.mesh,
+                        &snapshot.scene.edges,
+                        &snapshot.scene.mesh,
                         matrix,
                         [6000.0; 2],
                         [(point.x + 1.0) * 3000.0, (1.0 - point.y) * 3000.0]
@@ -609,6 +615,7 @@ mod tests {
     fn rack_lips_have_local_eight_mm_spans_and_tread_separation() -> Result<(), String> {
         let snapshot = crate::build_script_snapshot(include_str!("../../models/rack.luau"), 1)?;
         let lip = snapshot
+            .scene
             .faces
             .values()
             .find(|face| {
@@ -623,6 +630,7 @@ mod tests {
             })
             .ok_or("Missing inner lip face with an 8 mm span")?;
         let top = snapshot
+            .scene
             .faces
             .values()
             .find(|face| {
@@ -631,6 +639,7 @@ mod tests {
             })
             .ok_or("Missing lip top")?;
         let tread = snapshot
+            .scene
             .faces
             .values()
             .find(|face| {
@@ -663,8 +672,8 @@ mod tests {
                     ui,
                     rect,
                     camera.matrix(1.0),
-                    snapshot.bounds,
-                    &snapshot.annotations,
+                    snapshot.scene.bounds,
+                    &snapshot.scene.annotations,
                     Some(&selected),
                 );
             });
@@ -677,9 +686,9 @@ mod tests {
     fn rotated_rectangles_use_boundary_lengths_instead_of_world_bounds() -> Result<(), String> {
         let source = "--!strict\nlocal part=cad.box({width=40,depth=20,height=8})\npart=cad.rotate(part,{axis='z',angle=37})\npart=cad.rotate(part,{axis='y',angle=23})\ncad.show('rotated',part)";
         let snapshot = crate::build_script_snapshot(source, 1)?;
-        assert_eq!(snapshot.faces.len(), 6);
+        assert_eq!(snapshot.scene.faces.len(), 6);
         let mut dimensions = Vec::new();
-        for face in snapshot.faces.values() {
+        for face in snapshot.scene.faces.values() {
             assert!(face.normal.is_some());
             assert_eq!(face.spans.iter().flatten().count(), 2);
             for span in face.spans.iter().flatten() {
@@ -695,8 +704,9 @@ mod tests {
                 4
             );
         }
-        let first = *snapshot.faces.values().next().expect("Box face");
+        let first = *snapshot.scene.faces.values().next().expect("Box face");
         let other = *snapshot
+            .scene
             .faces
             .values()
             .find(|face| {
@@ -724,16 +734,19 @@ mod tests {
             1,
         )?;
         let top = snapshot
+            .scene
             .faces
             .values()
             .find(|face| face.normal.is_some_and(|normal| normal.z > 0.99))
             .ok_or("Top face")?;
         let bottom = snapshot
+            .scene
             .faces
             .values()
             .find(|face| face.normal.is_some_and(|normal| normal.z < -0.99))
             .ok_or("Bottom face")?;
         let curved = snapshot
+            .scene
             .faces
             .values()
             .find(|face| face.normal.is_none())

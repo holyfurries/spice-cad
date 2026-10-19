@@ -187,12 +187,15 @@ mod tests {
             assert!((volume * 1e9 - volumes[index]).abs() < volumes[index] * 0.02);
         }
         assert!(
-            export::model_files(source, &folder.join("invalid-print"), export::Target::Print)
-                .is_err()
+            export::model_files(
+                &source.replace("z = -chamber_bottom", "z = 1"),
+                &folder.join("invalid-print"),
+                export::Target::Print
+            )
+            .is_err()
         );
         assert!(!folder.join("invalid-print").exists());
-        let print_source = source.replace("cad.toggle(false,", "cad.toggle(true,");
-        export::model_files(&print_source, &folder.join("print"), export::Target::Print)?;
+        export::model_files(source, &folder.join("print"), export::Target::Print)?;
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(folder.join("print/parts.json")).unwrap())
                 .map_err(|error| error.to_string())?;
@@ -222,7 +225,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(folder.join("print/model.luau")).unwrap(),
-            print_source
+            source
         );
         std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         Ok(())

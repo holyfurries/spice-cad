@@ -3,6 +3,8 @@ type Face = { _face: "Face" }
 type Profile = { _profile: "Profile" }
 type Edge = { _edge: "Edge" }
 type Point = { x: number, y: number, z: number }
+type Placement =
+	{ position: { x: number?, y: number?, z: number? }?, rotation: { x: number?, y: number?, z: number? }? }
 type BoxOptions = {
 	width: number,
 	depth: number,
@@ -26,7 +28,11 @@ local cad: {
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
-	show: (string, Solid, { color: { r: number, g: number, b: number }? }?) -> (),
+	show: (
+		string,
+		Solid,
+		{ color: { r: number, g: number, b: number }?, assembly: Placement?, print: Placement? }?
+	) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number? }) -> Face,
 	measure: (string, { from: Face, to: Face, min: number?, max: number? }) -> (),
 } =
