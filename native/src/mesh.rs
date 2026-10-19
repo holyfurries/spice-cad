@@ -39,6 +39,28 @@ pub struct Hit {
 }
 
 impl Mesh {
+    pub fn placed(&self, matrix: Mat4, color: [f32; 3]) -> Self {
+        let color = vertex_color(color);
+        Self {
+            face_count: self.face_count,
+            vertices: self
+                .vertices
+                .iter()
+                .map(|vertex| Vertex {
+                    position: matrix
+                        .transform_point3(Vec3::from_array(vertex.position))
+                        .to_array(),
+                    normal: matrix
+                        .transform_vector3(Vec3::from_array(vertex.normal))
+                        .normalize_or_zero()
+                        .to_array(),
+                    color,
+                    ..*vertex
+                })
+                .collect(),
+        }
+    }
+
     pub fn combine(meshes: &[Self]) -> Result<(Self, Vec<std::ops::RangeInclusive<u32>>), String> {
         let count: usize = meshes.iter().map(|mesh| mesh.vertices.len()).sum();
         if meshes.is_empty() || meshes.len() > 32 || count > 300000 {

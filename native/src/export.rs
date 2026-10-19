@@ -20,7 +20,13 @@ pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), St
     let model = model::compile(source)?;
     let kernel = Kernel::new()?;
     let mut bodies = model.build(&kernel)?;
-    model.annotations(&mut bodies)?;
+    let canonical_meshes = if target == Target::Print || model.has_annotations() {
+        let meshes = model.meshes(&mut bodies, false)?;
+        model.annotations(&meshes)?;
+        meshes
+    } else {
+        Vec::new()
+    };
     let layout = if target == Target::Print {
         crate::placement::Layout::Print
     } else {
@@ -29,7 +35,15 @@ pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), St
     for (part, body) in model.parts.iter().zip(&mut bodies) {
         part.placement(layout).apply(body, false)?;
     }
-    let meshes = model.meshes(&mut bodies, target == Target::Game)?;
+    let meshes = if target == Target::Game {
+        model.meshes(&mut bodies, true)?
+    } else {
+        canonical_meshes
+            .iter()
+            .zip(&model.parts)
+            .map(|(mesh, part)| mesh.placed(part.placement(layout).matrix(), part.color))
+            .collect()
+    };
     let mut files = Vec::new();
     if target == Target::Game {
         files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));

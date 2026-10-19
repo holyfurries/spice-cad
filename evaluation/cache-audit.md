@@ -78,6 +78,19 @@ with all targets/features and warnings denied, and formatting passed.
 
 ## Next work, in order
 
+First follow-up implemented: preview tessellation and edge sampling now happen
+once per canonical part. Both layouts transform those vertices, normals, sampled
+edges and analytic inspection data. Volume is computed once. Constraint resolution
+reuses the canonical meshes, and print export transforms the canonical print mesh.
+Tight layout bounds still come from native geometry rather than transformed AABB
+corners. Game exports retain their distinct coarser tessellation tolerances.
+All 118 tests pass, including arbitrarily rotated cylinders with tight bounds,
+stable face IDs, rotated normals and preserved circle radii. One subsequent
+release check measured 199 ms for the rack and 120 ms for the rocket; these are
+individual diagnostic samples, not controlled before/after medians. Volume work
+moved into the scene interval, so individual stage timings are not comparable
+with the earlier breakdown.
+
 1. Tessellate canonical parts once per build and derive rigidly transformed scene
    meshes/edges; reuse canonical volume. Preserve tight bounds, face IDs, normals,
    constraint coordinates, and mesh tolerances with rotated/curved regressions.

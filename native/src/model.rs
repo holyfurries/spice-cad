@@ -101,6 +101,12 @@ pub struct Model {
     pub script_ms: f64,
 }
 
+pub struct Geometry {
+    pub mesh: crate::mesh::Mesh,
+    pub edges: crate::inspection::Edges,
+    pub volume_mm3: f64,
+}
+
 pub fn read_source(path: &Path) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut source = String::new();
@@ -526,16 +532,19 @@ fn push_operation(recipe: &RefCell<Recipe>, operation: Operation) -> mlua::Resul
 }
 
 impl Model {
+    pub fn has_annotations(&self) -> bool {
+        !self.definitions.is_empty()
+    }
+
     pub fn annotations(
         &self,
-        bodies: &mut [Body<'_>],
+        meshes: &[crate::mesh::Mesh],
     ) -> Result<crate::dimensions::Annotations, String> {
-        assert_eq!(bodies.len(), self.parts.len());
+        assert_eq!(meshes.len(), self.parts.len());
         if self.definitions.is_empty() {
             return Ok(crate::dimensions::Annotations::default());
         }
-        let meshes = self.meshes(bodies, false)?;
-        let (mesh, ranges) = crate::mesh::Mesh::combine(&meshes)?;
+        let (mesh, ranges) = crate::mesh::Mesh::combine(meshes)?;
         assert_eq!(self.parts.len(), ranges.len());
         let outputs: Vec<_> = self
             .parts

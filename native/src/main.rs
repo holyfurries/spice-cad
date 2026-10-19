@@ -321,18 +321,34 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let kernel = kernel::Kernel::new()?;
     let start = Instant::now();
     let mut bodies = model.build(&kernel)?;
-    let mut volume_mm3 = 0.0;
-    for body in &bodies {
-        volume_mm3 += body.volume()?;
-    }
     let build_ms = start.elapsed().as_secs_f64() * 1000.0;
     let start = Instant::now();
-    let checks = model.annotations(&mut bodies)?;
-    let scene = build_scene(&model, &mut bodies, placement::Layout::Assembly, &checks)?;
+    let meshes = model.meshes(&mut bodies, false)?;
+    let checks = model.annotations(&meshes)?;
+    let geometry = bodies
+        .iter_mut()
+        .zip(meshes)
+        .map(|(body, mesh)| {
+            Ok(model::Geometry {
+                mesh,
+                edges: body.edges()?,
+                volume_mm3: body.volume()?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let volume_mm3 = geometry.iter().map(|geometry| geometry.volume_mm3).sum();
+    let scene = build_scene(
+        &model,
+        &mut bodies,
+        &geometry,
+        placement::Layout::Assembly,
+        &checks,
+    )?;
     let alternate = if model.parts.iter().any(|part| part.print.is_some()) {
         Some(build_scene(
             &model,
             &mut bodies,
+            &geometry,
             placement::Layout::Print,
             &checks,
         )?)
@@ -362,15 +378,25 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
 fn build_scene(
     model: &model::Model,
     bodies: &mut [kernel::Body<'_>],
+    geometry: &[model::Geometry],
     layout: placement::Layout,
     checks: &dimensions::Annotations,
 ) -> Result<Scene, String> {
     assert_eq!(bodies.len(), model.parts.len());
+    assert_eq!(geometry.len(), bodies.len());
     assert!(!bodies.is_empty());
     for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
         part.placement(layout).apply(body, false)?;
     }
-    let meshes = model.meshes(bodies, false)?;
+    let meshes: Vec<_> = geometry
+        .iter()
+        .zip(&model.parts)
+        .map(|(geometry, part)| {
+            geometry
+                .mesh
+                .placed(part.placement(layout).matrix(), part.color)
+        })
+        .collect();
     let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
     let mut outputs = Vec::with_capacity(model.parts.len() + 64);
     let mut part_bounds = Vec::with_capacity(model.parts.len());
@@ -379,7 +405,13 @@ fn build_scene(
         glam::Vec3::splat(f32::NEG_INFINITY),
     ];
     let mut remaining = thumbnail::PIXEL_VISITS_MAX;
-    for ((part, body), mesh) in model.parts.iter().zip(bodies.iter()).zip(&meshes) {
+    for (((part, body), mesh), geometry) in model
+        .parts
+        .iter()
+        .zip(bodies.iter())
+        .zip(&meshes)
+        .zip(geometry)
+    {
         let part_box = body.bounds(true)?.map(|point| point.as_vec3());
         bounds[0] = bounds[0].min(part_box[0]);
         bounds[1] = bounds[1].max(part_box[1]);
@@ -390,7 +422,7 @@ fn build_scene(
             content: inline_output::Content::Part {
                 image: thumbnail::render(mesh, part_box, &mut remaining),
                 dimensions: part_box[1] - part_box[0],
-                volume_mm3: body.volume()?,
+                volume_mm3: geometry.volume_mm3,
             },
         });
     }
@@ -399,20 +431,31 @@ fn build_scene(
         segments: Vec::new(),
     };
     let mut part_segments = Vec::with_capacity(bodies.len());
-    for body in bodies.iter_mut() {
-        let part_edges = body.edges()?;
+    for (part, geometry) in model.parts.iter().zip(geometry) {
+        let matrix = part.placement(layout).matrix();
+        let part_edges = &geometry.edges;
         let offset = edges.segments.len() as u32;
         part_segments.push(offset..offset + part_edges.segments.len() as u32);
         if edges.segments.len() + part_edges.segments.len() > 131072 {
             return Err("Assembly exceeds its display edge budget".into());
         }
+        edges.items.extend(part_edges.items.iter().map(|edge| {
+            let mut edge = edge.transformed(matrix);
+            edge.segments = edge.segments.map(|index| index + offset);
+            edge
+        }));
         edges
-            .items
-            .extend(part_edges.items.into_iter().map(|mut edge| {
-                edge.segments = edge.segments.map(|index| index + offset);
-                edge
+            .segments
+            .extend(part_edges.segments.iter().map(|segment| {
+                mesh::EdgeSegment {
+                    start: matrix
+                        .transform_point3(glam::Vec3::from_array(segment.start))
+                        .to_array(),
+                    end: matrix
+                        .transform_point3(glam::Vec3::from_array(segment.end))
+                        .to_array(),
+                }
             }));
-        edges.segments.extend(part_edges.segments);
     }
     let faces = inspection::faces(&mesh)?;
     let annotations = if layout == placement::Layout::Assembly {
@@ -2700,6 +2743,52 @@ fn benchmark() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_curves_keep_tight_bounds_face_ids_and_rotated_normals() -> Result<(), String> {
+        let source = "local part=cad.cylinder({radius=10,height=20});cad.show('curved',part,{assembly={rotation={x=30,y=45,z=15},position={x=50}},print={rotation={x=90},position={z=10}}})";
+        let model = model::compile(source)?;
+        let mut snapshot = build_script_snapshot(source, 1)?;
+        let kernel = kernel::Kernel::new()?;
+        let mut bodies = model.build(&kernel)?;
+        let canonical = model.meshes(&mut bodies, false)?.remove(0);
+        for layout in [placement::Layout::Assembly, placement::Layout::Print] {
+            snapshot.set_layout(layout);
+            let pose = model.parts[0].placement(layout);
+            pose.apply(&mut bodies[0], false)?;
+            let exact = bodies[0].bounds(true)?.map(|point| point.as_vec3());
+            assert!((snapshot.scene.bounds[0] - exact[0]).abs().max_element() < 0.001);
+            assert!((snapshot.scene.bounds[1] - exact[1]).abs().max_element() < 0.001);
+            pose.apply(&mut bodies[0], true)?;
+            assert_eq!(snapshot.scene.mesh.vertices.len(), canonical.vertices.len());
+            for (actual, source) in snapshot.scene.mesh.vertices.iter().zip(&canonical.vertices) {
+                assert_eq!(actual.face_id, source.face_id);
+                let position = pose
+                    .matrix()
+                    .transform_point3(glam::Vec3::from_array(source.position));
+                let normal = pose
+                    .matrix()
+                    .transform_vector3(glam::Vec3::from_array(source.normal));
+                assert!(position.distance(glam::Vec3::from_array(actual.position)) < 0.001);
+                assert!(normal.dot(glam::Vec3::from_array(actual.normal)) > 0.9999);
+            }
+            assert!(
+                snapshot
+                    .scene
+                    .inspected_edges
+                    .iter()
+                    .filter(|edge| matches!(edge.geometry, inspection::EdgeGeometry::Circle { .. }))
+                    .count()
+                    >= 2
+            );
+            for edge in &snapshot.scene.inspected_edges {
+                if let inspection::EdgeGeometry::Circle { radial, .. } = edge.geometry {
+                    assert!((radial.length() - 10.0).abs() < 0.001);
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn cached_layouts_preserve_assembly_checks_and_select_print_placements_for_export()

@@ -23,6 +23,22 @@ pub enum EdgeGeometry {
 }
 
 impl Edge {
+    pub fn transformed(self, matrix: Mat4) -> Self {
+        let geometry = match self.geometry {
+            EdgeGeometry::Line(points) => {
+                EdgeGeometry::Line(points.map(|point| matrix.transform_point3(point)))
+            }
+            EdgeGeometry::Circle { center, radial } => EdgeGeometry::Circle {
+                center: matrix.transform_point3(center),
+                radial: matrix.transform_vector3(radial),
+            },
+            EdgeGeometry::Other { center } => EdgeGeometry::Other {
+                center: matrix.transform_point3(center),
+            },
+        };
+        Self { geometry, ..self }
+    }
+
     pub fn from_samples(segments: [u32; 2], samples: [DVec3; 17]) -> Self {
         assert!(segments[0] < segments[1]);
         assert!(samples.iter().all(|point| point.is_finite()));
