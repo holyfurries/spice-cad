@@ -247,7 +247,9 @@ mod tests {
         );
         let folder =
             std::env::temp_dir().join(format!("spice-cad-missing-edge-{}", std::process::id()));
-        assert!(crate::export::model_files(&missing, &folder).is_err());
+        assert!(
+            crate::export::model_files(&missing, &folder, crate::export::Target::Print).is_err()
+        );
         assert!(!folder.exists());
         let aliases = format!(
             "{base}local alias=cad.edge(part,{{name='alias',from={{x=40,y=0,z=8}},to={{x=40,y=0,z=0}}}});cad.show('bad',cad.fillet(part,{{radius=2,edges={{edge,alias}}}}))"

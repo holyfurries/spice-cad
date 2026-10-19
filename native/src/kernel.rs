@@ -765,6 +765,20 @@ impl Body<'_> {
     }
 
     pub fn mesh(&mut self) -> Result<crate::mesh::Mesh, String> {
+        self.mesh_with_tolerance(0.02, 15.0)
+    }
+
+    pub fn game_mesh(&mut self) -> Result<crate::mesh::Mesh, String> {
+        self.mesh_with_tolerance(0.25, 30.0)
+    }
+
+    fn mesh_with_tolerance(
+        &mut self,
+        chord_mm: f64,
+        angle_deg: f64,
+    ) -> Result<crate::mesh::Mesh, String> {
+        assert!(chord_mm > 0.0);
+        assert!(angle_deg > 0.0);
         let mut output = std::ptr::null_mut();
         let mut failed = 0;
         let mut lamina = 0;
@@ -773,9 +787,9 @@ impl Body<'_> {
                 &mut output,
                 &mut failed,
                 &mut lamina,
-                0.02,
-                15.0,
-                15.0,
+                chord_mm,
+                angle_deg,
+                angle_deg,
                 0.0,
                 0.0,
                 0,

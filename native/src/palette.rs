@@ -25,6 +25,7 @@ pub enum Command {
     SaveAs,
     AutoPreview,
     Export,
+    ExportGame,
     Find,
     Replace,
     Code,
@@ -55,6 +56,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Run, "Model: run source", "Ctrl+Enter"),
     (Command::Save, "File: save model", "Ctrl+S"),
     (Command::Export, "Model: export STEP and STL", ""),
+    (Command::ExportGame, "Model: export game asset GLB", ""),
     (Command::Find, "Editor: find", "Ctrl+F"),
     (Command::Replace, "Editor: replace", "Ctrl+H"),
     (Command::Code, "View: focus code", "Ctrl+1"),
@@ -116,6 +118,7 @@ impl Availability {
             | Command::Split
             | Command::Vim => self.source,
             Command::Export => self.export,
+            Command::ExportGame => self.source && self.export,
             Command::Frame => self.model,
             _ => true,
         }

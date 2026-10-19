@@ -258,7 +258,7 @@ mod tests {
         let folder =
             std::env::temp_dir().join(format!("spice-cad-revolve-large-{}", std::process::id()));
         assert!(
-            crate::export::model_files(source, &folder)
+            crate::export::model_files(source, &folder, crate::export::Target::Print)
                 .err()
                 .is_some_and(|error| error.contains("P1S"))
         );

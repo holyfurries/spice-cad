@@ -18,6 +18,7 @@ mod document;
 mod edge_reference;
 mod export;
 mod files;
+mod game_asset;
 mod inspection;
 mod interface;
 mod kernel;
@@ -71,18 +72,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        [flag, path, folder] if flag == "--export-model" => {
+        [flag, path, folder] if flag == "--export-model" || flag == "--export-game" => {
             let source = model::read_source(std::path::Path::new(path))?;
-            export::model_files(&source, std::path::Path::new(folder))?;
-            println!("Exported native STEP, STL, and source to {folder}");
+            let target = if flag == "--export-game" {
+                export::Target::Game
+            } else {
+                export::Target::Print
+            };
+            export::model_files(&source, std::path::Path::new(folder), target)?;
+            println!("Exported {} to {folder}", target.description());
             return Ok(());
         }
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY]"
+                    "Usage: spice-cad [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]"
                 } else {
-                    "Usage: spice-cad [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY]"
+                    "Usage: spice-cad [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]"
                 })
                     .into(),
             );
@@ -117,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 enum Command {
     ExportScript {
+        target: export::Target,
         source: String,
         folder: std::path::PathBuf,
     },
@@ -195,7 +202,7 @@ impl Worker {
             .spawn(move || {
                 while let Ok(command) = requests.recv() {
                     let result = match command {
-                        Command::ExportScript { source, folder } => export::model_files(&source, &folder).map(|()| Outcome::Exported(format!("Exported native STEP, STL, and source to {}", folder.display()))),
+                        Command::ExportScript { source, folder, target } => export::model_files(&source, &folder, target).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
                         Command::Script { source, editor_revision, revision, saved_at } => {
                             let source = source.to_string();
                             build_script_snapshot(&source, revision).map(|mut snapshot| { snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot)) })
@@ -556,7 +563,7 @@ impl Editor {
                 })
     }
 
-    fn export(&mut self) -> Result<(), String> {
+    fn export(&mut self, target: export::Target) -> Result<(), String> {
         if !self.can_export() {
             return Err("Run the current code successfully before exporting".into());
         }
@@ -573,6 +580,7 @@ impl Editor {
                     .map_err(|error| error.to_string())?
                     .as_nanos();
                 Command::ExportScript {
+                    target,
                     source: source.clone(),
                     folder: format!("output/native/model-{stamp}").into(),
                 }
@@ -581,7 +589,7 @@ impl Editor {
         match self.worker.commands.try_send(command) {
             Ok(()) => {
                 self.work = WorkerState::Export;
-                self.message = "Generating and validating STEP/STL exports…".into();
+                self.message = format!("Generating and validating {}…", target.description());
                 Ok(())
             }
             Err(mpsc::TrySendError::Disconnected(_)) => {
@@ -916,6 +924,7 @@ impl eframe::App for Editor {
         }
         let mut example_requested = None;
         let mut export_requested = false;
+        let mut export_target = export::Target::Print;
         if let Some(selection) = palette_selection {
             match selection {
                 palette::Selection::Cancel => self.code_state.focus(),
@@ -945,6 +954,10 @@ impl eframe::App for Editor {
                             }
                         }
                         Navigation::Export => export_requested = true,
+                        Navigation::ExportGame => {
+                            export_requested = true;
+                            export_target = export::Target::Game;
+                        }
                         Navigation::Find | Navigation::Replace => {
                             self.show_code = true;
                             self.code_state
@@ -1212,22 +1225,27 @@ impl eframe::App for Editor {
                     }
                 }
                 let can_export = self.can_export();
-                export_requested |= ui
-                    .add_enabled(
-                        can_export,
-                        egui::Button::new(if self.script.is_some() {
-                            "Export"
-                        } else {
-                            "Export P1S parts"
-                        }),
-                    )
-                    .on_hover_text(if can_export {
-                        "Export validated STEP and STL for slicing"
-                    } else {
-                        "Run the current code successfully before exporting"
+                if self.script.is_some() {
+                    ui.add_enabled_ui(can_export, |ui| {
+                        ui.menu_button("Export", |ui| {
+                            if ui.button("3D print · STEP + STL").clicked() {
+                                export_requested = true;
+                                ui.close();
+                            }
+                            if ui.button("Game asset · GLB").clicked() {
+                                export_requested = true;
+                                export_target = export::Target::Game;
+                                ui.close();
+                            }
+                        });
                     })
-                    .on_disabled_hover_text("Run the current code successfully before exporting")
-                    .clicked();
+                    .response
+                    .on_disabled_hover_text("Run the current code successfully before exporting");
+                } else {
+                    export_requested |= ui
+                        .add_enabled(can_export, egui::Button::new("Export P1S parts"))
+                        .clicked();
+                }
                 if self.script.is_some() {
                     ui.separator();
                     if ui
@@ -1648,7 +1666,7 @@ impl eframe::App for Editor {
             }
         }
         if export_requested {
-            if let Err(error) = self.export() {
+            if let Err(error) = self.export(export_target) {
                 self.message = error;
             }
         }
@@ -2387,7 +2405,7 @@ mod tests {
             let folder =
                 std::env::temp_dir().join(format!("spice-cad-curved-{}", std::process::id()));
             let folder = folder.with_extension(index.to_string());
-            export::model_files(source, &folder)?;
+            export::model_files(source, &folder, crate::export::Target::Print)?;
             let expected = build_script_snapshot(source, 1)?;
             let shape = opencascade::primitives::Shape::read_step(folder.join("model.step"))
                 .map_err(|error| error.to_string())?;
@@ -2483,7 +2501,7 @@ mod tests {
             };
             decoded.validate()?;
             assert!((decoded.volume_mm3() - expected.mesh.volume_mm3()).abs() < 0.01);
-            assert!(export::model_files(source, &folder).is_err());
+            assert!(export::model_files(source, &folder, crate::export::Target::Print).is_err());
             std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         }
         Ok(())
@@ -2544,7 +2562,8 @@ mod tests {
                 "rest on Z=0",
             ),
         ] {
-            let error = export::model_files(source, &folder).expect_err("Unsafe export must fail");
+            let error = export::model_files(source, &folder, crate::export::Target::Print)
+                .expect_err("Unsafe export must fail");
             assert!(error.contains(message), "{error}");
             assert!(!folder.exists());
         }

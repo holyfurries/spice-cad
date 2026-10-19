@@ -737,10 +737,12 @@ mod tests {
             std::process::id()
         ));
         assert!(!folder.exists());
-        let error = crate::export::model_files(&invalid, &folder)
-            .expect_err("Invalid constraints must block export");
-        assert!(error.contains("Constraint 'height'"), "{error}");
-        assert!(!folder.exists());
+        for target in [crate::export::Target::Print, crate::export::Target::Game] {
+            let error = crate::export::model_files(&invalid, &folder, target)
+                .expect_err("Invalid constraints must block export");
+            assert!(error.contains("Constraint 'height'"), "{error}");
+            assert!(!folder.exists());
+        }
         let reference = source.replace(", min = 2, max = 25", "");
         let snapshot = crate::build_script_snapshot(&reference, 1)?;
         assert!(!snapshot.annotations.measurements[0].checked);

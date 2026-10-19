@@ -448,7 +448,7 @@ Check a model without opening a window:
 nix develop -c cargo run --release --locked -p spice-cad -- --check-model models/mounting-bracket.luau
 ```
 
-Click **Export STEP + STL** to create a new `output/native/model-<timestamp>/`
+Choose **Export → 3D print · STEP + STL** to create a new `output/native/model-<timestamp>/`
 directory. Or choose a new directory from the command line:
 
 ```sh
@@ -466,6 +466,28 @@ surfaces; analytic surfaces are converted to NURBS, and some intersection curves
 may be fitted at the kernel's tolerance. Conversion must preserve volume within
 `1e-5` relative plus `0.001 mm³`, or export is cancelled. STL uses a 0.02 mm chord
 tolerance and passes the same closed-mesh audit as the viewport.
+
+For static game props and vehicle parts, choose **Export → Game asset · GLB**
+or use the command palette's **Model: export game asset GLB**:
+
+```sh
+nix develop -c cargo run --release --locked -p spice-cad -- --export-game models/revolved-bushing.luau output/game-bushing
+```
+
+This creates `model.glb`, the exact `model.luau`, and `GAME_ASSET.md` in a new
+directory. The GLB contains an indexed triangle mesh with smooth normals within
+CAD faces, hard boundaries between faces, and a neutral material. It uses coarser
+0.25 mm chord / 30° angular tessellation to reduce curved-surface triangle counts;
+this is not a fixed polygon budget or automatic LOD generation. Printing retains
+its finer tessellation and native solid geometry.
+
+Game exports follow [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html):
+metres, right-handed coordinates, Y up. CAD `(x, y, z)` becomes `(x, z, -y) / 1000`.
+The source origin stays the pivot, including negative coordinates; game assets
+have no P1S envelope or bed-placement requirement. Closed-mesh validation and
+declared dimension checks still apply. Currently each export contains one solid;
+multiple objects, material assignment, UVs, textures, collision meshes, rigging,
+and animation remain future work. These are static hard-surface asset workflows.
 
 The host runs `luau-analyze` in strict mode against the exact source snapshot and
 the API type context in `native/types/cad.luau` before executing it with `mlua`.
