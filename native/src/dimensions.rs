@@ -19,6 +19,7 @@ struct Selector {
     at: Option<f32>,
 }
 struct Requirement {
+    line: usize,
     name: String,
     first: usize,
     second: usize,
@@ -36,6 +37,7 @@ pub struct NamedFace {
     pub point: Vec3,
 }
 pub struct Measurement {
+    pub line: usize,
     pub name: String,
     axis: usize,
     faces: [u32; 2],
@@ -114,7 +116,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
     let shared = Rc::clone(&definitions);
     cad.set(
         "measure",
-        lua.create_function(move |_, (name, options): (String, Table)| {
+        lua.create_function(move |lua, (name, options): (String, Table)| {
             valid_name(&name)?;
             crate::model::options_fields(&options, &["from", "to", "min", "max"])?;
             let first = options.get::<AnyUserData>("from")?.borrow::<Face>()?.0;
@@ -152,6 +154,11 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
                 ));
             }
             definitions.measurements.push(Requirement {
+                line: lua
+                    .inspect_stack(1, |debug| debug.current_line())
+                    .flatten()
+                    .unwrap_or(1)
+                    .saturating_sub(1),
                 name,
                 first,
                 second,
@@ -295,6 +302,7 @@ impl Definitions {
                 }
             }
             annotations.measurements.push(Measurement {
+                line: requirement.line,
                 name: requirement.name.clone(),
                 axis: first.axis,
                 faces: [
@@ -737,6 +745,7 @@ mod tests {
         let annotations = Annotations {
             faces: Vec::new(),
             measurements: vec![Measurement {
+                line: 0,
                 name: "height".into(),
                 axis: 2,
                 faces: [1, 2],

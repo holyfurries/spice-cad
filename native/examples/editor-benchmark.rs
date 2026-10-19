@@ -9,6 +9,12 @@
     reason = "The renderer benchmark does not exercise application editor actions"
 )]
 mod code_editor;
+#[path = "../src/inline_output.rs"]
+#[expect(
+    dead_code,
+    reason = "The editor benchmark does not generate CAD results"
+)]
+mod inline_output;
 #[path = "../src/interface.rs"]
 #[expect(
     dead_code,

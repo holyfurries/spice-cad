@@ -14,6 +14,7 @@ const PART_COUNT_MAX: usize = 32;
 
 #[derive(Clone)]
 pub struct Part {
+    pub line: usize,
     pub name: String,
     pub color: [f32; 3],
     solid: usize,
@@ -369,7 +370,7 @@ pub fn compile(source: &str) -> Result<Model, String> {
     let state = Rc::clone(&recipe);
     cad.set(
         "show",
-        lua.create_function(move |_, (name, solid, options): (String, AnyUserData, Option<Table>)| {
+        lua.create_function(move |lua, (name, solid, options): (String, AnyUserData, Option<Table>)| {
             if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
                 return Err(mlua::Error::RuntimeError(
                     "Output name must contain 1–80 bytes without control characters".into(),
@@ -402,7 +403,8 @@ pub fn compile(source: &str) -> Result<Model, String> {
             if state.outputs.iter().any(|part| part.solid == solid) {
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
-            state.outputs.push(Part { name, color, solid });
+            let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten().unwrap_or(1).saturating_sub(1);
+            state.outputs.push(Part { line, name, color, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,

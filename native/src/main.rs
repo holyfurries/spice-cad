@@ -19,6 +19,7 @@ mod edge_reference;
 mod export;
 mod files;
 mod game_asset;
+mod inline_output;
 mod inspection;
 mod interface;
 mod kernel;
@@ -35,6 +36,7 @@ mod save;
 mod search;
 mod syntax;
 mod text_buffer;
+mod thumbnail;
 mod viewport;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -165,6 +167,7 @@ impl ModelRevision {
     }
 }
 struct Snapshot {
+    outputs: Arc<Vec<inline_output::Entry>>,
     parts: Vec<model::Part>,
     part_faces: Vec<std::ops::RangeInclusive<u32>>,
     inspected_edges: Vec<inspection::Edge>,
@@ -256,6 +259,7 @@ fn build_snapshot(
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let volume_mm3 = mesh.volume_mm3();
     Ok(Snapshot {
+        outputs: Arc::new(Vec::new()),
         parts: Vec::new(),
         part_faces: Vec::new(),
         inspected_edges: edges.items,
@@ -300,6 +304,20 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let start = Instant::now();
     let meshes = model.meshes(&mut bodies, false)?;
     let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
+    let mut outputs = Vec::with_capacity(model.parts.len() + 64);
+    let mut remaining = thumbnail::PIXEL_VISITS_MAX;
+    for ((part, body), mesh) in model.parts.iter().zip(&bodies).zip(&meshes) {
+        let bounds = body.bounds(true)?.map(|point| point.as_vec3());
+        outputs.push(inline_output::Entry {
+            line: part.line,
+            name: part.name.clone(),
+            content: inline_output::Content::Part {
+                image: thumbnail::render(mesh, bounds, &mut remaining),
+                dimensions: bounds[1] - bounds[0],
+                volume_mm3: body.volume()?,
+            },
+        });
+    }
     let mut edges = inspection::Edges {
         items: Vec::new(),
         segments: Vec::new(),
@@ -321,7 +339,19 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
     let annotations = model.annotations(&mesh, &part_faces)?;
+    for measurement in &annotations.measurements {
+        outputs.push(inline_output::Entry {
+            line: measurement.line,
+            name: measurement.name.clone(),
+            content: inline_output::Content::Measurement {
+                distance_mm: measurement.distance_mm,
+                checked: measurement.checked,
+            },
+        });
+    }
+    outputs.sort_by_key(|output| output.line);
     Ok(Snapshot {
+        outputs: Arc::new(outputs),
         inspected_edges: edges.items,
         faces,
         bounds,
@@ -754,6 +784,11 @@ impl Editor {
                 } else {
                     match result {
                         Ok(Outcome::Model(snapshot)) => {
+                            if let Some(revision) = snapshot.editor_revision {
+                                self.code_state
+                                    .outputs
+                                    .set(revision, Arc::clone(&snapshot.outputs));
+                            }
                             if self.script.is_some()
                                 && self.frame_next_model
                                 && self.script.as_ref().is_some_and(|script| {
@@ -1583,6 +1618,13 @@ impl eframe::App for Editor {
                         ui.label("Luau")
                             .on_hover_text(script.path.display().to_string());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .selectable_label(!self.code_state.outputs.hidden, "Results")
+                                .on_hover_text("Show inline part previews and measurements")
+                                .clicked()
+                            {
+                                self.code_state.outputs.hidden = !self.code_state.outputs.hidden;
+                            }
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{} lines",

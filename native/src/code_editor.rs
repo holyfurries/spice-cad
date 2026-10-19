@@ -24,6 +24,7 @@ pub fn preferred_width(ui: &mut egui::Ui, source: &Buffer) -> f32 {
 
 #[derive(Default)]
 pub struct State {
+    pub outputs: crate::inline_output::State,
     pub modal: crate::modal::State,
     pub action: Option<crate::modal::Action>,
     search: crate::search::State,
@@ -521,18 +522,24 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
         state.pixels_per_point = ui.ctx().pixels_per_point();
     }
     let line_count = source.rope.len_lines();
+    state.outputs.sync(source);
+    state
+        .outputs
+        .resolve(|line| state.syntax.output_end(source.revision, line));
+    let output_layout = state.outputs.layout(line_count, row_height);
     let gutter = (line_count.ilog10() + 1) as f32 * char_width + 24.0;
     state.width = state.width.max(available.width());
     egui::ScrollArea::both()
         .id_salt("luau_source_scroll")
         .show_viewport(ui, |ui, viewport| {
             let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(state.width, line_count as f32 * row_height),
+                egui::vec2(state.width, output_layout.height()),
                 egui::Sense::hover(),
             );
-            let first = (viewport.min.y / row_height).floor().max(0.0) as usize;
-            let last = ((viewport.max.y / row_height).ceil() as usize)
-                .saturating_add(1)
+            let first = output_layout.line_index(viewport.min.y);
+            let last = output_layout
+                .line_index(viewport.max.y)
+                .saturating_add(2)
                 .min(line_count)
                 .min(first.saturating_add(512));
             let columns = ((viewport.width() / char_width).ceil() as usize)
@@ -590,36 +597,40 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
             if response.clicked() || response.dragged() {
                 if let Some(pointer) = response.interact_pointer_pos() {
                     if ui.clip_rect().contains(pointer) && rect.contains(pointer) {
-                        let line = ((pointer.y - rect.top()) / row_height).floor() as usize;
-                        if let Some(&(line, column_start, column_end)) =
-                            visible_keys.iter().find(|key| key.0 == line)
-                        {
-                            let galley = &state.lines[&(line, column_start, column_end)];
-                            let position = rect.min
-                                + egui::vec2(gutter + origins[&line], line as f32 * row_height);
-                            let column: usize =
-                                galley.cursor_from_pos(pointer - position).index.into();
-                            let slice = source.rope.line(line);
-                            let length = slice.len_chars();
-                            let start = source.rope.line_to_char(line);
-                            let cursor = (start + column_start + column).min(
-                                start
-                                    + length.saturating_sub(usize::from(
-                                        length > 0 && slice.char(length - 1) == '\n',
-                                    )),
-                            );
-                            let anchor = if response.clicked()
-                                && !ui.input(|input| input.modifiers.shift)
-                                || response.drag_started()
+                        if let Some(line) = output_layout.text_line(pointer.y - rect.top()) {
+                            if let Some(&(line, column_start, column_end)) =
+                                visible_keys.iter().find(|key| key.0 == line)
                             {
-                                cursor
-                            } else {
-                                state.anchor
-                            };
-                            if state.cursor != cursor || state.anchor != anchor {
-                                state.cursor = cursor;
-                                state.anchor = anchor;
-                                ui.ctx().request_repaint();
+                                let galley = &state.lines[&(line, column_start, column_end)];
+                                let position = rect.min
+                                    + egui::vec2(
+                                        gutter + origins[&line],
+                                        output_layout.line_top(line),
+                                    );
+                                let column: usize =
+                                    galley.cursor_from_pos(pointer - position).index.into();
+                                let slice = source.rope.line(line);
+                                let length = slice.len_chars();
+                                let start = source.rope.line_to_char(line);
+                                let cursor = (start + column_start + column).min(
+                                    start
+                                        + length.saturating_sub(usize::from(
+                                            length > 0 && slice.char(length - 1) == '\n',
+                                        )),
+                                );
+                                let anchor = if response.clicked()
+                                    && !ui.input(|input| input.modifiers.shift)
+                                    || response.drag_started()
+                                {
+                                    cursor
+                                } else {
+                                    state.anchor
+                                };
+                                if state.cursor != cursor || state.anchor != anchor {
+                                    state.cursor = cursor;
+                                    state.anchor = anchor;
+                                    ui.ctx().request_repaint();
+                                }
                             }
                         }
                     }
@@ -632,7 +643,7 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 let start = source.rope.line_to_char(line);
                 let galley = Arc::clone(&state.lines[&(line, column_start, column_end)]);
                 let position =
-                    rect.min + egui::vec2(gutter + origins[&line], line as f32 * row_height);
+                    rect.min + egui::vec2(gutter + origins[&line], output_layout.line_top(line));
                 let row = egui::Rect::from_min_size(
                     egui::pos2(rect.left() + viewport.min.x, position.y),
                     egui::vec2(viewport.width(), row_height),
@@ -773,7 +784,7 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                     prefix_width(column, char_width, advances)
                 });
                 let caret = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(gutter + x, cursor_line as f32 * row_height),
+                    rect.min + egui::vec2(gutter + x, output_layout.line_top(cursor_line)),
                     egui::vec2(2.0, row_height),
                 );
                 let margin = (SCROLL_MARGIN_LINES as f32 * row_height)
@@ -798,6 +809,19 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                 ],
                 egui::Stroke::new(1.0, crate::interface::BORDER),
             );
+            for card in &output_layout.cards {
+                if card.top + card.height < viewport.min.y || card.top > viewport.max.y {
+                    continue;
+                }
+                let output_rect = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(viewport.min.x + gutter, card.top),
+                    egui::vec2(
+                        (viewport.width() - gutter - 12.0).clamp(120.0, 560.0),
+                        card.height,
+                    ),
+                );
+                state.outputs.paint(ui, card, output_rect);
+            }
             state.lines.retain(|key, _| visible_keys.contains(key));
             state
                 .advances
@@ -863,6 +887,85 @@ fn line_length(line: ropey::RopeSlice<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_cards_preserve_text_hit_testing_and_collapse_without_editing_source() {
+        let context = egui::Context::default();
+        let text = "cad.show('part', part)\nlocal width = 10\n";
+        let mut source = Buffer::from(text);
+        let mut state = State::default();
+        state.outputs.set(
+            source.revision,
+            Arc::new(vec![crate::inline_output::Entry {
+                line: 0,
+                name: "part".into(),
+                content: crate::inline_output::Content::Part {
+                    image: None,
+                    dimensions: glam::Vec3::ONE,
+                    volume_mm3: 1.0,
+                },
+            }]),
+        );
+        state.outputs.resolve(Some);
+        let render = |source: &mut Buffer, state: &mut State, events| {
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600.0, 400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(ui, source, state);
+                    },
+                )
+                .drop_without_applying_deltas();
+        };
+        let click = |source: &mut Buffer, state: &mut State, position: egui::Pos2| {
+            render(
+                source,
+                state,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            render(
+                source,
+                state,
+                vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        };
+        render(&mut source, &mut state, Vec::new());
+        click(&mut source, &mut state, egui::pos2(90.0, 165.0));
+        assert_eq!(source.rope.char_to_line(state.cursor), 1);
+        let cursor = state.cursor;
+        click(&mut source, &mut state, egui::pos2(90.0, 80.0));
+        assert_eq!(state.cursor, cursor);
+        click(&mut source, &mut state, egui::pos2(90.0, 30.0));
+        assert_eq!(
+            state.outputs.layout(source.rope.len_lines(), 21.0).cards[0].height,
+            30.0
+        );
+        render(&mut source, &mut state, Vec::new());
+        click(&mut source, &mut state, egui::pos2(90.0, 60.0));
+        assert_eq!(source.rope.char_to_line(state.cursor), 1);
+        assert_eq!(source.to_string(), text);
+        assert!(source.undo(false).is_none());
+    }
     #[test]
     fn horizontal_offsets_preserve_tabs_and_short_line_glyph_positions() {
         assert_eq!(prefix_width(3, 8.0, &[(0, 24.0), (2, 48.0)]), 72.0);

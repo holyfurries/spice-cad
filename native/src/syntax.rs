@@ -7,6 +7,33 @@ use std::sync::{
 };
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator, Tree};
 
+pub fn call_end(tree: &Tree, line: usize) -> usize {
+    static QUERY: std::sync::OnceLock<Query> = std::sync::OnceLock::new();
+    let query = QUERY.get_or_init(|| {
+        Query::new(&tree_sitter_luau::LANGUAGE.into(), "(function_call) @call")
+            .expect("Luau call query")
+    });
+    let mut cursor = QueryCursor::new();
+    cursor.set_match_limit(256);
+    cursor.set_point_range(
+        tree_sitter::Point::new(line, 0)..tree_sitter::Point::new(line.saturating_add(1), 0),
+    );
+    let mut matches = cursor.matches(query, tree.root_node(), |_: tree_sitter::Node| {
+        std::iter::empty::<&[u8]>()
+    });
+    let mut end = line;
+    for _ in 0..256 {
+        let Some(found) = matches.next() else {
+            break;
+        };
+        let call = found.captures[0].node;
+        if call.start_position().row == line {
+            end = end.max(call.end_position().row);
+        }
+    }
+    end
+}
+
 pub fn collect_special_columns(line: ropey::RopeSlice<'_>) -> Vec<(u32, char)> {
     assert!(line.len_bytes() <= crate::text_buffer::SIZE_BYTES_MAX);
     let mut positions = Vec::new();
@@ -195,6 +222,14 @@ impl State {
             .as_ref()
             .filter(|snapshot| snapshot.revision == revision)
             .map(|snapshot| snapshot.parameters.as_slice())
+    }
+
+    pub fn output_end(&self, revision: u64, line: usize) -> Option<usize> {
+        let snapshot = self
+            .snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.revision == revision)?;
+        Some(call_end(&snapshot.tree, line))
     }
     pub fn sync(&mut self, source: &Buffer, context: &egui::Context) -> bool {
         if self.error.is_some() {

@@ -357,6 +357,16 @@ rebuilds committed edits after a pause. Existing personal example files are pres
 the new startup file is `spice-rack.luau`, leaving older `rack.luau` and `rack-parts.luau`
 copies intact. See [navigation and parameter notes](evaluation/navigation.md).
 
+The code pane's **Results** toggle shows collapsible output cards below executed
+`cad.show` and `cad.measure` calls, including multiline calls and calls inside loops.
+Part cards contain a static shaded thumbnail, X/Y/Z dimensions, and exact CAD volume.
+Measurement cards show their distance and whether declared limits passed. Click a
+card header to collapse it. Results stay marked **previous result** after edits until
+a successful rebuild; edits whose source locations cannot be tracked hide the cards
+until then. Thumbnails are generated on the CAD worker with a fixed work budget;
+dense models can show a viewport fallback while retaining their dimensions and volume.
+Cards are virtualized with the source and are never saved into the Luau file.
+
 `models/mounting-bracket.luau` has rounded edges and four mounting holes, with
 parameter assertions that keep holes clear of walls. `models/bracket.luau`
 demonstrates box booleans; `models/rack.luau`
