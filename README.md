@@ -778,6 +778,9 @@ allocations, retained capacity, and uniform uploads, including placement upload
 counts and bytes. Moving or rotating finished parts updates small transform/color
 records; shape changes upload new geometry and reuse buffer capacity when it fits.
 Translations also reuse cached thumbnails, bounds, and face measurements.
+During parameter dragging, changed thumbnails wait until the pointer is released
+and no parameter has changed for 150 ms. Bounds, face measurements and constraints
+still update with every preview; matching images remain cached.
 Picking shares canonical CPU geometry and transforms queries through part poses,
 avoiding world mesh and sampled-edge copies. With `--profile`, normal exit prints
 slider latency median, p95, p99 and maximum over the latest 512 accepted revisions.
@@ -787,10 +790,13 @@ build time, result delivery and UI-to-prepare; see the
 [preview scheduling investigation](evaluation/preview-latency.md). The native
 renderer explicitly requests eframe's one-frame, low-latency vsync configuration.
 For an automatic, bounded test without desktop input, run
-`spice-cad --profile-preview`. It sweeps the bundled rack's separation in memory
-and closes after the final preview, leaving model files unchanged. The
+`spice-cad --profile-preview` for translation or `spice-cad --profile-rotation`
+for rotation. Both sweep the bundled rack in memory and close after the final
+preview and any pending thumbnails, leaving model files unchanged. The
 [native Wayland baseline](evaluation/wayland-preview.md) describes the workload
 and why headless display timings can differ substantially from the desktop.
+See [rotation preview measurements](evaluation/rotation-preview.md) for the
+thumbnail policy and rotation workload.
 See [canonical picking measurements](evaluation/canonical-picking.md)
 for allocation checks and sustained drag results.
 Numeric property edits reuse a successful type check when every other source

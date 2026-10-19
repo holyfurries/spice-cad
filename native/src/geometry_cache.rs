@@ -6,12 +6,38 @@ use crate::kernel::{Body, Kernel};
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailMode {
+    Deferred,
+    Complete,
+}
+
+#[derive(Clone)]
+pub enum Thumbnail {
+    Pending,
+    Ready(Option<Arc<eframe::egui::ColorImage>>),
+}
+
+impl Thumbnail {
+    pub fn pending(&self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
+    pub fn image(&self) -> Option<Arc<eframe::egui::ColorImage>> {
+        match self {
+            Self::Pending => None,
+            Self::Ready(image) => image.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Presentation {
     orientation: crate::placement::Placement,
     color: [f32; 3],
     pub bounds: [glam::Vec3; 2],
     pub faces: std::collections::BTreeMap<u32, crate::inspection::Face>,
-    pub image: Option<Arc<eframe::egui::ColorImage>>,
+    pub thumbnail: Thumbnail,
 }
 
 struct Entry<'kernel> {
@@ -33,6 +59,7 @@ pub struct Prepared<'kernel> {
 
 pub struct Cache<'kernel> {
     kernel: &'kernel Kernel,
+    pub thumbnail_renders: u64,
     entries: Vec<Entry<'kernel>>,
     comparisons: Vec<(usize, usize)>,
     analysis: crate::analysis::Cache,
@@ -43,6 +70,7 @@ impl<'kernel> Cache<'kernel> {
     pub fn new(kernel: &'kernel Kernel) -> Self {
         Self {
             kernel,
+            thumbnail_renders: 0,
             entries: Vec::new(),
             comparisons: Vec::with_capacity(EVALUATION_COUNT_MAX),
             analysis: Default::default(),
@@ -78,6 +106,7 @@ impl<'kernel> Cache<'kernel> {
         &mut self,
         model: &Model,
         layout: crate::placement::Layout,
+        thumbnails: ThumbnailMode,
     ) -> Result<Vec<Arc<Presentation>>, String> {
         assert_eq!(self.entries.len(), model.parts.len());
         assert!(model.parts.len() <= PART_COUNT_MAX);
@@ -102,16 +131,31 @@ impl<'kernel> Cache<'kernel> {
                 };
                 let mesh = entry.geometry.mesh.placed(orientation.matrix(), part.color);
                 let faces = crate::inspection::faces(&mesh)?;
-                let image = crate::thumbnail::render(&mesh, bounds, &mut remaining).map(Arc::new);
+                let thumbnail = if thumbnails == ThumbnailMode::Complete {
+                    self.thumbnail_renders += 1;
+                    Thumbnail::Ready(
+                        crate::thumbnail::render(&mesh, bounds, &mut remaining).map(Arc::new),
+                    )
+                } else {
+                    Thumbnail::Pending
+                };
                 *cached = Some(Arc::new(Presentation {
                     orientation,
                     color: part.color,
                     bounds,
                     faces,
-                    image,
+                    thumbnail,
                 }));
             }
-            result.push(Arc::clone(cached.as_ref().expect("Prepared presentation")));
+            let presentation = cached.as_mut().expect("Prepared presentation");
+            if thumbnails == ThumbnailMode::Complete && presentation.thumbnail.pending() {
+                let mesh = entry.geometry.mesh.placed(orientation.matrix(), part.color);
+                self.thumbnail_renders += 1;
+                let image = crate::thumbnail::render(&mesh, presentation.bounds, &mut remaining)
+                    .map(Arc::new);
+                Arc::make_mut(presentation).thumbnail = Thumbnail::Ready(image);
+            }
+            result.push(Arc::clone(presentation));
         }
         Ok(result)
     }

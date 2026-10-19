@@ -53,20 +53,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             arguments.remove(index);
             started
         });
-    let benchmarking = arguments.as_slice() == ["--profile-preview"];
+    let benchmarking = matches!(arguments.as_slice(), [flag] if flag == "--profile-preview" || flag == "--profile-rotation");
+    let sweep_kind = if arguments.as_slice() == ["--profile-rotation"] {
+        performance::SweepKind::Rotation
+    } else {
+        performance::SweepKind::Separation
+    };
     if benchmarking {
         profile = Some(started);
     }
     let completed = benchmarking.then(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let sweep = completed
         .as_ref()
-        .map(|completed| performance::Sweep::new(started, Arc::clone(completed)));
+        .map(|completed| performance::Sweep::new(started, Arc::clone(completed), sweep_kind));
     #[cfg(feature = "rack-tools")]
     if arguments.as_slice() == ["--benchmark"] {
         return benchmark().map_err(Into::into);
     }
     let model_path = match arguments.as_slice() {
-        [flag] if flag == "--profile-preview" => None,
+        [flag] if flag == "--profile-preview" || flag == "--profile-rotation" => None,
         [] => Some(document::example_model(document::Example::RackParts)?),
         #[cfg(feature = "rack-tools")]
         [flag] if flag == "--rack" => None,
@@ -101,9 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile-preview | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
                 } else {
-                    "Usage: spice-cad [--profile-preview | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
                 })
                     .into(),
             );
@@ -153,6 +158,7 @@ enum Command {
         folder: std::path::PathBuf,
     },
     Script {
+        thumbnails: model::ThumbnailMode,
         input: Option<performance::Input>,
         source: ropey::Rope,
         editor_revision: u64,
@@ -242,6 +248,8 @@ impl Scene {
     }
 }
 struct Snapshot {
+    thumbnails_pending: bool,
+    thumbnail_renders: u64,
     input: Option<performance::Input>,
     cached_parts: usize,
     scene: Scene,
@@ -324,10 +332,10 @@ impl Worker {
                 while let Ok(command) = requests.recv() {
                     let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
                         Command::ExportScript { source, folder, target } => export::model_files_cached(&source, &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
-                        Command::Script { source, editor_revision, revision, saved_at, mut input } => {
+                        Command::Script { source, editor_revision, revision, saved_at, mut input, thumbnails } => {
                             if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
                             let source = source.to_string();
-                            build_script_snapshot_cached(source, revision, cache).map(|mut snapshot| {
+                            build_script_snapshot_with_thumbnails(source, revision, cache, thumbnails).map(|mut snapshot| {
                                 if let Some(input) = &mut input { input.worker_finished_ms = input.elapsed_ms(Instant::now()); }
                                 snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot))
                             })
@@ -403,6 +411,8 @@ fn build_snapshot(
     });
     let display = Arc::new(viewport::Geometry::new(&[geometry])?);
     Ok(Snapshot {
+        thumbnails_pending: false,
+        thumbnail_renders: 0,
         input: None,
         cached_parts: 0,
         scene: Scene {
@@ -445,6 +455,15 @@ fn build_script_snapshot_cached(
     revision: u64,
     cache: &mut model::Cache<'_>,
 ) -> Result<Snapshot, String> {
+    build_script_snapshot_with_thumbnails(source, revision, cache, model::ThumbnailMode::Complete)
+}
+
+fn build_script_snapshot_with_thumbnails(
+    source: String,
+    revision: u64,
+    cache: &mut model::Cache<'_>,
+    thumbnails: model::ThumbnailMode,
+) -> Result<Snapshot, String> {
     assert!(revision > 0);
     let total = Instant::now();
     let model = cache.compile(&source)?;
@@ -456,19 +475,23 @@ fn build_script_snapshot_cached(
     let meshes: Vec<_> = geometry.iter().map(|geometry| &geometry.mesh).collect();
     let checks = model.annotations(&meshes)?;
     let volume_mm3 = geometry.iter().map(|geometry| geometry.volume_mm3).sum();
+    let presentations = cache.presentations(&model, placement::Layout::Assembly, thumbnails)?;
+    let mut thumbnails_pending = presentations.iter().any(|part| part.thumbnail.pending());
     let scene = build_scene(
         &model,
         &geometry,
-        &cache.presentations(&model, placement::Layout::Assembly)?,
+        &presentations,
         Arc::clone(&display),
         placement::Layout::Assembly,
         &checks,
     )?;
     let alternate = if model.parts.iter().any(|part| part.print.is_some()) {
+        let presentations = cache.presentations(&model, placement::Layout::Print, thumbnails)?;
+        thumbnails_pending |= presentations.iter().any(|part| part.thumbnail.pending());
         Some(build_scene(
             &model,
             &geometry,
-            &cache.presentations(&model, placement::Layout::Print)?,
+            &presentations,
             display,
             placement::Layout::Print,
             &checks,
@@ -478,6 +501,8 @@ fn build_script_snapshot_cached(
     };
     let tessellation_ms = prepared.tessellation_ms + start.elapsed().as_secs_f64() * 1000.0;
     Ok(Snapshot {
+        thumbnails_pending,
+        thumbnail_renders: cache.thumbnail_renders,
         input: None,
         cached_parts: prepared.hits,
         scene,
@@ -525,7 +550,7 @@ fn build_scene(
             line: part.line,
             name: part.name.clone(),
             content: inline_output::Content::Part {
-                image: presentation.image.clone(),
+                image: presentation.thumbnail.image(),
                 dimensions: part_box[1] - part_box[0],
                 volume_mm3: geometry.volume_mm3,
             },
@@ -638,9 +663,12 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
     Ok(())
 }
 
+const THUMBNAIL_IDLE_DELAY: Duration = Duration::from_millis(150);
+
 struct Editor {
     sweep: Option<performance::Sweep>,
     preview_input: Option<performance::Input>,
+    parameter_edited_at: Option<Instant>,
     save_dialog: Option<save::Dialog>,
     preview: preview::Schedule,
     palette: palette::State,
@@ -699,10 +727,10 @@ impl Editor {
         interface::configure(&context.egui_ctx);
         let layout = PARAMETERS.layout()?;
         let worker = Worker::new(context.egui_ctx.clone())?;
-        let script = if sweep.is_some() {
+        let script = if let Some(sweep) = &sweep {
             Some(document::Document::loaded(
                 std::env::temp_dir().join(format!("spice-cad-profile-{}.luau", std::process::id())),
-                include_str!("../../models/rack-parts.luau").into(),
+                sweep.source(),
             ))
         } else {
             model_path.map(document::Document::new)
@@ -730,6 +758,7 @@ impl Editor {
         Ok(Self {
             sweep,
             preview_input: None,
+            parameter_edited_at: None,
             save_dialog: None,
             preview: preview::Schedule::default(),
             palette,
@@ -791,6 +820,7 @@ impl Editor {
         self.script = Some(document);
         self.snapshot = None;
         self.preview_input = None;
+        self.parameter_edited_at = None;
         self.watcher = Some(watcher);
         self.diagnostics = Some(diagnostics);
         self.language_popup = None;
@@ -913,19 +943,33 @@ impl Editor {
         Ok(())
     }
 
-    fn start_preview(&mut self) {
+    fn start_preview(&mut self, pointer_down: bool) {
         if !matches!(self.work, WorkerState::Idle) {
             return;
         }
         let Some(revision) = self.preview.ready(Instant::now()) else {
             return;
         };
+        let thumbnails = if self
+            .parameter_edited_at
+            .is_some_and(|at| pointer_down || at.elapsed() < THUMBNAIL_IDLE_DELAY)
+        {
+            model::ThumbnailMode::Deferred
+        } else {
+            model::ThumbnailMode::Complete
+        };
+        self.start_script(revision, thumbnails);
+    }
+
+    fn start_script(&mut self, revision: u64, thumbnails: model::ThumbnailMode) {
+        assert!(matches!(self.work, WorkerState::Idle));
         let Some(script) = &self.script else {
             return;
         };
         assert_eq!(revision, script.buffer.revision);
         self.revision += 1;
         match self.worker.try_send(Command::Script {
+            thumbnails,
             input: self
                 .preview_input
                 .filter(|input| input.revision == revision)
@@ -1047,6 +1091,9 @@ impl Editor {
                         }
                         Ok(Outcome::Exported(message)) => self.message = message,
                         Err(error) => {
+                            if self.sweep.is_some() {
+                                eprintln!("Profile: preview_sweep build_error={error}");
+                            }
                             if let (Some(diagnostics), Some(revision)) =
                                 (&mut self.diagnostics, run_revision)
                             {
@@ -1126,6 +1173,12 @@ impl eframe::App for Editor {
                 } else {
                     sweep.finish(None, now);
                 }
+                eprintln!(
+                    "Profile: preview_sweep_thumbnails renders={}",
+                    self.snapshot
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.thumbnail_renders)
+                );
                 self.sweep = None;
                 self.exit = ExitState::Closing;
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1931,7 +1984,7 @@ impl eframe::App for Editor {
                 if let Some((index, value)) = sweep.next(at) {
                     match self.parameter_state.edit_literal(
                         script.buffer.revision,
-                        "separation",
+                        sweep.property(),
                         value.to_string(),
                     ) {
                         Ok(Some(mut edit)) => {
@@ -1940,7 +1993,10 @@ impl eframe::App for Editor {
                             sweep_index = Some(index);
                         }
                         Ok(None) => {}
-                        Err(error) => self.message = error.into(),
+                        Err(error) => {
+                            eprintln!("Profile: preview_sweep parameter_error={error}");
+                            self.message = error.into();
+                        }
                     }
                 }
             }
@@ -1957,8 +2013,9 @@ impl eframe::App for Editor {
                             .input_at
                             .filter(|_| self.profile.is_some())
                             .map(|at| performance::Input::new(script.buffer.revision, at));
-                        self.preview
-                            .parameter(script.buffer.revision, Instant::now());
+                        let now = Instant::now();
+                        self.parameter_edited_at = Some(now);
+                        self.preview.parameter(script.buffer.revision, now);
                         self.message = if self.preview.automatic() {
                             "Parameter changed · Auto Preview pending"
                         } else {
@@ -2741,7 +2798,24 @@ impl eframe::App for Editor {
                 });
         }
         self.observe_preview();
-        self.start_preview();
+        self.start_preview(ui.input(|input| input.pointer.any_down()));
+        if matches!(self.work, WorkerState::Idle) && !ui.input(|input| input.pointer.any_down()) {
+            if let (Some(snapshot), Some(script), Some(edited)) =
+                (&self.snapshot, &self.script, self.parameter_edited_at)
+            {
+                if snapshot.thumbnails_pending
+                    && snapshot.editor_revision == Some(script.buffer.revision)
+                {
+                    let delay = THUMBNAIL_IDLE_DELAY.saturating_sub(edited.elapsed());
+                    if delay.is_zero() {
+                        self.preview_input = None;
+                        self.start_script(script.buffer.revision, model::ThumbnailMode::Complete);
+                    } else {
+                        ui.ctx().request_repaint_after(delay);
+                    }
+                }
+            }
+        }
         self.ui_ms = started.elapsed().as_secs_f64() * 1000.0;
         if let Some(profile) = &mut self.profile {
             let size = ui.ctx().content_rect().size() * ui.ctx().pixels_per_point();
@@ -2764,13 +2838,30 @@ impl eframe::App for Editor {
         if let Some(sweep) = &self.sweep {
             let now = Instant::now();
             let metrics = viewport::metrics(frame);
-            if sweep.finish(metrics.input_latency.map(|latency| latency.revision), now) {
+            let ready = self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.thumbnails_pending)
+                && matches!(self.work, WorkerState::Idle);
+            if sweep.finish(
+                metrics
+                    .input_latency
+                    .filter(|_| ready)
+                    .map(|latency| latency.revision),
+                now,
+            ) {
                 eprintln!(
                     "Profile: preview_sweep_gpu uploads={} geometry_allocations={} geometry_bytes={} placement_uploads={}",
                     metrics.uploads,
                     metrics.buffer_allocations,
                     metrics.geometry_bytes,
                     metrics.placement_writes
+                );
+                eprintln!(
+                    "Profile: preview_sweep_thumbnails renders={}",
+                    self.snapshot
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.thumbnail_renders)
                 );
                 self.sweep = None;
                 self.exit = ExitState::Closing;
@@ -2922,7 +3013,11 @@ mod tests {
             ))?;
             let prepared = cache.prepare(&model)?;
             let display = cache.display(&prepared.geometry)?;
-            let presentations = cache.presentations(&model, placement::Layout::Assembly)?;
+            let presentations = cache.presentations(
+                &model,
+                placement::Layout::Assembly,
+                model::ThumbnailMode::Complete,
+            )?;
             let meshes: Vec<_> = prepared
                 .geometry
                 .iter()
@@ -2959,10 +3054,11 @@ mod tests {
         let kernel = kernel::Kernel::new()?;
         let mut cache = model::Cache::new(&kernel);
         let first = build_script_snapshot_cached(source.into(), 1, &mut cache)?;
-        let error = build_script_snapshot_cached(
+        let error = build_script_snapshot_with_thumbnails(
             source.replacen("number(10,", "number(20,", 1),
             2,
             &mut cache,
+            model::ThumbnailMode::Deferred,
         )
         .err()
         .ok_or("Placement check must fail")?;
@@ -3048,7 +3144,44 @@ mod tests {
             }
         }
         let rotated = moved.replace("spin=cad.number(0,", "spin=cad.number(45,");
-        let third = build_script_snapshot_cached(rotated.clone(), 3, &mut cache)?;
+        let deferred = build_script_snapshot_with_thumbnails(
+            rotated.clone(),
+            3,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        assert!(deferred.thumbnails_pending);
+        assert_eq!(deferred.thumbnail_renders, second.thumbnail_renders);
+        assert_eq!(deferred.build_ms, 0.0);
+        assert!(matches!(
+            deferred.scene.outputs[0].content,
+            inline_output::Content::Part { image: None, .. }
+        ));
+        let third = build_script_snapshot_cached(rotated.clone(), 4, &mut cache)?;
+        assert!(!third.thumbnails_pending);
+        assert_eq!(third.thumbnail_renders, second.thumbnail_renders + 1);
+        assert_eq!(deferred.scene.bounds, third.scene.bounds);
+        assert!(Arc::ptr_eq(&deferred.scene.display, &third.scene.display));
+        for (id, face) in &deferred.scene.faces {
+            assert_eq!(face.center, third.scene.faces[id].center);
+            for (a, b) in face
+                .spans
+                .iter()
+                .flatten()
+                .zip(third.scene.faces[id].spans.iter().flatten())
+            {
+                assert_eq!(a.points, b.points);
+                assert_eq!(a.distance_mm, b.distance_mm);
+            }
+        }
+        let reused = build_script_snapshot_with_thumbnails(
+            rotated.clone(),
+            5,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        assert!(!reused.thumbnails_pending);
+        assert_eq!(reused.thumbnail_renders, third.thumbnail_renders);
         assert!(Arc::ptr_eq(&second.scene.display, &third.scene.display));
         assert!((third.scene.bounds[1] - second.scene.bounds[1]).length() > 1.0);
         let changed = build_script_snapshot_cached(
@@ -3059,6 +3192,34 @@ mod tests {
         assert_eq!(changed.cached_parts, 0);
         assert!(!Arc::ptr_eq(&third.scene.display, &changed.scene.display));
         assert!(changed.volume_mm3 > third.volume_mm3);
+        Ok(())
+    }
+
+    #[test]
+    fn rotation_sweep_keeps_exact_bounds_and_shared_geometry() -> Result<(), String> {
+        let sweep = performance::Sweep::new(
+            Instant::now(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            performance::SweepKind::Rotation,
+        );
+        let source = sweep.source();
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let initial = build_script_snapshot_cached(source.clone(), 1, &mut cache)?;
+        for angle in 1..=100 {
+            let source = source.replace("cad.number(0,", &format!("cad.number({angle},"));
+            let current = build_script_snapshot_with_thumbnails(
+                source,
+                angle + 1,
+                &mut cache,
+                model::ThumbnailMode::Deferred,
+            )
+            .map_err(|error| format!("Rotation {angle}: {error}"))?;
+            assert!(current.thumbnails_pending);
+            assert!(Arc::ptr_eq(&initial.scene.display, &current.scene.display));
+            assert_eq!(initial.thumbnail_renders, current.thumbnail_renders);
+            assert_eq!(current.cached_parts, 4);
+        }
         Ok(())
     }
 
@@ -3736,6 +3897,7 @@ mod tests {
         let input = performance::Input::new(1, Instant::now());
         worker
             .try_send(Command::Script {
+                thumbnails: model::ThumbnailMode::Complete,
                 input: Some(input),
                 source: "cad.show('box',cad.box({width=1,depth=1,height=1}))".into(),
                 editor_revision: 1,
@@ -3769,6 +3931,7 @@ mod tests {
         let worker = Worker::new(egui::Context::default())?;
         worker
             .try_send(Command::Script {
+                thumbnails: model::ThumbnailMode::Complete,
                 input: None,
                 source: "--!strict\nerror(string.rep('λ', 100000))".into(),
                 editor_revision: 1,
@@ -3846,6 +4009,7 @@ mod tests {
             };
             worker
                 .try_send(Command::Script {
+                    thumbnails: model::ThumbnailMode::Complete,
                     input: None,
                     source: source.into(),
                     editor_revision: revision,
@@ -3916,6 +4080,7 @@ mod tests {
         ] {
             worker
                 .try_send(Command::Script {
+                    thumbnails: model::ThumbnailMode::Complete,
                     input: None,
                     source: source.into(),
                     editor_revision: revision,

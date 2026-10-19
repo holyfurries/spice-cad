@@ -407,7 +407,7 @@ impl State {
                     painter.text(
                         thumbnail.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Use viewport\nfor dense mesh",
+                        "Part preview\nUse viewport",
                         FontId::proportional(12.0),
                         crate::interface::MUTED,
                     );

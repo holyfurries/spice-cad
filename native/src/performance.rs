@@ -10,7 +10,14 @@ pub const SWEEP_CHANGE_COUNT: u32 = 300;
 const SWEEP_INTERVAL: Duration = Duration::from_millis(20);
 const SWEEP_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Copy)]
+pub enum SweepKind {
+    Separation,
+    Rotation,
+}
+
 pub struct Sweep {
+    kind: SweepKind,
     deadline: Instant,
     started: Option<Instant>,
     last: Option<(u32, u64)>,
@@ -19,13 +26,33 @@ pub struct Sweep {
 }
 
 impl Sweep {
-    pub fn new(now: Instant, completed: Arc<AtomicBool>) -> Self {
+    pub fn new(now: Instant, completed: Arc<AtomicBool>, kind: SweepKind) -> Self {
         Self {
+            kind,
             deadline: now + SWEEP_TIMEOUT,
             started: None,
             last: None,
             changes: 0,
             completed,
+        }
+    }
+
+    pub fn property(&self) -> &'static str {
+        match self.kind {
+            SweepKind::Separation => "separation",
+            SweepKind::Rotation => "rotation",
+        }
+    }
+
+    pub fn source(&self) -> String {
+        let source = include_str!("../../models/rack-parts.luau");
+        match self.kind {
+            SweepKind::Separation => source.into(),
+            SweepKind::Rotation => {
+                assert_eq!(source.matches("assembly = { position =").count(), 1);
+                source.replacen("--!strict", "--!strict\nlocal rotation: number = cad.number(0, {min=0,max=100,step=1,unit=\"deg\"})", 1)
+                    .replace("assembly = { position =", "assembly = { rotation = {z=rotation}, position =")
+            }
         }
     }
 
@@ -279,7 +306,7 @@ mod tests {
     fn sweep_coalesces_ticks_and_waits_for_the_final_renderer_revision() {
         let at = Instant::now();
         let completed = Arc::new(AtomicBool::new(false));
-        let mut sweep = Sweep::new(at, Arc::clone(&completed));
+        let mut sweep = Sweep::new(at, Arc::clone(&completed), SweepKind::Separation);
         assert_eq!(sweep.next(at), Some((0, 0.0)));
         sweep.applied(0, 10);
         assert_eq!(sweep.next(at), None);
@@ -291,7 +318,7 @@ mod tests {
         assert!(!completed.load(Ordering::Acquire));
         assert!(sweep.finish(Some(12), at + Duration::from_secs(8)));
         assert!(completed.load(Ordering::Acquire));
-        let stalled = Sweep::new(at, Arc::new(AtomicBool::new(false)));
+        let stalled = Sweep::new(at, Arc::new(AtomicBool::new(false)), SweepKind::Rotation);
         assert!(stalled.finish(None, at + SWEEP_TIMEOUT));
         assert!(!stalled.completed.load(Ordering::Acquire));
     }
