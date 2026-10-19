@@ -1023,6 +1023,9 @@ impl eframe::App for Editor {
                         }
                         Navigation::Top => self.camera.pitch = 1.55,
                         Navigation::Rack => example_requested = Some(document::Example::Rack),
+                        Navigation::RackParts => {
+                            example_requested = Some(document::Example::RackParts)
+                        }
                         Navigation::Bracket => {
                             example_requested = Some(document::Example::MountingBracket)
                         }
@@ -1105,6 +1108,7 @@ impl eframe::App for Editor {
                 ui.menu_button("Examples", |ui| {
                     for (label, example) in [
                         ("Spice rack", document::Example::Rack),
+                        ("Spice rack · four parts", document::Example::RackParts),
                         ("Mounting bracket", document::Example::MountingBracket),
                         ("Measured block", document::Example::MeasuredBlock),
                         ("Extruded bracket", document::Example::ExtrudedBracket),
@@ -2644,6 +2648,82 @@ mod tests {
             assert!(error.contains(message), "{error}");
             assert!(!folder.exists());
         }
+    }
+
+    #[test]
+    fn rack_parts_match_the_reference_and_export_on_the_p1s_bed() -> Result<(), String> {
+        let source = include_str!("../../models/rack-parts.luau");
+        let reference = spice_rack::printing::build_parts(PARAMETERS)?;
+        for print_layout in [false, true] {
+            let kernel = kernel::Kernel::new()?;
+            let source = source
+                .replace(
+                    "local separation: number = 12",
+                    "local separation: number = 0",
+                )
+                .replace(
+                    "local print_layout: boolean = false",
+                    &format!("local print_layout: boolean = {print_layout}"),
+                );
+            let model = model::compile(&source)?;
+            let mut bodies = model.build(&kernel)?;
+            assert_eq!(model.parts.len(), 4);
+            assert_eq!(bodies.len(), reference.len());
+            let meshes = model.meshes(&mut bodies, false)?;
+            for (index, (body, reference)) in bodies.iter_mut().zip(&reference).enumerate() {
+                meshes[index].validate()?;
+                let mesh = reference.shape.mesh().map_err(|error| error.to_string())?;
+                let volume: f64 = mesh
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|triangle| {
+                        let [a, b, c] = triangle.map(|index| mesh.vertices[index]);
+                        a.dot(b.cross(c)) / 6.0
+                    })
+                    .sum();
+                assert!((body.volume()? - volume).abs() < 0.01, "Part {index}");
+                let [minimum, maximum] = body.bounds(true)?;
+                if print_layout {
+                    assert!(minimum.z.abs() < 0.001);
+                    let (_, dimensions) = reference.on_bed()?;
+                    assert!(((maximum - minimum) - dimensions).abs().max_element() < 0.001);
+                    assert!((maximum - minimum).max_element() < 246.001);
+                } else {
+                    let bounds = opencascade::bounding_box::aabb(&reference.shape);
+                    assert!((minimum - bounds.min()).abs().max_element() < 0.001);
+                    assert!((maximum - bounds.max()).abs().max_element() < 0.001);
+                }
+            }
+            drop(bodies);
+            drop(kernel);
+            if print_layout {
+                let folder = std::env::temp_dir()
+                    .join(format!("spice-cad-rack-parts-{}", std::process::id()));
+                export::model_files(&source, &folder, export::Target::Print)?;
+                let manifest: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(folder.join("parts.json")).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+                let parts = manifest.as_array().ok_or("Expected parts manifest")?;
+                assert_eq!(parts.len(), 4);
+                for (part, expected) in parts.iter().zip(&model.parts) {
+                    assert_eq!(part["name"], expected.name);
+                    for format in ["step", "stl"] {
+                        let name = part[format].as_str().ok_or("Missing export filename")?;
+                        assert!(
+                            std::fs::metadata(folder.join(name))
+                                .map_err(|error| error.to_string())?
+                                .len()
+                                > 84
+                        );
+                    }
+                }
+                std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -72,6 +72,7 @@ impl Drop for Watcher {
 
 #[derive(Clone, Copy)]
 pub enum Example {
+    RackParts,
     RocketEngine,
     RevolvedBushing,
     EdgeChamfers,
@@ -89,6 +90,10 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             .join(".local/share"),
     };
     let (name, source) = match example {
+        Example::RackParts => (
+            "rack-parts.luau",
+            include_str!("../../models/rack-parts.luau"),
+        ),
         Example::RocketEngine => (
             "rocket-engine.luau",
             include_str!("../../models/rocket-engine.luau"),

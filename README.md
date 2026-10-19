@@ -196,9 +196,14 @@ The starter source is embedded in the executable and created once at
 `$XDG_DATA_HOME/spice-cad/models/rack.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
-**Examples** opens the assembled spice rack or mounting bracket through the normal
-unsaved-change guard. The rack example is the assembled blank; printable split
-parts remain available through the rack-tools workflow.
+**Examples → Spice rack · four parts** opens four named, colored rack pieces with
+the same dovetail dimensions and 0.2 mm clearance as the dedicated rack exporter.
+Set `separation = 0` to inspect the assembly, or increase it to expose the joints.
+Set `print_layout = true`, then choose **Export → 3D print · STEP + STL** to export
+four bed-oriented parts. `parts.json` maps the numbered files to their part names;
+slice each part separately. The original **Spice rack** example remains an unsplit
+blank. Examples open through the normal unsaved-change guard and preserve existing
+personal copies; the new source is `models/rack-parts.luau` in this checkout.
 The first build compiles the pinned SMLib sources and desktop dependencies;
 use release mode for interaction and performance measurements. The native
 package requires Rust 1.98, supplied by the pinned Nix environment.
