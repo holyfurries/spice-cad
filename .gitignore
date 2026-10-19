@@ -4,7 +4,6 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
-!/AGENTS.md
 !/LICENSE
 
 !/flake.*
@@ -32,3 +31,4 @@
 /target/
 /output/
 /.direnv/
+AGENTS.md
