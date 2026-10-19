@@ -225,6 +225,12 @@ tessellation density. A separate hardware-rendered session measured 31.4 ms p95
 from slider control change to GPU prepare across 234 accepted revisions. This
 excludes GPU completion and presentation. All 139 workspace tests pass.
 
+The [preview scheduling investigation](preview-latency.md) partitions this timing:
+a diagnostic baseline spent 2.4 ms median building the preview and 27.7 ms waiting
+for the UI to receive it. Sampling points into the native Vulkan presentation
+path in the Xvfb environment. The worker already wakes the UI immediately; queue
+and presentation-mode experiments did not establish a latency improvement.
+
 ## Remaining work
 
 1. Profile interactive heap allocation counts and p95 editing latency on large

@@ -225,7 +225,7 @@ struct GpuScene {
 
 #[derive(Clone, Copy, Default)]
 pub struct Metrics {
-    pub input_submission: Option<(u64, f64)>,
+    pub input_latency: Option<crate::performance::Latency>,
     pub uploads: u64,
     pub buffer_allocations: u64,
     pub uniform_writes: u64,
@@ -548,11 +548,10 @@ impl egui_wgpu::CallbackTrait for Draw {
         if let Some(input) = self.input {
             if gpu
                 .metrics
-                .input_submission
-                .is_none_or(|(revision, _)| revision != input.revision)
+                .input_latency
+                .is_none_or(|latency| latency.revision != input.revision)
             {
-                gpu.metrics.input_submission =
-                    Some((input.revision, input.at.elapsed().as_secs_f64() * 1000.0));
+                gpu.metrics.input_latency = Some(input.prepared(std::time::Instant::now()));
             }
         }
         Vec::new()

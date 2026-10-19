@@ -113,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         renderer: eframe::Renderer::Wgpu,
         depth_buffer: 32,
         wgpu_options: egui_wgpu::WgpuConfiguration {
+            surface: egui_wgpu::SurfaceConfig::LOW_LATENCY,
             wgpu_setup: setup.into(),
             ..Default::default()
         },
@@ -305,9 +306,13 @@ impl Worker {
                 while let Ok(command) = requests.recv() {
                     let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
                         Command::ExportScript { source, folder, target } => export::model_files_cached(&source, &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
-                        Command::Script { source, editor_revision, revision, saved_at, input } => {
+                        Command::Script { source, editor_revision, revision, saved_at, mut input } => {
+                            if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
                             let source = source.to_string();
-                            build_script_snapshot_cached(source, revision, cache).map(|mut snapshot| { snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot)) })
+                            build_script_snapshot_cached(source, revision, cache).map(|mut snapshot| {
+                                if let Some(input) = &mut input { input.worker_finished_ms = input.elapsed_ms(Instant::now()); }
+                                snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot))
+                            })
                         }
                         Command::Build {
                             parameters,
@@ -754,6 +759,7 @@ impl Editor {
         }
         self.script = Some(document);
         self.snapshot = None;
+        self.preview_input = None;
         self.watcher = Some(watcher);
         self.diagnostics = Some(diagnostics);
         self.language_popup = None;
@@ -891,7 +897,11 @@ impl Editor {
         match self.worker.try_send(Command::Script {
             input: self
                 .preview_input
-                .filter(|input| input.revision == revision),
+                .filter(|input| input.revision == revision)
+                .map(|mut input| {
+                    input.dispatched_ms = input.elapsed_ms(Instant::now());
+                    input
+                }),
             source: script.buffer.rope.clone(),
             editor_revision: revision,
             revision: self.revision,
@@ -971,6 +981,9 @@ impl Editor {
                 } else {
                     match result {
                         Ok(Outcome::Model(mut snapshot)) => {
+                            if let Some(input) = &mut snapshot.input {
+                                input.received_ms = input.elapsed_ms(Instant::now());
+                            }
                             if self.snapshot.as_ref().is_some_and(|previous| {
                                 previous.scene.layout == placement::Layout::Print
                             }) {
@@ -1856,13 +1869,10 @@ impl eframe::App for Editor {
                 match self.code_state.replace_parameter(&mut script.buffer, &edit) {
                     Ok(()) => {
                         self.parameter_state.applied(&edit, script.buffer.revision);
-                        self.preview_input =
-                            edit.input_at.filter(|_| self.profile.is_some()).map(|at| {
-                                performance::Input {
-                                    at,
-                                    revision: script.buffer.revision,
-                                }
-                            });
+                        self.preview_input = edit
+                            .input_at
+                            .filter(|_| self.profile.is_some())
+                            .map(|at| performance::Input::new(script.buffer.revision, at));
                         self.preview
                             .parameter(script.buffer.revision, Instant::now());
                         self.message = if self.preview.automatic() {
@@ -3606,6 +3616,50 @@ mod tests {
                 "Expected {expected}, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn worker_completion_wakes_ui_immediately_and_preserves_input_timestamps() -> Result<(), String>
+    {
+        let context = egui::Context::default();
+        for _ in 0..3 {
+            let mut output = context.run_ui(Default::default(), |_| {});
+            output.textures_delta.clear();
+        }
+        let (wake, notified) = mpsc::sync_channel(1);
+        context.set_request_repaint_callback(move |info| {
+            let _ = wake.try_send(info.delay);
+        });
+        let worker = Worker::new(context)?;
+        let input = performance::Input::new(1, Instant::now());
+        worker
+            .try_send(Command::Script {
+                input: Some(input),
+                source: "cad.show('box',cad.box({width=1,depth=1,height=1}))".into(),
+                editor_revision: 1,
+                revision: 1,
+                saved_at: None,
+            })
+            .map_err(|error| error.to_string())?;
+        let Outcome::Model(snapshot) = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??
+        else {
+            return Err("Expected model".into());
+        };
+        assert_eq!(
+            notified.recv_timeout(Duration::from_secs(1)),
+            Ok(Duration::ZERO)
+        );
+        let mut traced = snapshot.input.expect("Traced model");
+        assert_eq!(traced.at, input.at);
+        assert_eq!(traced.revision, 1);
+        assert!(traced.worker_started_ms >= input.dispatched_ms);
+        assert!(traced.worker_finished_ms >= traced.worker_started_ms);
+        traced.received_ms = traced.elapsed_ms(Instant::now());
+        let latency = traced.prepared(Instant::now());
+        assert!(latency.milliseconds[0] > 0.0);
+        Ok(())
     }
 
     #[test]

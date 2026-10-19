@@ -782,7 +782,11 @@ Picking shares canonical CPU geometry and transforms queries through part poses,
 avoiding world mesh and sampled-edge copies. With `--profile`, normal exit prints
 slider latency median, p95, p99 and maximum over the latest 512 accepted revisions.
 Timing runs from control change through GPU prepare, excluding GPU completion and
-presentation. See [canonical picking measurements](evaluation/canonical-picking.md)
+presentation. Profiling also breaks that interval into dispatch, worker queueing,
+build time, result delivery and UI-to-prepare; see the
+[preview scheduling investigation](evaluation/preview-latency.md). The native
+renderer explicitly requests eframe's one-frame, low-latency vsync configuration.
+See [canonical picking measurements](evaluation/canonical-picking.md)
 for allocation checks and sustained drag results.
 Numeric property edits reuse a successful type check when every other source
 byte is unchanged. Runtime assertions, property bounds, and assembly checks still
