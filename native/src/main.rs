@@ -170,6 +170,7 @@ struct Snapshot {
     outputs: Arc<Vec<inline_output::Entry>>,
     parts: Vec<model::Part>,
     part_faces: Vec<std::ops::RangeInclusive<u32>>,
+    part_bounds: Vec<[glam::Vec3; 2]>,
     inspected_edges: Vec<inspection::Edge>,
     faces: std::collections::BTreeMap<u32, inspection::Face>,
     bounds: [glam::Vec3; 2],
@@ -262,6 +263,7 @@ fn build_snapshot(
         outputs: Arc::new(Vec::new()),
         parts: Vec::new(),
         part_faces: Vec::new(),
+        part_bounds: Vec::new(),
         inspected_edges: edges.items,
         faces,
         bounds: body.bounds(true)?.map(|point| point.as_vec3()),
@@ -305,9 +307,11 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     let meshes = model.meshes(&mut bodies, false)?;
     let (mesh, part_faces) = mesh::Mesh::combine(&meshes)?;
     let mut outputs = Vec::with_capacity(model.parts.len() + 64);
+    let mut part_bounds = Vec::with_capacity(model.parts.len());
     let mut remaining = thumbnail::PIXEL_VISITS_MAX;
     for ((part, body), mesh) in model.parts.iter().zip(&bodies).zip(&meshes) {
         let bounds = body.bounds(true)?.map(|point| point.as_vec3());
+        part_bounds.push(bounds);
         outputs.push(inline_output::Entry {
             line: part.line,
             name: part.name.clone(),
@@ -352,6 +356,7 @@ fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String
     outputs.sort_by_key(|output| output.line);
     Ok(Snapshot {
         outputs: Arc::new(outputs),
+        part_bounds,
         inspected_edges: edges.items,
         faces,
         bounds,
@@ -1470,7 +1475,10 @@ impl eframe::App for Editor {
                 if let Some(snapshot) = &self.snapshot {
                     if let Some(selection) = &self.selected {
                         interface::section(ui, "SELECTION");
-                        if let Some(latest) = selection.latest() {
+                        if let inspection::Selection::Part { index, .. } = selection {
+                            ui.label(&snapshot.parts[*index as usize].name);
+                            ui.small("Selected part · X/Y/Z bounds");
+                        } else if let Some(latest) = selection.latest() {
                             ui.label(snapshot.annotations.faces.iter().find(|named| named.id == latest.id).map_or("Unnamed face", |named| named.name.as_str()));
                             ui.small(if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement" } else if selection.planar() { "Planar face spans · reference measurements" } else { "Curved face · X/Y/Z bounds, not surface lengths" });
                         } else {
@@ -1506,7 +1514,10 @@ impl eframe::App for Editor {
                     ui.spacing_mut().interact_size.y = 24.0;
                     ui.spacing_mut().item_spacing.y = 4.0;
                     for (part, faces) in snapshot.parts.iter().zip(&snapshot.part_faces) {
-                        let selected = self.selected.as_ref().and_then(|selection| selection.latest()).is_some_and(|face| faces.contains(&face.id));
+                        let selected = self.selected.as_ref().is_some_and(|selection| match selection {
+                            inspection::Selection::Part { faces: selected, .. } => selected == &[*faces.start(), *faces.end()],
+                            _ => selection.latest().is_some_and(|face| faces.contains(&face.id)),
+                        });
                         egui::Frame::NONE.fill(if selected { interface::SELECTION } else { egui::Color32::TRANSPARENT }).corner_radius(4.0).inner_margin(egui::vec2(6.0, 2.0)).show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             ui.horizontal(|ui| {
@@ -1673,6 +1684,11 @@ impl eframe::App for Editor {
                 });
             }
         }
+        if self.code_state.outputs.focus_requested() {
+            self.focus_editor = false;
+            self.show_code = true;
+            ui.ctx().request_repaint();
+        }
         if let Some(action) = self.code_state.action.take() {
             match action {
                 modal::Action::Save => save_requested = true,
@@ -1804,7 +1820,19 @@ impl eframe::App for Editor {
                 }
                 let (rect, response) =
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+                if rect.width() <= 0.0 || rect.height() <= 0.0 { return; }
                 self.viewport_aspect = rect.width().max(1.0) / rect.height().max(1.0);
+                if rect.width() >= 100.0 {
+                    if let Some(request) = self.code_state.outputs.take_focus() {
+                        if let (Some(snapshot), Some(script)) = (&self.snapshot, &self.script) {
+                            if let Some((selection, camera)) = focus_part(snapshot, &request, script.buffer.revision, self.viewport_aspect, &self.camera) {
+                                self.selected = Some(selection);
+                                self.camera = camera;
+                                self.message = format!("Selected part · {}", request.name);
+                            }
+                        }
+                    }
+                }
                 self.camera.interact(&response, ui);
                 if ui.input(|input| input.key_pressed(egui::Key::F))
                     && !ui.ctx().egui_wants_keyboard_input()
@@ -1864,6 +1892,7 @@ impl eframe::App for Editor {
                             revision: snapshot.revision,
                             matrix,
                             selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
+                            selected_part: match &self.selected { Some(inspection::Selection::Part { faces, .. }) => *faces, _ => [0; 2] },
                             selected_edge: match &self.selected { Some(inspection::Selection::Edge(edge)) => Some(edge.segments), _ => None },
                         },
                     ));
@@ -2362,6 +2391,39 @@ impl eframe::App for Editor {
     }
 }
 
+fn focus_part(
+    snapshot: &Snapshot,
+    request: &inline_output::Focus,
+    revision: u64,
+    aspect: f32,
+    previous: &viewport::Camera,
+) -> Option<(inspection::Selection, viewport::Camera)> {
+    assert!(aspect.is_finite());
+    assert!(aspect > 0.0);
+    if request.revision != revision || snapshot.editor_revision != Some(revision) {
+        return None;
+    }
+    let index = snapshot
+        .parts
+        .iter()
+        .position(|part| part.name == request.name)?;
+    let faces = snapshot.part_faces.get(index)?;
+    let bounds = *snapshot.part_bounds.get(index)?;
+    let mut camera = viewport::Camera::rack((bounds[1] - bounds[0]).as_dvec3().to_array());
+    camera.target = (bounds[0] + bounds[1]) / 2.0;
+    camera.distance /= aspect.min(1.0);
+    camera.yaw = previous.yaw;
+    camera.pitch = previous.pitch;
+    Some((
+        inspection::Selection::Part {
+            index: index as u32,
+            faces: [*faces.start(), *faces.end()],
+            bounds,
+        },
+        camera,
+    ))
+}
+
 fn snapshot_camera(snapshot: &Snapshot, aspect: f32) -> viewport::Camera {
     assert!(aspect.is_finite());
     assert!(aspect > 0.0);
@@ -2438,6 +2500,82 @@ fn benchmark() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_focus_selects_the_named_part_and_frames_its_bounds_without_rebuilding()
+    -> Result<(), String> {
+        let mut snapshot = build_script_snapshot(
+            "cad.show('near',cad.box({width=10,depth=10,height=10}))\ncad.show('far',cad.box({width=20,depth=20,height=20,x=200,y=-50,z=35}))",
+            1,
+        )?;
+        snapshot.editor_revision = Some(41);
+        let request = inline_output::Focus {
+            revision: 41,
+            name: "far".into(),
+        };
+        let mesh = Arc::clone(&snapshot.mesh);
+        let mut previous = snapshot_camera(&snapshot, 1.0);
+        previous.yaw = 0.4;
+        previous.pitch = -0.15;
+        for aspect in [0.25, 0.5, 1.0, 2.0] {
+            let (selection, camera) = focus_part(&snapshot, &request, 41, aspect, &previous)
+                .ok_or("Missing part focus")?;
+            let inspection::Selection::Part {
+                index,
+                faces,
+                bounds,
+            } = selection
+            else {
+                panic!("Expected part selection")
+            };
+            assert_eq!(index, 1);
+            assert_eq!(
+                faces,
+                [
+                    *snapshot.part_faces[1].start(),
+                    *snapshot.part_faces[1].end()
+                ]
+            );
+            assert!(faces[0] > *snapshot.part_faces[0].end());
+            assert_eq!(camera.target, glam::vec3(210.0, -40.0, 45.0));
+            assert_eq!([camera.yaw, camera.pitch], [previous.yaw, previous.pitch]);
+            assert_eq!(selection.ids(), [0; 2]);
+            assert!(selection.latest().is_none());
+            assert!(
+                selection
+                    .spans()
+                    .into_iter()
+                    .flatten()
+                    .all(|span| span.distance_mm == 20.0)
+            );
+            let matrix = camera.matrix(aspect);
+            for x in [bounds[0].x, bounds[1].x] {
+                for y in [bounds[0].y, bounds[1].y] {
+                    for z in [bounds[0].z, bounds[1].z] {
+                        let clip = matrix * glam::vec4(x, y, z, 1.0);
+                        assert!(clip.w > 0.0);
+                        assert!(clip.x.abs() <= clip.w);
+                        assert!(clip.y.abs() <= clip.w);
+                    }
+                }
+            }
+            let face = snapshot.faces[&faces[0]];
+            assert_eq!(
+                inspection::Selection::select(Some(&selection), face, true)?.ids(),
+                [face.id, 0]
+            );
+        }
+        assert!(Arc::ptr_eq(&mesh, &snapshot.mesh));
+        assert!(focus_part(&snapshot, &request, 42, 1.0, &previous).is_none());
+        let missing = inline_output::Focus {
+            revision: 41,
+            name: "missing".into(),
+        };
+        assert!(focus_part(&snapshot, &missing, 41, 1.0, &previous).is_none());
+        snapshot.editor_revision = Some(42);
+        assert!(focus_part(&snapshot, &request, 41, 1.0, &previous).is_none());
+        Ok(())
+    }
 
     #[test]
     fn build_identity_rejects_results_from_older_edits_and_other_documents() {

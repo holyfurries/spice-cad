@@ -955,6 +955,10 @@ mod tests {
         let cursor = state.cursor;
         click(&mut source, &mut state, egui::pos2(90.0, 80.0));
         assert_eq!(state.cursor, cursor);
+        let focus = state.outputs.take_focus().expect("Part focus request");
+        assert_eq!(focus.name, "part");
+        assert_eq!(focus.revision, source.revision);
+        assert!(!state.outputs.focus_requested());
         click(&mut source, &mut state, egui::pos2(90.0, 30.0));
         assert_eq!(
             state.outputs.layout(source.rope.len_lines(), 21.0).cards[0].height,
@@ -965,6 +969,12 @@ mod tests {
         assert_eq!(source.rope.char_to_line(state.cursor), 1);
         assert_eq!(source.to_string(), text);
         assert!(source.undo(false).is_none());
+        assert!(state.outputs.take_focus().is_none());
+        click(&mut source, &mut state, egui::pos2(90.0, 30.0));
+        source.replace(0..1, "C", 0);
+        render(&mut source, &mut state, Vec::new());
+        click(&mut source, &mut state, egui::pos2(90.0, 80.0));
+        assert!(!state.outputs.focus_requested());
     }
     #[test]
     fn horizontal_offsets_preserve_tabs_and_short_line_glyph_positions() {

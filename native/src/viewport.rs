@@ -84,6 +84,7 @@ pub struct Draw {
     pub revision: u64,
     pub matrix: Mat4,
     pub selected: [u32; 2],
+    pub selected_part: [u32; 2],
     pub selected_edge: Option<[u32; 2]>,
 }
 struct Gpu {
@@ -110,7 +111,7 @@ pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
     let adapter = state.adapter.get_info();
     eprintln!("Graphics: {} ({:?})", adapter.name, adapter.backend);
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("CAD viewport"),source:wgpu::ShaderSource::Wgsl(r#"
-struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32> }
+struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32>, part:vec4<f32> }
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
 struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32> }
 @vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) color:vec4<f32>)->Output {
@@ -124,7 +125,8 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  let light=0.24+0.62*max(dot(normal,key),0.0)+0.16*max(dot(normal,fill),0.0);
  let specular=0.20*pow(max(dot(normal,normalize(key+view)),0.0),48.0);
  let rim=0.07*pow(1.0-max(dot(normal,view),0.0),3.0);
- var color=input.color; if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
+ var color=input.color; if input.face>=u32(uniforms.part.x) && input.face<=u32(uniforms.part.y) {color=vec3<f32>(1.0,0.65,0.20);}
+ if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
 }
@@ -202,7 +204,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
     });
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Camera"),
-        contents: &[0; 112],
+        contents: &[0; 128],
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -320,7 +322,7 @@ impl egui_wgpu::CallbackTrait for Draw {
                 .and_then(|saved| std::time::SystemTime::now().duration_since(saved).ok())
                 .map(|elapsed| elapsed.as_secs_f64() * 1000.0);
         }
-        let mut uniform = [0_f32; 28];
+        let mut uniform = [0_f32; 32];
         uniform[..16].copy_from_slice(&self.matrix.to_cols_array());
         uniform[16] = self.selected[0] as f32;
         uniform[17..19].copy_from_slice(&self.viewport_size);
@@ -332,6 +334,8 @@ impl egui_wgpu::CallbackTrait for Draw {
             uniform[25] = end as f32;
         }
         uniform[26] = f32::from(self.edges_enabled);
+        uniform[28] = self.selected_part[0] as f32;
+        uniform[29] = self.selected_part[1] as f32;
         queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
         Vec::new()
     }

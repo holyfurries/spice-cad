@@ -361,9 +361,13 @@ The code pane's **Results** toggle shows collapsible output cards below executed
 `cad.show` and `cad.measure` calls, including multiline calls and calls inside loops.
 Part cards contain a static shaded thumbnail, X/Y/Z dimensions, and exact CAD volume.
 Measurement cards show their distance and whether declared limits passed. Click a
-card header to collapse it. Results stay marked **previous result** after edits until
+card header to collapse it. Click a part thumbnail or its statistics to select and
+frame that part in the viewport, preserving the camera's viewing direction. Code-only
+view switches to Split view; the part is highlighted as a whole. Results stay marked
+**previous result** after edits until
 a successful rebuild; edits whose source locations cannot be tracked hide the cards
-until then. Thumbnails are generated on the CAD worker with a fixed work budget;
+until then. Previous results cannot select geometry until a successful run.
+Thumbnails are generated on the CAD worker with a fixed work budget;
 dense models can show a viewport fallback while retaining their dimensions and volume.
 Cards are virtualized with the source and are never saved into the Luau file.
 

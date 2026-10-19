@@ -21,6 +21,11 @@ pub struct Entry {
     pub content: Content,
 }
 
+pub struct Focus {
+    pub revision: u64,
+    pub name: String,
+}
+
 pub struct Placement {
     pub index: usize,
     pub line: usize,
@@ -79,6 +84,7 @@ pub struct State {
     result_revision: u64,
     tracked_revision: u64,
     resolved: bool,
+    focus: Option<Focus>,
 }
 
 impl State {
@@ -94,6 +100,15 @@ impl State {
         self.result_revision = revision;
         self.tracked_revision = revision;
         self.resolved = false;
+        self.focus = None;
+    }
+
+    pub fn focus_requested(&self) -> bool {
+        self.focus.is_some()
+    }
+
+    pub fn take_focus(&mut self) -> Option<Focus> {
+        self.focus.take()
     }
 
     pub fn resolve(&mut self, call_end: impl Fn(usize) -> Option<usize>) {
@@ -116,6 +131,7 @@ impl State {
         if self.tracked_revision == source.revision {
             return;
         }
+        self.focus = None;
         if let Some(change) = source
             .change
             .filter(|change| change.previous_revision == self.tracked_revision)
@@ -255,6 +271,33 @@ impl State {
                 dimensions,
                 volume_mm3,
             } => {
+                let body = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, 28.0), rect.max);
+                let response = ui.interact(
+                    body,
+                    ui.scope_id().with(("inline_part", placement.index)),
+                    if stale {
+                        egui::Sense::hover()
+                    } else {
+                        egui::Sense::click()
+                    },
+                );
+                if response.clicked() {
+                    self.focus = Some(Focus {
+                        revision: self.result_revision,
+                        name: entry.name.clone(),
+                    });
+                }
+                response
+                    .on_hover_text(if stale {
+                        "Run to update this part before selecting it"
+                    } else {
+                        "Select and frame this part in the viewport"
+                    })
+                    .on_hover_cursor(if stale {
+                        egui::CursorIcon::Default
+                    } else {
+                        egui::CursorIcon::PointingHand
+                    });
                 let narrow = rect.width() < 340.0;
                 let thumbnail = egui::Rect::from_min_size(
                     if narrow {

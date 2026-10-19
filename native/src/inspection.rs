@@ -194,9 +194,17 @@ pub struct Face {
 
 #[derive(Clone, Copy)]
 pub enum Selection {
+    Part {
+        index: u32,
+        faces: [u32; 2],
+        bounds: [Vec3; 2],
+    },
     Edge(Edge),
     Face(Face),
-    Pair { first: Face, second: Face },
+    Pair {
+        first: Face,
+        second: Face,
+    },
 }
 
 impl Selection {
@@ -209,7 +217,7 @@ impl Selection {
             return Ok(Self::Face(face));
         };
         let first = match previous {
-            Self::Edge(_) => return Ok(Self::Face(face)),
+            Self::Edge(_) | Self::Part { .. } => return Ok(Self::Face(face)),
             Self::Face(first) => *first,
             Self::Pair { first, second } => {
                 if face.id == first.id {
@@ -238,7 +246,7 @@ impl Selection {
 
     pub fn ids(&self) -> [u32; 2] {
         match self {
-            Self::Edge(_) => [0; 2],
+            Self::Edge(_) | Self::Part { .. } => [0; 2],
             Self::Face(face) => [face.id, 0],
             Self::Pair { first, second } => [first.id, second.id],
         }
@@ -246,7 +254,7 @@ impl Selection {
 
     pub fn latest(&self) -> Option<&Face> {
         match self {
-            Self::Edge(_) => None,
+            Self::Edge(_) | Self::Part { .. } => None,
             Self::Face(face) => Some(face),
             Self::Pair { second, .. } => Some(second),
         }
@@ -254,6 +262,18 @@ impl Selection {
 
     pub fn spans(&self) -> [Option<Span>; 3] {
         match self {
+            Self::Part {
+                bounds: [minimum, maximum],
+                ..
+            } => std::array::from_fn(|axis| {
+                let mut end = *minimum;
+                end[axis] = maximum[axis];
+                Some(Span {
+                    points: [*minimum, end],
+                    distance_mm: maximum[axis] - minimum[axis],
+                    direction: ["X", "Y", "Z"][axis],
+                })
+            }),
             Self::Edge(edge) => edge.spans(),
             Self::Face(face) => face.spans,
             Self::Pair { first, second } => {
@@ -276,6 +296,7 @@ impl Selection {
 
     pub fn center(&self) -> Vec3 {
         match self {
+            Self::Part { bounds, .. } => (bounds[0] + bounds[1]) / 2.0,
             Self::Edge(edge) => edge.center(),
             Self::Face(face) => face.center,
             Self::Pair { first, second } => (first.center + second.center) * 0.5,
