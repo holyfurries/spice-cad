@@ -88,7 +88,12 @@ impl Mesh {
         Ok((combined, ranges))
     }
     pub fn smooth_normals(&mut self) {
-        let mut normals = std::collections::BTreeMap::new();
+        assert!(self.vertices.len() <= 300000);
+        assert!(self.vertices.len().is_multiple_of(3));
+        assert!(self.face_count <= 100000);
+        let capacity =
+            (self.vertices.len() / 3 + self.face_count as usize * 2).min(self.vertices.len());
+        let mut normals = std::collections::HashMap::with_capacity(capacity);
         for triangle in self.vertices.as_chunks::<3>().0 {
             let points = triangle.map(|vertex| Vec3::from_array(vertex.position));
             let normal = (points[1] - points[0]).cross(points[2] - points[0]);
@@ -98,9 +103,11 @@ impl Mesh {
                     .or_insert(Vec3::ZERO) += normal;
             }
         }
+        for normal in normals.values_mut() {
+            *normal = normal.normalize_or_zero();
+        }
         for vertex in &mut self.vertices {
-            let normal =
-                normals[&(vertex.face_id, vertex.position.map(f32::to_bits))].normalize_or_zero();
+            let normal = normals[&(vertex.face_id, vertex.position.map(f32::to_bits))];
             if normal.length_squared() > 0.5 {
                 vertex.normal = normal.to_array();
             }
@@ -212,5 +219,168 @@ impl Mesh {
             }
         }
         selected
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle(points: [[f32; 3]; 3], face_id: u32, normal: [f32; 3]) -> [Vertex; 3] {
+        points.map(|position| Vertex {
+            position,
+            normal,
+            face_id,
+            color: [31, 71, 113, 255],
+        })
+    }
+
+    #[test]
+    fn smoothing_weights_area_preserves_face_boundaries_and_leaves_metadata_unchanged() {
+        let mut mesh = Mesh {
+            face_count: 2,
+            vertices: [
+                triangle(
+                    [[0.0; 3], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+                    1,
+                    [0.0, 0.0, 1.0],
+                ),
+                triangle(
+                    [[0.0; 3], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    1,
+                    [1.0, 0.0, 0.0],
+                ),
+                triangle(
+                    [[0.0; 3], [0.0, 0.0, 2.0], [2.0, 0.0, 0.0]],
+                    2,
+                    [0.0, 1.0, 0.0],
+                ),
+            ]
+            .concat(),
+        };
+        let metadata: Vec<_> = mesh
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.position, vertex.face_id, vertex.color))
+            .collect();
+        mesh.smooth_normals();
+        let weighted = Vec3::new(1.0, 0.0, 4.0).normalize().to_array();
+        assert_eq!(mesh.vertices[0].normal, weighted);
+        assert_eq!(mesh.vertices[3].normal, weighted);
+        assert_eq!(mesh.vertices[2].normal, [0.0, 0.0, 1.0]);
+        assert_eq!(mesh.vertices[4].normal, [1.0, 0.0, 0.0]);
+        assert_eq!(mesh.vertices[6].normal, [0.0, 1.0, 0.0]);
+        assert_eq!(mesh.face_count, 2);
+        for (vertex, original) in mesh.vertices.iter().zip(metadata) {
+            assert_eq!((vertex.position, vertex.face_id, vertex.color), original);
+        }
+    }
+
+    #[test]
+    fn smoothing_preserves_cancelled_and_degenerate_normals_and_signed_zero_groups() {
+        let mut mesh = Mesh {
+            face_count: 1,
+            vertices: [
+                triangle(
+                    [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    1,
+                    [0.0, 0.0, 1.0],
+                ),
+                triangle(
+                    [[0.0; 3], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+                    1,
+                    [0.0, 0.0, -1.0],
+                ),
+                triangle([[5.0; 3]; 3], 1, [0.0, -1.0, 0.0]),
+                triangle(
+                    [[-0.0, 0.0, 0.0], [0.0, 0.0, 2.0], [0.0, 2.0, 0.0]],
+                    1,
+                    [-1.0, 0.0, 0.0],
+                ),
+            ]
+            .concat(),
+        };
+        let original: Vec<_> = mesh.vertices.iter().map(|vertex| vertex.normal).collect();
+        mesh.smooth_normals();
+        for (vertex, normal) in mesh.vertices.iter().zip(original) {
+            assert_eq!(vertex.normal, normal);
+        }
+        assert!(mesh.vertices[9].position[0].is_sign_negative());
+        let mut empty = Mesh {
+            face_count: 0,
+            vertices: Vec::new(),
+        };
+        empty.smooth_normals();
+        assert!(empty.vertices.is_empty());
+    }
+
+    #[test]
+    fn smoothing_bounds_transient_allocations_on_dense_meshes() {
+        let mut mesh = Mesh {
+            face_count: 1,
+            vertices: Vec::with_capacity(3072),
+        };
+        for index in 0..1024 {
+            let x = index as f32 * 2.0;
+            mesh.vertices.extend(triangle(
+                [[x, 0.0, 0.0], [x + 1.0, 0.0, 0.0], [x, 1.0, 0.0]],
+                1,
+                [0.0, 0.0, 1.0],
+            ));
+        }
+        let (_, counts) = crate::allocations::measure(|| mesh.smooth_normals());
+        assert!(counts.calls <= 4, "{counts:?}");
+        assert!(
+            counts.bytes <= mesh.vertices.len() as u64 * 80,
+            "{counts:?}"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .all(|vertex| vertex.normal == [0.0, 0.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn smoothing_preserves_source_order_of_float_accumulation() {
+        let mut mesh = Mesh {
+            face_count: 1,
+            vertices: [
+                triangle(
+                    [[0.0; 3], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]],
+                    1,
+                    [1.0, 0.0, 0.0],
+                ),
+                triangle(
+                    [[0.0; 3], [0.0, 0.1, 0.0], [0.0, 0.0, 0.1]],
+                    1,
+                    [1.0, 0.0, 0.0],
+                ),
+                triangle(
+                    [[0.0; 3], [0.0, 0.0, 1000.0], [0.0, 1000.0, 0.0]],
+                    1,
+                    [-1.0, 0.0, 0.0],
+                ),
+                triangle(
+                    [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    1,
+                    [0.0, 0.0, 1.0],
+                ),
+            ]
+            .concat(),
+        };
+        mesh.smooth_normals();
+        for index in [0, 3, 6, 9] {
+            assert_eq!(mesh.vertices[index].normal, [0.0, 0.0, 1.0]);
+        }
+        let first: Vec<_> = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.normal.map(f32::to_bits))
+            .collect();
+        mesh.smooth_normals();
+        for (vertex, normal) in mesh.vertices.iter().zip(first) {
+            assert_eq!(vertex.normal.map(f32::to_bits), normal);
+        }
     }
 }

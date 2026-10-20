@@ -66,3 +66,33 @@ bounds separately, with Rust allocation counts. It is excluded from normal
 test runs. A regression test bounds bracket tessellation allocation requests;
 the game-mesh test distinguishes exact returned volume from approximate mesh
 volume.
+
+## Normal smoothing
+
+Smoothing uses a pre-sized standard-library hash map instead of one tree node
+allocation per few shared vertices. Each key contains the CAD face ID and all
+three position bit patterns. Triangle-area contributions still accumulate in
+source order; each shared normal is normalized once before being copied to its
+triangle corners. Hash iteration order cannot change the sums. Separate faces,
+signed-zero positions, zero/cancelled normals, and vertex metadata retain their
+previous behavior.
+
+Initial capacity estimates shared vertices as triangle count plus twice the
+CAD face count, capped at the input vertex count. This covers connected face
+triangulations without reserving every triangle corner; unusual disconnected
+data can still grow the map. Inputs remain bounded at 300,000 vertices and
+100,000 faces. No new dependencies or persistent scratch caches were added.
+
+For the bracket, three local debug stage samples reduced smoothing median from
+7.769 ms to 5.939 ms. Tracked Rust allocation calls fell from 298 to one.
+Requested temporary bytes increased from 99,392 to 118,800, approximately
+19 KiB more, in exchange for faster processing and fewer allocation requests.
+These are stage timings; they do not establish a whole-application speedup.
+
+Four focused regression tests cover area weighting, hard face boundaries,
+metadata, cancellation, signed zero, accumulation order, idempotence, empty
+inputs, and dense-mesh allocation budgets. The bracket contact sheet and rocket
+GLB export were byte-identical to the previous implementation. STEP/STL export
+also succeeded; artifacts are under `output/normals-*`.
+All 187 workspace tests, the manual profiler, Clippy, rustfmt, and the native
+build passed after this change.
