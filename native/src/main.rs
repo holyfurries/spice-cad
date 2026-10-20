@@ -474,12 +474,14 @@ fn build_snapshot(
     let mut body = kernel.rack(parameters)?;
     let build_ms = start.elapsed().as_secs_f64() * 1000.0;
     let start = Instant::now();
-    let mut mesh = body.mesh()?;
+    let kernel::Tessellation {
+        mut mesh,
+        volume_mm3,
+    } = body.mesh()?;
     mesh.smooth_normals();
     let edges = body.edges()?;
     let faces = inspection::faces(&mesh)?;
     let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let volume_mm3 = mesh.volume_mm3();
     let bounds = body.bounds(true)?.map(|point| point.as_vec3());
     let geometry = Arc::new(model::Geometry {
         mesh,
@@ -3343,10 +3345,11 @@ fn benchmark() -> Result<(), String> {
         let mut shape = kernel.rack(PARAMETERS)?;
         smlib.push(start.elapsed().as_secs_f64() * 1000.0);
         let start = Instant::now();
-        let mesh = shape.mesh()?;
+        let tessellation = shape.mesh()?;
+        let mesh = tessellation.mesh;
         mesh_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         volume = mesh.volume_mm3();
-        let exact = shape.volume()?;
+        let exact = tessellation.volume_mm3;
         if (exact - volume).abs() > 0.01 {
             return Err(format!(
                 "SMLib exact/mesh volumes disagree: {exact} / {volume}"
@@ -4068,7 +4071,7 @@ mod tests {
         let kernel = kernel::Kernel::new()?;
         let mut body = kernel.box_shape([0.0; 3], [10.0, 20.0, 30.0])?;
         assert_eq!(body.edges()?.segments.len(), 12);
-        let mut mesh = body.mesh()?;
+        let mut mesh = body.mesh()?.mesh;
         mesh.smooth_normals();
         for vertex in &mesh.vertices {
             assert!((glam::Vec3::from_array(vertex.normal).abs().max_element() - 1.0).abs() < 1e-6);

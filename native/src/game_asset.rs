@@ -312,7 +312,12 @@ mod tests {
         let mut body = model.build(&kernel)?.remove(0);
         let volume_before = body.volume()?;
         let print = body.mesh()?;
-        let mut game = body.game_mesh()?;
+        let game = body.game_mesh()?;
+        assert!((print.volume_mm3 - volume_before).abs() < 1e-6);
+        assert!((game.volume_mm3 - volume_before).abs() < 1e-6);
+        assert!((game.mesh.volume_mm3() - game.volume_mm3).abs() > 0.1);
+        let print = print.mesh;
+        let mut game = game.mesh;
         assert!(game.vertices.len() < print.vertices.len());
         game.validate()?;
         game.smooth_normals();

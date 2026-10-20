@@ -232,12 +232,15 @@ impl<'kernel> Cache<'kernel> {
                     .map_err(|error| format!("Part '{}': {error}", part.name))?;
                 prepared.build_ms += started.elapsed().as_secs_f64() * 1000.0;
                 let started = std::time::Instant::now();
-                let mut mesh = body.mesh()?;
+                let crate::kernel::Tessellation {
+                    mut mesh,
+                    volume_mm3,
+                } = body.mesh()?;
                 mesh.smooth_normals();
                 let geometry = Arc::new(Geometry {
                     mesh,
                     edges: body.edges()?,
-                    volume_mm3: body.volume()?,
+                    volume_mm3,
                     bounds: body.bounds(true)?.map(|point| point.as_vec3()),
                 });
                 prepared.tessellation_ms += started.elapsed().as_secs_f64() * 1000.0;
@@ -394,6 +397,74 @@ fn cache_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Manual display-geometry stage timings and Rust allocation counts"]
+    fn profile_display_geometry_stages() -> Result<(), String> {
+        fn stage<T>(name: &str, run: impl FnOnce() -> T) -> T {
+            let started = std::time::Instant::now();
+            let (result, allocations) = crate::allocations::measure(run);
+            eprintln!(
+                "{name}: {:.3} ms, {allocations:?}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            result
+        }
+        for (name, source) in [
+            (
+                "bracket",
+                include_str!("../../models/mounting-bracket.luau"),
+            ),
+            ("rack", include_str!("../../models/rack-parts.luau")),
+            ("rocket", include_str!("../../models/rocket-engine.luau")),
+        ] {
+            let kernel = Kernel::new()?;
+            let model = super::super::compile(source)?;
+            for sample in 0..3 {
+                let mut bodies = model.build(&kernel)?;
+                eprintln!("{name} sample {sample}, {} bodies", bodies.len());
+                for body in &mut bodies {
+                    let crate::kernel::Tessellation {
+                        mut mesh,
+                        volume_mm3,
+                    } = stage("mesh and exact volume", || body.mesh())?;
+                    stage("normals", || mesh.smooth_normals());
+                    let edges = stage("edges", || body.edges())?;
+                    let bounds = stage("bounds", || body.bounds(true))?;
+                    assert!(volume_mm3 > 0.0);
+                    assert!(bounds[0].cmple(bounds[1]).all());
+                    eprintln!(
+                        "{} triangles, {} edge segments, {volume_mm3:.3} mm³",
+                        mesh.vertices.len() / 3,
+                        edges.segments.len()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tessellation_allocations_stay_within_the_curved_bracket_budget() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let model = super::super::compile(include_str!("../../models/mounting-bracket.luau"))?;
+        let mut bodies = model.build(&kernel)?;
+        assert_eq!(bodies.len(), 1);
+        let (tessellation, allocations) = crate::allocations::measure(|| bodies[0].mesh());
+        let tessellation = tessellation?;
+        drop(bodies);
+        drop(kernel);
+        let vertices = tessellation.mesh.vertices.len();
+        assert_eq!(vertices / 3, 2564);
+        assert!(allocations.calls < (vertices / 6) as u64, "{allocations:?}");
+        let vertex_size_bytes = std::mem::size_of::<crate::mesh::Vertex>();
+        assert!(
+            allocations.bytes <= (vertices * vertex_size_bytes * 3) as u64,
+            "{allocations:?}"
+        );
+        assert!((tessellation.volume_mm3 - 49560.026).abs() < 0.001);
+        Ok(())
+    }
 
     #[test]
     fn cached_annotation_allocations_do_not_scale_with_mesh_density() -> Result<(), String> {

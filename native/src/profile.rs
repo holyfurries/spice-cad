@@ -290,7 +290,7 @@ mod tests {
                     crate::kernel::ProfileSweep::Extrude { height_mm: 3.0 },
                 )?;
                 assert!((body.volume()? - 300.0).abs() < 1e-4);
-                body.mesh()?.validate()?;
+                body.mesh()?.mesh.validate()?;
             }
         }
         let source = "--!strict\nlocal p=cad.polygon({{x=0,y=0},{x=10,y=0},{x=0,y=10}})\nlocal a=cad.extrude(p,{height=4})\nlocal b=cad.translate(cad.extrude(p,{height=8}),{x=20})\nlocal part=cad.rotate(cad.union(a,b),{axis='x',angle=90})\ncad.show('reused',part)";

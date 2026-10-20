@@ -899,6 +899,10 @@ measurement method, installation limits, and next priorities. A Linux X11
 startup, idle-CPU, memory, and resize harness is in
 `evaluation/profile-native.rs`. The [cache audit](evaluation/cache-audit.md)
 records ownership, invalidation, heap profiles, and remaining repeated work.
+Display preparation reuses the exact volume already calculated during mesh
+validation and extracts polygons with a fixed point buffer. See
+[display meshing measurements](evaluation/display-meshing.md) for stage timings,
+allocation budgets, and the manual profiler command.
 **Debug → Performance** and `--profile` expose GPU geometry uploads, buffer
 allocations, retained capacity, and uniform uploads, including placement upload
 counts and bytes. Moving or rotating finished parts updates small transform/color

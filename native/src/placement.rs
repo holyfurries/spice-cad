@@ -106,7 +106,7 @@ mod tests {
         let mut body = kernel.box_shape([0.0; 3], [10.0, 20.0, 30.0])?;
         let original = body.bounds(true)?;
         placement.apply(&mut body, false)?;
-        let mesh = body.mesh()?;
+        let mesh = body.mesh()?.mesh;
         let points = [0.0, 10.0]
             .into_iter()
             .flat_map(|x| {

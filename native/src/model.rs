@@ -656,9 +656,9 @@ impl Model {
         let mut count = 0;
         for (body, part) in bodies.iter_mut().zip(&self.parts) {
             let mut mesh = if game {
-                body.game_mesh()?
+                body.game_mesh()?.mesh
             } else {
-                body.mesh()?
+                body.mesh()?.mesh
             };
             count += mesh.vertices.len();
             if count > 300000 {

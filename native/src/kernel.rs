@@ -296,6 +296,11 @@ pub struct Body<'kernel> {
     _kernel: &'kernel Kernel,
 }
 
+pub struct Tessellation {
+    pub mesh: crate::mesh::Mesh,
+    pub volume_mm3: f64,
+}
+
 impl Kernel {
     pub fn new() -> Result<Self, String> {
         let context = CONTEXT.lock().map_err(|error| error.to_string())?;
@@ -757,7 +762,7 @@ impl Body<'_> {
         let mut volume = 0.0;
         let status = unsafe { ffi::SmApiBrepComputeVolume(self.shape.as_ptr(), 1e-8, &mut volume) }
             .map_err(|error| error.to_string())?;
-        if status != 1000 {
+        if status != 1000 || !volume.is_finite() || volume < 0.0 {
             return Err(format!("Volume failed: {status}"));
         }
         Ok(volume)
@@ -905,11 +910,11 @@ impl Body<'_> {
         Ok(center)
     }
 
-    pub fn mesh(&mut self) -> Result<crate::mesh::Mesh, String> {
+    pub fn mesh(&mut self) -> Result<Tessellation, String> {
         self.mesh_with_tolerance(0.02, 15.0)
     }
 
-    pub fn game_mesh(&mut self) -> Result<crate::mesh::Mesh, String> {
+    pub fn game_mesh(&mut self) -> Result<Tessellation, String> {
         self.mesh_with_tolerance(0.25, 30.0)
     }
 
@@ -917,7 +922,7 @@ impl Body<'_> {
         &mut self,
         chord_mm: f64,
         angle_deg: f64,
-    ) -> Result<crate::mesh::Mesh, String> {
+    ) -> Result<Tessellation, String> {
         assert!(chord_mm > 0.0);
         assert!(angle_deg > 0.0);
         let mut output = std::ptr::null_mut();
@@ -959,7 +964,7 @@ impl Body<'_> {
                 face_list.extend(faces);
             }
         }
-        let mut vertices = Vec::with_capacity(3072);
+        let mut vertices = Vec::with_capacity((face_list.len() * 3).min(300000));
         let mut faces = std::collections::BTreeMap::new();
         for face in face_list {
             let face = face.cast::<ffi::SmPolyFace>();
@@ -977,26 +982,24 @@ impl Body<'_> {
                 unsafe { face_ref.GetOuterPolyLoop().as_ref() }.ok_or("Missing face outline")?;
             let edge_first = outline.GetFirstPolyEdge();
             let mut edge = edge_first;
-            let mut points = Vec::with_capacity(4);
-            for _ in 0..16 {
+            let mut points = [glam::Vec3::ZERO; 4];
+            let mut point_count = 0;
+            for point_slot in &mut points {
                 let edge_ref = unsafe { edge.as_ref() }.ok_or("Missing triangle edge")?;
                 let vertex = unsafe { edge_ref.GetStartPolyVertex().as_mut() }
                     .ok_or("Missing triangle point")?;
                 let point = unsafe { std::pin::Pin::new_unchecked(vertex) }.GetPoint();
-                points.push(glam::Vec3::new(
-                    point.x as f32,
-                    point.y as f32,
-                    point.z as f32,
-                ));
+                *point_slot = glam::Vec3::new(point.x as f32, point.y as f32, point.z as f32);
+                point_count += 1;
                 edge = unsafe { next_topology(edge) };
                 if edge.is_null() || edge == edge_first {
                     break;
                 }
             }
-            if !(3..=4).contains(&points.len()) {
+            if point_count < 3 || (!edge.is_null() && edge != edge_first) {
                 return Err("Tessellation face is not a triangle or convex quad".into());
             }
-            for index in 1..points.len() - 1 {
+            for index in 1..point_count - 1 {
                 let triangle = if reverse {
                     [points[0], points[index + 1], points[index]]
                 } else {
@@ -1027,6 +1030,9 @@ impl Body<'_> {
         };
         mesh.validate()?;
         let exact = self.volume()?;
+        if exact <= 0.0 {
+            return Err("Tessellation requires a positive solid volume".into());
+        }
         let area: f64 = mesh
             .vertices
             .as_chunks::<3>()
@@ -1048,7 +1054,10 @@ impl Body<'_> {
                 mesh.vertices.len() / 3
             ));
         }
-        Ok(mesh)
+        Ok(Tessellation {
+            mesh,
+            volume_mm3: exact,
+        })
     }
 }
 
