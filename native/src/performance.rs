@@ -14,6 +14,7 @@ const SWEEP_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum SweepKind {
     Separation,
     Rotation,
+    Geometry,
 }
 
 pub struct Sweep {
@@ -21,6 +22,11 @@ pub struct Sweep {
     deadline: Instant,
     started: Option<Instant>,
     last: Option<(u32, u64)>,
+    pending: Option<(u32, f64, Instant)>,
+    sampled: Option<u32>,
+    input_count: u32,
+    result_count: u32,
+    stale_count: u32,
     changes: u32,
     completed: Arc<AtomicBool>,
 }
@@ -32,6 +38,11 @@ impl Sweep {
             deadline: now + SWEEP_TIMEOUT,
             started: None,
             last: None,
+            pending: None,
+            sampled: None,
+            input_count: 0,
+            result_count: 0,
+            stale_count: 0,
             changes: 0,
             completed,
         }
@@ -41,6 +52,7 @@ impl Sweep {
         match self.kind {
             SweepKind::Separation => "separation",
             SweepKind::Rotation => "rotation",
+            SweepKind::Geometry => "hole_radius",
         }
     }
 
@@ -53,15 +65,25 @@ impl Sweep {
                 source.replacen("--!strict", "--!strict\nlocal rotation: number = cad.number(0, {min=0,max=100,step=1,unit=\"deg\"})", 1)
                     .replace("assembly = { position =", "assembly = { rotation = {z=rotation}, position =")
             }
+            SweepKind::Geometry => {
+                let source = include_str!("../../models/mounting-bracket.luau");
+                let declaration = "cad.number(3, { label = \"Hole radius\", unit = \"mm\" })";
+                assert_eq!(source.matches(declaration).count(), 1);
+                source.replacen(
+                    declaration,
+                    "cad.number(3, {label=\"Hole radius\",unit=\"mm\",min=3,max=5,step=0.02})",
+                    1,
+                )
+            }
         }
     }
 
-    pub fn next(&mut self, now: Instant) -> Option<(u32, f64)> {
+    pub fn sample(&mut self, now: Instant) {
         let started = *self.started.get_or_insert(now);
         let index = (now.duration_since(started).as_millis() / SWEEP_INTERVAL.as_millis())
             .min(u128::from(SWEEP_CHANGE_COUNT - 1)) as u32;
-        if self.last.is_some_and(|(last, _)| index <= last) {
-            return None;
+        if self.sampled.is_some_and(|last| index <= last) {
+            return;
         }
         let phase = index % 100;
         let value = if phase <= 50 {
@@ -69,13 +91,32 @@ impl Sweep {
         } else {
             (100 - phase) * 2
         };
-        Some((index, f64::from(value)))
+        let value = match self.kind {
+            SweepKind::Geometry => 3.0 + f64::from(value) * 0.02,
+            _ => f64::from(value),
+        };
+        self.sampled = Some(index);
+        self.input_count += 1;
+        self.pending = Some((index, value, now));
+    }
+
+    pub fn pending(&self) -> Option<(u32, f64, Instant)> {
+        self.pending
+    }
+
+    pub fn result(&mut self, current: bool) {
+        self.result_count += 1;
+        if !current {
+            self.stale_count += 1;
+        }
     }
 
     pub fn applied(&mut self, index: u32, revision: u64) {
         assert!(index < SWEEP_CHANGE_COUNT);
         assert!(self.last.is_none_or(|(previous, _)| index > previous));
         self.last = Some((index, revision));
+        assert_eq!(self.pending.map(|pending| pending.0), Some(index));
+        self.pending = None;
         self.changes += 1;
     }
 
@@ -86,10 +127,15 @@ impl Sweep {
         if complete || now >= self.deadline {
             self.completed.store(complete, Ordering::Release);
             eprintln!(
-                "Profile: preview_sweep status={} scheduled_changes={} applied_changes={} elapsed_ms={:.3}",
+                "Profile: preview_sweep status={} property={} scheduled_changes={} sampled_inputs={} coalesced_inputs={} applied_changes={} worker_results={} stale_results={} elapsed_ms={:.3}",
                 if complete { "complete" } else { "timeout" },
+                self.property(),
                 SWEEP_CHANGE_COUNT,
+                self.input_count,
+                self.input_count - self.changes,
                 self.changes,
+                self.result_count,
+                self.stale_count,
                 self.started
                     .map_or(0.0, |started| now.duration_since(started).as_secs_f64()
                         * 1000.0)
@@ -307,12 +353,27 @@ mod tests {
         let at = Instant::now();
         let completed = Arc::new(AtomicBool::new(false));
         let mut sweep = Sweep::new(at, Arc::clone(&completed), SweepKind::Separation);
-        assert_eq!(sweep.next(at), Some((0, 0.0)));
+        sweep.sample(at);
+        assert_eq!(sweep.pending(), Some((0, 0.0, at)));
         sweep.applied(0, 10);
-        assert_eq!(sweep.next(at), None);
-        assert_eq!(sweep.next(at + Duration::from_millis(60)), Some((3, 6.0)));
-        sweep.applied(3, 11);
-        assert_eq!(sweep.next(at + Duration::from_secs(8)), Some((299, 2.0)));
+        sweep.sample(at);
+        assert_eq!(sweep.pending(), None);
+        let third = at + Duration::from_millis(60);
+        sweep.sample(third);
+        assert_eq!(sweep.pending(), Some((3, 6.0, third)));
+        let fourth = at + Duration::from_millis(80);
+        sweep.sample(fourth);
+        assert_eq!(sweep.pending(), Some((4, 8.0, fourth)));
+        assert_eq!(sweep.input_count, 3);
+        assert_eq!(sweep.changes, 1);
+        sweep.applied(4, 11);
+        sweep.result(false);
+        sweep.result(true);
+        assert_eq!(sweep.result_count, 2);
+        assert_eq!(sweep.stale_count, 1);
+        let final_at = at + Duration::from_secs(8);
+        sweep.sample(final_at);
+        assert_eq!(sweep.pending(), Some((299, 2.0, final_at)));
         sweep.applied(299, 12);
         assert!(!sweep.finish(Some(11), at + Duration::from_secs(8)));
         assert!(!completed.load(Ordering::Acquire));
@@ -321,6 +382,27 @@ mod tests {
         let stalled = Sweep::new(at, Arc::new(AtomicBool::new(false)), SweepKind::Rotation);
         assert!(stalled.finish(None, at + SWEEP_TIMEOUT));
         assert!(!stalled.completed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn geometry_sweep_changes_holes_within_the_declared_slider_range() -> Result<(), String> {
+        let at = Instant::now();
+        let mut sweep = Sweep::new(at, Arc::new(AtomicBool::new(false)), SweepKind::Geometry);
+        let source = sweep.source();
+        crate::model::compile(&source)?;
+        let (_, parameters) = crate::parameters::analyze_source(&source).ok_or("Parameters")?;
+        assert!(
+            parameters
+                .iter()
+                .any(|parameter| parameter.name == sweep.property())
+        );
+        sweep.sample(at);
+        assert_eq!(sweep.pending(), Some((0, 3.0, at)));
+        sweep.sample(at + SWEEP_INTERVAL * 50);
+        assert_eq!(sweep.pending().map(|(_, value, _)| value), Some(5.0));
+        sweep.sample(at + SWEEP_INTERVAL * 299);
+        assert_eq!(sweep.pending().map(|(_, value, _)| value), Some(3.04));
+        Ok(())
     }
 
     #[test]

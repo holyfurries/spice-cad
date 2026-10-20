@@ -59,25 +59,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             arguments.remove(index);
             started
         });
-    let benchmarking = matches!(arguments.as_slice(), [flag] if flag == "--profile-preview" || flag == "--profile-rotation");
-    let sweep_kind = if arguments.as_slice() == ["--profile-rotation"] {
-        performance::SweepKind::Rotation
-    } else {
-        performance::SweepKind::Separation
+    let sweep_kind = match arguments.as_slice() {
+        [flag] if flag == "--profile-preview" => Some(performance::SweepKind::Separation),
+        [flag] if flag == "--profile-rotation" => Some(performance::SweepKind::Rotation),
+        [flag] if flag == "--profile-geometry" => Some(performance::SweepKind::Geometry),
+        _ => None,
     };
+    let benchmarking = sweep_kind.is_some();
     if benchmarking {
         profile = Some(started);
     }
     let completed = benchmarking.then(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let sweep = completed
         .as_ref()
-        .map(|completed| performance::Sweep::new(started, Arc::clone(completed), sweep_kind));
+        .zip(sweep_kind)
+        .map(|(completed, kind)| performance::Sweep::new(started, Arc::clone(completed), kind));
     #[cfg(feature = "rack-tools")]
     if arguments.as_slice() == ["--benchmark"] {
         return benchmark().map_err(Into::into);
     }
     let model_path = match arguments.as_slice() {
-        [flag] if flag == "--profile-preview" || flag == "--profile-rotation" => None,
+        [_] if benchmarking => None,
         [] => Some(document::example_model(document::Example::RackParts)?),
         #[cfg(feature = "rack-tools")]
         [flag] if flag == "--rack" => None,
@@ -118,9 +120,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 } else {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 })
                     .into(),
             );
@@ -1278,6 +1280,11 @@ impl Editor {
                         self.parameters,
                     )
                 });
+                if let Some(sweep) = &mut self.sweep {
+                    if matches!(&result, Ok(Outcome::Model(snapshot)) if snapshot.input.is_some()) {
+                        sweep.result(current);
+                    }
+                }
                 let run_revision = match active {
                     Some(ModelRevision::Script(revision)) => Some(revision),
                     _ => None,
@@ -2268,13 +2275,15 @@ impl eframe::App for Editor {
         }
         let mut sweep_index = None;
         if let (Some(sweep), Some(script)) = (&mut self.sweep, &self.script) {
+            if self.snapshot.is_some() && self.parameter_state.ready(script.buffer.revision) {
+                sweep.sample(Instant::now());
+            }
             if matches!(self.work, WorkerState::Idle)
                 && self.snapshot.as_ref().is_some_and(|snapshot| {
                     snapshot.editor_revision == Some(script.buffer.revision)
                 })
             {
-                let at = Instant::now();
-                if let Some((index, value)) = sweep.next(at) {
+                if let Some((index, value, at)) = sweep.pending() {
                     match self.parameter_state.edit_literal(
                         script.buffer.revision,
                         sweep.property(),
@@ -3804,6 +3813,46 @@ mod tests {
             assert_eq!(initial.thumbnail_renders, current.thumbnail_renders);
             assert_eq!(current.cached_parts, 4);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn geometry_sweep_rebuilds_holes_and_reuses_the_final_revision() -> Result<(), String> {
+        let sweep = performance::Sweep::new(
+            Instant::now(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            performance::SweepKind::Geometry,
+        );
+        let source = sweep.source();
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let initial = build_script_snapshot_with_thumbnails(
+            source.clone(),
+            1,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        let changed_source = source.replace("cad.number(3,", "cad.number(5,");
+        let changed = build_script_snapshot_with_thumbnails(
+            changed_source.clone(),
+            2,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        let repeated = build_script_snapshot_with_thumbnails(
+            changed_source,
+            3,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        drop(cache);
+        drop(kernel);
+        assert_eq!(changed.cached_parts, 0);
+        assert!(initial.volume_mm3 > changed.volume_mm3);
+        assert!(!Arc::ptr_eq(&initial.scene.display, &changed.scene.display));
+        assert_eq!(repeated.cached_parts, 1);
+        assert!(Arc::ptr_eq(&changed.scene.display, &repeated.scene.display));
+        assert_eq!(changed.scene.bounds, initial.scene.bounds);
         Ok(())
     }
 

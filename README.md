@@ -921,8 +921,12 @@ build time, result delivery and UI-to-prepare; see the
 renderer explicitly requests eframe's one-frame, low-latency vsync configuration.
 For an automatic, bounded test without desktop input, run
 `spice-cad --profile-preview` for translation or `spice-cad --profile-rotation`
-for rotation. Both sweep the bundled rack in memory and close after the final
-preview and any pending thumbnails, leaving model files unchanged. The
+for rotation. Use `spice-cad --profile-geometry` to sweep the mounting bracket's
+hole radius from 3 to 5 mm. These workloads sample control changes every 20 ms,
+retain the latest pending input while the worker is busy, and report coalesced
+inputs and stale worker results. They close after the final
+preview and any pending thumbnails, leaving model files unchanged. See the
+[slider workload guide](evaluation/slider-workloads.md) for interpretation. The
 [native Wayland baseline](evaluation/wayland-preview.md) describes the workload
 and why headless display timings can differ substantially from the desktop.
 See [rotation preview measurements](evaluation/rotation-preview.md) for the
