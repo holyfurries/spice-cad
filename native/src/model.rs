@@ -481,7 +481,7 @@ pub fn compile_cached(
         "Assembly".into()
     };
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
-    definitions.validate_parameters(source)?;
+    definitions.validate_parameters(analysis.take_parameters())?;
     Ok(Model {
         recipe: Rc::new(recipe),
         definitions,
@@ -555,16 +555,31 @@ impl Model {
             return Ok(crate::dimensions::Annotations::default());
         }
         assert_eq!(meshes.len(), self.parts.len());
-        let (mesh, ranges) = crate::mesh::Mesh::combine(meshes)?;
-        assert_eq!(self.parts.len(), ranges.len());
+        if meshes.is_empty()
+            || meshes.len() > PART_COUNT_MAX
+            || meshes.iter().map(|mesh| mesh.vertices.len()).sum::<usize>() > 300000
+        {
+            return Err("Assembly exceeds its part or triangle budget".into());
+        }
+        let planes: Vec<_> = meshes
+            .iter()
+            .map(|mesh| crate::dimensions::planes(mesh))
+            .collect();
+        let mut first = 1;
         let outputs: Vec<_> = self
             .parts
             .iter()
-            .zip(&ranges)
-            .map(|(part, range)| (part.solid, range.clone(), part.assembly.matrix()))
+            .zip(meshes)
+            .zip(&planes)
+            .map(|((part, mesh), planes)| {
+                let faces = first..=first + mesh.face_count - 1;
+                first += mesh.face_count;
+                (part.solid, faces, part.assembly.matrix(), planes)
+            })
             .collect();
-        self.definitions.resolve(&mesh, &outputs)
+        self.definitions.resolve(&outputs)
     }
+
     pub fn build<'kernel>(&self, kernel: &'kernel Kernel) -> Result<Vec<Body<'kernel>>, String> {
         assert!(!self.parts.is_empty());
         assert!(self.parts.len() <= PART_COUNT_MAX);

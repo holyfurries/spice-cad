@@ -47,6 +47,7 @@ struct Entry<'kernel> {
     body: Rc<Body<'kernel>>,
     geometry: Arc<Geometry>,
     presentations: [Option<Arc<Presentation>>; 2],
+    planes: Option<Arc<crate::dimensions::Planes>>,
 }
 
 pub struct Prepared<'kernel> {
@@ -100,6 +101,28 @@ impl<'kernel> Cache<'kernel> {
         let display = Arc::new(crate::viewport::Geometry::new(geometry)?);
         self.display = Some(Arc::clone(&display));
         Ok(display)
+    }
+
+    pub fn annotations(&mut self, model: &Model) -> Result<crate::dimensions::Annotations, String> {
+        assert_eq!(self.entries.len(), model.parts.len());
+        if !model.has_annotations() {
+            return Ok(Default::default());
+        }
+        let mut first = 1;
+        let outputs: Vec<_> = self
+            .entries
+            .iter_mut()
+            .zip(&model.parts)
+            .map(|(entry, part)| {
+                let planes = entry.planes.get_or_insert_with(|| {
+                    Arc::new(crate::dimensions::planes(&entry.geometry.mesh))
+                });
+                let faces = first..=first + entry.geometry.mesh.face_count - 1;
+                first += entry.geometry.mesh.face_count;
+                (part.solid, faces, part.assembly.matrix(), &**planes)
+            })
+            .collect();
+        model.definitions.resolve(&outputs)
     }
 
     pub fn presentations(
@@ -199,6 +222,7 @@ impl<'kernel> Cache<'kernel> {
                     body: Rc::clone(&entry.body),
                     geometry: Arc::clone(&entry.geometry),
                     presentations: entry.presentations.clone(),
+                    planes: entry.planes.clone(),
                 }
             } else {
                 let before = steps;
@@ -224,6 +248,7 @@ impl<'kernel> Cache<'kernel> {
                     body: Rc::new(body),
                     geometry,
                     presentations: Default::default(),
+                    planes: None,
                 }
             };
             vertices += entry.geometry.mesh.vertices.len();
@@ -358,6 +383,46 @@ fn cache_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_annotation_allocations_do_not_scale_with_mesh_density() -> Result<(), String> {
+        fn run(radius: u32) -> Result<(usize, crate::allocations::Counts), String> {
+            let kernel = Kernel::new()?;
+            let mut cache = Cache::new(&kernel);
+            let source = format!(
+                "local part=cad.cylinder({{radius={radius},height=20}});local a=cad.face(part,{{name='bottom',normal='z-'}});local b=cad.face(part,{{name='top',normal='z+'}});cad.measure('height',{{from=a,to=b}});cad.show('part',part)"
+            );
+            let model = cache.compile(&source)?;
+            let prepared = cache.prepare(&model)?;
+            cache.annotations(&model)?;
+            let previous = Arc::clone(
+                cache.entries[0]
+                    .planes
+                    .as_ref()
+                    .ok_or("Missing plane cache")?,
+            );
+            cache.prepare(&model)?;
+            assert!(Arc::ptr_eq(
+                &previous,
+                cache.entries[0]
+                    .planes
+                    .as_ref()
+                    .ok_or("Missing reused planes")?
+            ));
+            let (annotations, counts) = crate::allocations::measure(|| cache.annotations(&model));
+            assert!((annotations?.measurements[0].distance_mm - 20.0).abs() < 0.001);
+            Ok((prepared.geometry[0].mesh.vertices.len(), counts))
+        }
+        let (coarse, first) = run(1)?;
+        let (fine, second) = run(1000)?;
+        assert!(fine > coarse * 4);
+        assert_eq!(first, second);
+        eprintln!(
+            "Cached annotations: {coarse}/{fine} vertices, {} allocations and {} requested bytes in either case",
+            first.calls, first.bytes
+        );
+        Ok(())
+    }
 
     #[test]
     fn cache_reuses_dependencies_ignores_metadata_and_keeps_canonical_bodies() -> Result<(), String>

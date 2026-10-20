@@ -17,6 +17,7 @@ struct Selector {
     axis: usize,
     positive: bool,
     at: Option<f32>,
+    near: Option<Vec3>,
 }
 struct Requirement {
     line: usize,
@@ -56,6 +57,10 @@ pub struct Annotations {
     pub faces: Vec<NamedFace>,
     pub measurements: Vec<Measurement>,
 }
+pub struct Planes {
+    faces: BTreeMap<u32, Plane>,
+}
+
 struct Plane {
     axis: Option<(usize, bool)>,
     minimum: Vec3,
@@ -78,7 +83,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
     cad.set(
         "face",
         lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
-            crate::model::options_fields(&options, &["name", "normal", "at"])?;
+            crate::model::options_fields(&options, &["name", "normal", "at", "near"])?;
             let name: String = options.get("name")?;
             valid_name(&name)?;
             let normal: String = options.get("normal")?;
@@ -101,6 +106,22 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
                     "Face position must be finite and within ±2000 mm".into(),
                 ));
             }
+            let near = options
+                .get::<Option<Table>>("near")?
+                .map(|point| {
+                    crate::model::options_fields(&point, &["x", "y", "z"])?;
+                    let values: [f64; 3] = [point.get("x")?, point.get("y")?, point.get("z")?];
+                    if values
+                        .iter()
+                        .any(|value| !value.is_finite() || value.abs() > 2000.0)
+                    {
+                        return Err(mlua::Error::runtime(
+                            "Face near coordinates must be finite and within ±2000 mm",
+                        ));
+                    }
+                    Ok(Vec3::from_array(values.map(|value| value as f32)))
+                })
+                .transpose()?;
             let mut definitions = shared.borrow_mut();
             if definitions.faces.len() >= COUNT_MAX
                 || definitions.faces.iter().any(|face| face.name == name)
@@ -116,6 +137,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
                 axis,
                 positive,
                 at: at.map(|value| value as f32),
+                near,
             });
             Ok(Face(index))
         })?,
@@ -192,7 +214,7 @@ pub(crate) fn valid_name(name: &str) -> mlua::Result<()> {
     Ok(())
 }
 
-fn planes(mesh: &Mesh) -> BTreeMap<u32, Plane> {
+pub fn planes(mesh: &Mesh) -> Planes {
     assert!(mesh.vertices.len() <= 300000);
     assert!(mesh.vertices.len().is_multiple_of(3));
     let mut planes = BTreeMap::<u32, Plane>::new();
@@ -222,7 +244,7 @@ fn planes(mesh: &Mesh) -> BTreeMap<u32, Plane> {
             }
         }
     }
-    planes
+    Planes { faces: planes }
 }
 
 impl Measurement {
@@ -249,7 +271,10 @@ impl Measurement {
 }
 
 impl Definitions {
-    pub fn validate_parameters(&mut self, source: &str) -> Result<(), String> {
+    pub fn validate_parameters(
+        &mut self,
+        parameters: Option<Vec<crate::parameters::Parameter>>,
+    ) -> Result<(), String> {
         if !self
             .measurements
             .iter()
@@ -257,8 +282,7 @@ impl Definitions {
         {
             return Ok(());
         }
-        self.parameters = crate::parameters::extract_source(source)
-            .ok_or("Could not read measurement parameter declarations")?;
+        self.parameters = parameters.ok_or("Could not read measurement parameter declarations")?;
         for measurement in &self.measurements {
             if let Some(name) = &measurement.parameter {
                 let mut matches = self
@@ -285,8 +309,7 @@ impl Definitions {
 
     pub fn resolve(
         &self,
-        mesh: &Mesh,
-        outputs: &[(usize, std::ops::RangeInclusive<u32>, Mat4)],
+        outputs: &[(usize, std::ops::RangeInclusive<u32>, Mat4, &Planes)],
     ) -> Result<Annotations, String> {
         assert!(self.faces.len() <= COUNT_MAX);
         assert!(self.measurements.len() <= COUNT_MAX);
@@ -294,39 +317,52 @@ impl Definitions {
         if self.faces.is_empty() {
             return Ok(annotations);
         }
-        let planes = planes(mesh);
         for selector in &self.faces {
-            let (_, range, placement) = outputs
+            let (_, range, placement, planes) = outputs
                 .iter()
-                .find(|(solid, _, _)| *solid == selector.solid)
+                .find(|(solid, _, _, _)| *solid == selector.solid)
                 .ok_or_else(|| {
                     format!(
                         "Face '{}': select faces on the final solid passed to cad.show",
                         selector.name
                     )
                 })?;
-            let mut matches = planes.iter().filter(|(id, plane)| {
-                range.contains(id)
-                    && plane.axis == Some((selector.axis, selector.positive))
+            let matches = planes.faces.iter().filter(|(_, plane)| {
+                plane.axis == Some((selector.axis, selector.positive))
                     && selector
                         .at
                         .is_none_or(|at| (plane.minimum[selector.axis] - at).abs() <= TOLERANCE_MM)
             });
-            let (id, plane) = matches.next().ok_or_else(|| {
+            let mut chosen = None;
+            let mut second_distance = f32::INFINITY;
+            for (id, plane) in matches {
+                let distance = selector.near.map_or(0.0, |near| {
+                    near.distance((plane.minimum + plane.maximum) * 0.5)
+                });
+                match chosen {
+                    None => chosen = Some((id, plane, distance)),
+                    Some((_, _, previous)) if distance < previous => {
+                        second_distance = previous;
+                        chosen = Some((id, plane, distance));
+                    }
+                    _ => second_distance = second_distance.min(distance),
+                }
+            }
+            let (id, plane, distance) = chosen.ok_or_else(|| {
                 format!(
                     "Face '{}': no matching axis-aligned planar face",
                     selector.name
                 )
             })?;
-            if matches.next().is_some() {
+            if second_distance - distance <= TOLERANCE_MM {
                 return Err(format!(
-                    "Face '{}': ambiguous selector; add an at coordinate or refine the geometry",
+                    "Face '{}': ambiguous selector; add an at coordinate or a near point",
                     selector.name
                 ));
             }
             annotations.faces.push(NamedFace {
                 name: selector.name.clone(),
-                id: *id,
+                id: range.start() + id - 1,
                 point: placement.transform_point3((plane.minimum + plane.maximum) * 0.5),
                 normal: placement
                     .transform_vector3(Vec3::AXES[selector.axis])
@@ -401,13 +437,17 @@ impl Definitions {
 
 pub fn selector(mesh: &Mesh, id: u32) -> Option<String> {
     let planes = planes(mesh);
-    let plane = planes.get(&id)?;
+    let plane = planes.faces.get(&id)?;
     let (axis, positive) = plane.axis?;
+    let center = (plane.minimum + plane.maximum) * 0.5;
     Some(format!(
-        "cad.face(part, {{ name = \"face_name\", normal = \"{}{}\", at = {:.6} }})",
+        "cad.face(part, {{ name = \"face_name\", normal = \"{}{}\", at = {:.6}, near = {{ x = {:.6}, y = {:.6}, z = {:.6} }} }})",
         ["x", "y", "z"][axis],
         if positive { "+" } else { "-" },
-        plane.minimum[axis]
+        plane.minimum[axis],
+        center.x,
+        center.y,
+        center.z,
     ))
 }
 
@@ -1079,6 +1119,37 @@ mod tests {
             )
             .ok_or("Missing selector")?;
             assert!(selector.contains("normal = \"z+\""));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn near_selectors_choose_unique_local_faces_and_reject_ties_and_invalid_points()
+    -> Result<(), String> {
+        let source = "local base=cad.box({width=20,depth=20,height=2});local step=cad.box({width=10,depth=20,height=10,z=2});local part=cad.union(base,step);cad.face(part,{name='top',normal='z+',near={x=5,y=10,z=12}});cad.show('step',part,{assembly={position={x=100}}})";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert!(
+            (snapshot.checks.faces[0].point - Vec3::new(105.0, 10.0, 12.0)).length() < TOLERANCE_MM
+        );
+        for (source, expected) in [
+            (
+                source.replace("x=5,y=10,z=12", "x=10,y=10,z=7"),
+                "ambiguous selector",
+            ),
+            (
+                source.replace("x=5,y=10,z=12", "x=math.huge,y=10,z=12"),
+                "finite",
+            ),
+            (source.replace("x=5,y=10,z=12", "x=2001,y=10,z=12"), "±2000"),
+            (
+                source.replace("x=5,y=10,z=12", "x=5,y=10"),
+                "missing field 'z'",
+            ),
+        ] {
+            let error = crate::build_script_snapshot(&source, 1)
+                .err()
+                .ok_or("Expected invalid selector")?;
+            assert!(error.contains(expected), "{error}");
         }
         Ok(())
     }

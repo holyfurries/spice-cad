@@ -13,11 +13,20 @@ const DIAGNOSTIC_COUNT_MAX: usize = 200;
 #[derive(Default)]
 pub struct Cache {
     successful: Option<String>,
+    parameters: Option<Vec<crate::parameters::Parameter>>,
 }
 
 impl Cache {
+    pub fn take_parameters(&mut self) -> Option<Vec<crate::parameters::Parameter>> {
+        self.parameters.take()
+    }
+
     pub fn validate(&mut self, source: &str) -> Result<bool, String> {
-        let key = crate::parameters::analysis_key(source);
+        let (key, parameters) = crate::parameters::analyze_source(source)
+            .map_or((None, None), |(key, parameters)| {
+                (Some(key), Some(parameters))
+            });
+        self.parameters = parameters;
         if key.is_some() && key == self.successful {
             return Ok(true);
         }
@@ -386,8 +395,8 @@ mod tests {
             source.replace("number(10,", "number(5+5,"),
         ] {
             assert_ne!(
-                crate::parameters::analysis_key(source),
-                crate::parameters::analysis_key(&edited)
+                crate::parameters::analyze_source(source).map(|(key, _)| key),
+                crate::parameters::analyze_source(&edited).map(|(key, _)| key)
             );
         }
         let invalid = source.replace("ordinary: number = 10", "ordinary: number = 'bad'");

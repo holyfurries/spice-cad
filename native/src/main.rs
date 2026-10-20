@@ -269,6 +269,39 @@ struct Snapshot {
     revision: u64,
 }
 impl Snapshot {
+    fn restore_selection(
+        &self,
+        previous: &Self,
+        selected: &inspection::Selection,
+        name: Option<&str>,
+    ) -> Option<inspection::Selection> {
+        if let Some(name) = name {
+            if !matches!(selected, inspection::Selection::Pair { .. }) {
+                return None;
+            }
+            let previous = previous
+                .scene
+                .annotations
+                .measurements
+                .iter()
+                .find(|measurement| measurement.name == name)?;
+            if !previous.matches_selection(selected) {
+                return None;
+            }
+            return self
+                .scene
+                .annotations
+                .measurements
+                .iter()
+                .find(|measurement| measurement.name == name)?
+                .selection(&self.scene.faces);
+        }
+        if Arc::ptr_eq(&previous.scene.display, &self.scene.display) {
+            return self.scene.selection(selected);
+        }
+        None
+    }
+
     fn set_layout(&mut self, layout: placement::Layout) -> bool {
         if self.scene.layout == layout {
             return false;
@@ -472,8 +505,7 @@ fn build_script_snapshot_with_thumbnails(
     let display = cache.display(&geometry)?;
     let build_ms = prepared.build_ms;
     let start = Instant::now();
-    let meshes: Vec<_> = geometry.iter().map(|geometry| &geometry.mesh).collect();
-    let checks = model.annotations(&meshes)?;
+    let checks = cache.annotations(&model)?;
     let volume_mm3 = geometry.iter().map(|geometry| geometry.volume_mm3).sum();
     let presentations = cache.presentations(&model, placement::Layout::Assembly, thumbnails)?;
     let mut thumbnails_pending = presentations.iter().any(|part| part.thumbnail.pending());
@@ -706,6 +738,7 @@ struct Editor {
     camera: viewport::Camera,
     viewport_aspect: f32,
     selected: Option<inspection::Selection>,
+    selected_measurement: Option<String>,
     message: String,
     ui_ms: f64,
 }
@@ -797,6 +830,7 @@ impl Editor {
             camera: viewport::Camera::rack(layout.dimensions_mm.to_array()),
             viewport_aspect: 1.0,
             selected: None,
+            selected_measurement: None,
             message: "Initializing native SMLib…".into(),
             ui_ms: 0.0,
         })
@@ -1006,6 +1040,7 @@ impl Editor {
             self.code_state.jump_to(range);
         }
         self.selected = Some(selection);
+        self.selected_measurement = Some(name.into());
         self.show_code = true;
         self.show_inspector = true;
         self.focus_editor = false;
@@ -1148,14 +1183,19 @@ impl Editor {
                                 self.frame_next_model = false;
                             }
                             self.message = "Preview ready".into();
-                            self.selected = self
-                                .snapshot
-                                .as_ref()
-                                .filter(|previous| {
-                                    Arc::ptr_eq(&previous.scene.display, &snapshot.scene.display)
-                                })
-                                .and(self.selected.as_ref())
-                                .and_then(|selection| snapshot.scene.selection(selection));
+                            self.selected =
+                                self.snapshot.as_ref().zip(self.selected.as_ref()).and_then(
+                                    |(previous, selected)| {
+                                        snapshot.restore_selection(
+                                            previous,
+                                            selected,
+                                            self.selected_measurement.as_deref(),
+                                        )
+                                    },
+                                );
+                            if self.selected.is_none() {
+                                self.selected_measurement = None;
+                            }
                             self.snapshot = Some(*snapshot);
                         }
                         Ok(Outcome::Exported(message)) => self.message = message,
@@ -1921,6 +1961,7 @@ impl eframe::App for Editor {
                             .set(revision, Arc::clone(&snapshot.scene.outputs));
                     }
                     self.selected = None;
+                    self.selected_measurement = None;
                     self.focus_editor = false;
                     frame_layout = true;
                     self.message = if layout == placement::Layout::Print {
@@ -2038,7 +2079,7 @@ impl eframe::App for Editor {
                     ui.small("Code defines shape. Checks validate declared limits; no constraint solver is active.");
                     for measurement in &snapshot.checks.measurements {
                         let current = snapshot.scene.layout == placement::Layout::Assembly && self.script.as_ref().is_some_and(|script| snapshot.editor_revision == Some(script.buffer.revision));
-                        let selected = self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection));
+                        let selected = self.selected_measurement.as_ref().map_or_else(|| self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection)), |name| *name == measurement.name);
                         let linked = measurement.parameter.as_ref().map_or(String::new(), |parameter| format!(" · {}", parameter.name));
                         if ui.add_enabled(current, egui::Button::new(format!("{} ≈{:.3} mm · {}{}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }, linked)).selected(selected))
                             .on_hover_text("Open linked parameter editor or reveal measurement source").clicked() {
@@ -2364,7 +2405,7 @@ impl eframe::App for Editor {
                     if let Some(request) = self.code_state.outputs.take_focus() {
                         if let (Some(snapshot), Some(script)) = (&self.snapshot, &self.script) {
                             if let Some((selection, camera)) = focus_part(snapshot, &request, script.buffer.revision, self.viewport_aspect, &self.camera) {
-                                self.selected = Some(selection);
+                                self.selected = Some(selection); self.selected_measurement = None;
                                 self.camera = camera;
                                 self.message = format!("Selected part · {}", request.name);
                             }
@@ -2397,7 +2438,7 @@ impl eframe::App for Editor {
                                 snapshot.scene.picking().pick_edge(matrix, [rect.width(), rect.height()], [position.x - rect.left(), position.y - rect.top()])
                             } else { None };
                             if let Some(edge) = edge {
-                                self.selected = Some(inspection::Selection::Edge(edge));
+                                self.selected = Some(inspection::Selection::Edge(edge)); self.selected_measurement = None;
                                 self.message = "Edge dimensions · reference measurements".into();
                             } else if let Some(hit) = snapshot.scene.picking().pick(matrix, [
                                 (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
@@ -2407,11 +2448,11 @@ impl eframe::App for Editor {
                                 match inspection::Selection::select(self.selected.as_ref(), face, extend) {
                                     Ok(selection) => {
                                         self.message = if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement".into() } else { "Face dimensions · reference measurements".into() };
-                                        self.selected = Some(selection);
+                                        self.selected = Some(selection); self.selected_measurement = None;
                                     }
                                     Err(error) => self.message = error,
                                 }
-                            } else { self.selected = None; self.message = "Selection cleared".into(); }
+                            } else { self.selected = None; self.selected_measurement = None; self.message = "Selection cleared".into(); }
                         }
                     }
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -3117,6 +3158,140 @@ fn benchmark() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_measurements_survive_shape_changes_and_clear_when_removed() -> Result<(), String> {
+        let source = include_str!("../../models/measured-block.luau");
+        let first = build_script_snapshot(source, 1)?;
+        let selected = first.checks.measurements[0]
+            .selection(&first.scene.faces)
+            .ok_or("Named measurement selection")?;
+        let second = build_script_snapshot(&source.replace("cad.number(20,", "cad.number(24,"), 2)?;
+        assert!(!Arc::ptr_eq(&first.scene.display, &second.scene.display));
+        let restored = second
+            .restore_selection(&first, &selected, Some("height"))
+            .ok_or("Restored measurement")?;
+        assert!(second.checks.measurements[0].matches_selection(&restored));
+        let distance = restored.spans()[0].ok_or("Restored span")?.distance_mm;
+        assert!((distance - 24.0).abs() < 0.001);
+        let removed = build_script_snapshot(
+            &source
+                .lines()
+                .filter(|line| !line.starts_with("cad.measure"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            3,
+        )?;
+        assert!(
+            removed
+                .restore_selection(&first, &selected, Some("height"))
+                .is_none()
+        );
+        let duplicate = source.replace(
+            "cad.show",
+            "cad.measure(\"other height\", {from=bottom,to=top,parameter=\"width\"})\ncad.show",
+        );
+        let previous = build_script_snapshot(&duplicate, 4)?;
+        let selected = previous.checks.measurements[1]
+            .selection(&previous.scene.faces)
+            .ok_or("Second measurement sharing faces")?;
+        let renamed = duplicate
+            .lines()
+            .filter(|line| !line.starts_with("cad.measure(\"height\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let current = build_script_snapshot(&renamed, 5)?;
+        assert!(
+            current
+                .restore_selection(&previous, &selected, Some("other height"))
+                .is_some()
+        );
+        assert!(
+            current
+                .restore_selection(&previous, &selected, Some("height"))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rack_measurements_follow_properties_and_displayed_joint_separation() -> Result<(), String> {
+        let source = include_str!("../../models/rack-parts.luau");
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let mut previous: Option<Snapshot> = None;
+        for (index, source, expected) in [
+            (1, source.to_owned(), [8.0, 53.0, 3.0, 12.2]),
+            (
+                2,
+                source
+                    .replace("cad.number(8,", "cad.number(12,")
+                    .replace("cad.number(3,", "cad.number(4,")
+                    .replace("cad.number(50,", "cad.number(60,")
+                    .replace("cad.number(0.2,", "cad.number(0.4,"),
+                [12.0, 63.0, 4.0, 12.4],
+            ),
+            (
+                3,
+                source.replace("cad.number(12,", "cad.number(0,"),
+                [8.0, 53.0, 3.0, 0.2],
+            ),
+            (
+                4,
+                source.replace("cad.number(5,", "cad.number(3,"),
+                [8.0, 53.0, 3.0, 12.2],
+            ),
+            (
+                5,
+                source.replace("cad.number(5,", "cad.number(8,"),
+                [8.0, 53.0, 3.0, 12.2],
+            ),
+        ] {
+            let snapshot = build_script_snapshot_cached(source, index, &mut cache)?;
+            if let Some(previous) = &previous {
+                let selected = previous.checks.measurements[0]
+                    .selection(&previous.scene.faces)
+                    .ok_or("Previous lip selection")?;
+                let restored = snapshot
+                    .restore_selection(previous, &selected, Some("Lip height"))
+                    .ok_or("Rack lip selection after edit")?;
+                assert!(snapshot.checks.measurements[0].matches_selection(&restored));
+            }
+            assert_eq!(snapshot.checks.measurements.len(), 4);
+            for ((measurement, name), (parameter, expected)) in snapshot
+                .checks
+                .measurements
+                .iter()
+                .zip([
+                    "Lip height",
+                    "Usable tread depth",
+                    "Wall thickness",
+                    "Joint tip gap",
+                ])
+                .zip(
+                    ["lip", "jar_diameter", "wall", "joint_clearance"]
+                        .into_iter()
+                        .zip(expected),
+                )
+            {
+                assert_eq!(measurement.name, name);
+                assert_eq!(
+                    measurement
+                        .parameter
+                        .as_ref()
+                        .map(|parameter| parameter.name.as_str()),
+                    Some(parameter)
+                );
+                assert!(
+                    (measurement.distance_mm - expected).abs() < 0.001,
+                    "{name}: {}",
+                    measurement.distance_mm
+                );
+            }
+            previous = Some(snapshot);
+        }
+        Ok(())
+    }
 
     #[test]
     fn scene_preparation_allocations_are_independent_of_tessellation_density() -> Result<(), String>

@@ -16,6 +16,7 @@ local front_depth = front_steps * tread_depth
 local front_height = (front_steps - 1) * rise + wall + lip
 local height = (steps - 1) * rise + wall + lip
 local seam = width / 2
+local tab_tip: typeof(cad.face(cad.box({ width = 1, depth = 1, height = 1 }), { name = "type", normal = "x+" }))? = nil
 
 assert(steps >= 3 and steps <= 8 and steps == math.floor(steps), "Use 3–8 steps")
 assert(front_height >= 36, "Front panel needs at least 36 mm for the joints")
@@ -87,6 +88,66 @@ for side = 0, 1 do
 				{ x = outer_x - (if section == 0 then 0 else 0.1), y = front_depth, z = front_height * fraction }
 			)
 			part = if section == 0 then cad.union(part, joint) else cad.subtract(part, joint)
+		end
+		if side == 0 and section == 0 then
+			local tread = cad.face(part, {
+				name = "First tread",
+				normal = "z+",
+				at = wall,
+				near = { x = seam / 2, y = tread_depth / 2, z = wall },
+			})
+			local lip_top = cad.face(part, {
+				name = "First lip top",
+				normal = "z+",
+				at = wall + lip,
+				near = { x = seam / 2, y = wall / 2, z = wall + lip },
+			})
+			cad.measure("Lip height", { from = tread, to = lip_top, parameter = "lip" })
+			local front = cad.face(part, {
+				name = "First lip inside",
+				normal = "y+",
+				at = wall,
+				near = { x = seam / 2, y = wall, z = wall + lip / 2 },
+			})
+			local rear = cad.face(part, {
+				name = "Second riser front",
+				normal = "y-",
+				at = tread_depth,
+				near = {
+					x = seam / 2,
+					y = tread_depth,
+					z = wall + lip / 2,
+				},
+			})
+			cad.measure("Usable tread depth", { from = front, to = rear, parameter = "jar_diameter" })
+			local outer = cad.face(part, {
+				name = "Outer side wall",
+				normal = "x-",
+				at = 0,
+				near = { x = 0, y = tread_depth / 2, z = wall + lip / 2 },
+			})
+			local inner = cad.face(part, {
+				name = "Inner side wall",
+				normal = "x+",
+				at = wall,
+				near = { x = wall, y = tread_depth / 2, z = wall + lip / 2 },
+			})
+			cad.measure("Wall thickness", { from = outer, to = inner, parameter = "wall" })
+			tab_tip = cad.face(part, {
+				name = "First tab tip",
+				normal = "x+",
+				at = seam + 6,
+				near = { x = seam + 6, y = tread_depth / 2, z = wall / 2 },
+			})
+		elseif side == 1 and section == 0 then
+			local socket = cad.face(part, {
+				name = "First socket end",
+				normal = "x-",
+				at = seam + 6 + joint_clearance,
+				near = { x = seam + 6 + joint_clearance, y = tread_depth / 2, z = wall / 2 },
+			})
+			assert(tab_tip, "Front tab must be defined before its socket")
+			cad.measure("Joint tip gap", { from = tab_tip, to = socket, parameter = "joint_clearance" })
 		end
 		local name = (if section == 0 then "Front" else "Rear") .. (if side == 0 then " left" else " right")
 		local color = if side == 0

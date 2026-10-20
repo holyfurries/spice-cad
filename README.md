@@ -201,7 +201,7 @@ From the development shell, use
 original rack export CLI is explicitly selected with
 `cargo run --locked -p spice-rack`. The starter source is embedded in the
 executable and created once at
-`$XDG_DATA_HOME/spice-cad/models/spice-rack-layouts.luau`, or under
+`$XDG_DATA_HOME/spice-cad/models/spice-rack-measurements.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
 **Examples → Spice rack · four parts** opens four named, colored rack pieces
@@ -376,7 +376,7 @@ field applies it; Escape cancels the pending field edit. Save and Run also commi
 the active field. Parameter edits bypass the typing debounce; code edits still
 wait for a pause. Disable Auto Preview to edit values and rebuild with Run or
 Save. Existing personal example files are preserved; the new startup file is
-`spice-rack-layouts.luau`, leaving older rack copies intact. See
+`spice-rack-measurements.luau`, leaving older rack copies intact. See
 [navigation and parameter notes](evaluation/navigation.md).
 
 Declare part placements alongside the geometry, instead of branching the
@@ -738,8 +738,23 @@ cad.measure("height", { from = bottom, to = top, min = 2, max = 25, parameter = 
 cad.show("Measured block", part)
 ```
 
+The startup rack exposes **Lip height**, **Usable tread depth**, **Wall thickness**,
+and **Joint tip gap**. Click a label or its Properties row to edit its linked
+parameter. Usable tread depth equals `jar_diameter + 2 * jar_spacing`; its linked
+control edits jar diameter. Joint tip gap includes the current part separation:
+with the default 12 mm separation it reads 12.2 mm, and with separation zero it
+reads the 0.2 mm joint clearance. These are measurements of the displayed model.
+Named measurement selections follow their names through shape rebuilds; removing
+a measurement clears that selection. Raw face and edge selections still require
+unchanged geometry to preserve their numeric IDs. See
+[rack measurement validation and timings](evaluation/rack-measurements.md).
+
 Face references select the final output solid by outward normal (`x+`, `x-`,
 `y+`, `y-`, `z+`, `z-`), with optional `at` for the coordinate along that axis.
+For repeated faces, add `near = { x = ..., y = ..., z = ... }` in the final
+solid's local coordinates. After the normal and optional `at` filters, this
+chooses the closest face bounding-box center; ties within 0.001 mm fail as
+ambiguous. All three coordinates must be finite and within ±2000 mm.
 Selectors must resolve to exactly one planar face. Missing or ambiguous faces
 fail the build; face indices are never persistent identifiers. Names and
 selectors are reevaluated after every rebuild. Intermediate solids,

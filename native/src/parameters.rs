@@ -163,11 +163,6 @@ fn parse_source(source: &str) -> Option<(Rope, tree_sitter::Tree)> {
     Some((Rope::from_str(source), tree))
 }
 
-pub fn extract_source(source: &str) -> Option<Vec<Parameter>> {
-    let (rope, tree) = parse_source(source)?;
-    Some(extract(&rope, &tree))
-}
-
 impl Parameter {
     pub fn is_numeric(&self) -> bool {
         matches!(self.property.control, Control::Number { .. })
@@ -186,11 +181,12 @@ impl Parameter {
     }
 }
 
-pub fn analysis_key(source: &str) -> Option<String> {
+pub fn analyze_source(source: &str) -> Option<(String, Vec<Parameter>)> {
     let (rope, tree) = parse_source(source)?;
     let mut key = String::with_capacity(source.len());
     let mut previous = 0;
-    for parameter in extract(&rope, &tree) {
+    let parameters = extract(&rope, &tree);
+    for parameter in &parameters {
         if matches!(parameter.property.control, Control::Number { .. }) {
             let start = rope.char_to_byte(parameter.range.start);
             let end = rope.char_to_byte(parameter.range.end);
@@ -200,7 +196,7 @@ pub fn analysis_key(source: &str) -> Option<String> {
         }
     }
     key.push_str(&source[previous..]);
-    Some(key)
+    Some((key, parameters))
 }
 
 pub fn extract(source: &Rope, tree: &tree_sitter::Tree) -> Vec<Parameter> {

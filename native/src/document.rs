@@ -91,7 +91,7 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
     };
     let (name, source) = match example {
         Example::RackParts => (
-            "spice-rack-layouts.luau",
+            "spice-rack-measurements.luau",
             include_str!("../../models/rack-parts.luau"),
         ),
         Example::RocketEngine => (
