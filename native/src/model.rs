@@ -14,7 +14,7 @@ const PART_COUNT_MAX: usize = 32;
 
 #[path = "geometry_cache.rs"]
 mod cache;
-pub use cache::{Cache, Presentation, ThumbnailMode};
+pub use cache::{Cache, DisplayQuality, Presentation, ThumbnailMode};
 
 #[derive(Clone)]
 pub struct Part {

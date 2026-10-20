@@ -12,6 +12,21 @@ pub enum ThumbnailMode {
     Complete,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DisplayQuality {
+    Interactive,
+    Final,
+}
+
+impl DisplayQuality {
+    fn mesh(self, body: &mut Body<'_>) -> Result<crate::kernel::Tessellation, String> {
+        match self {
+            Self::Interactive => body.game_mesh(),
+            Self::Final => body.mesh(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Thumbnail {
     Pending,
@@ -46,6 +61,7 @@ struct Entry<'kernel> {
     steps: usize,
     body: Rc<Body<'kernel>>,
     geometry: Arc<Geometry>,
+    quality: DisplayQuality,
     presentations: [Option<Arc<Presentation>>; 2],
     planes: Option<Arc<crate::dimensions::Planes>>,
 }
@@ -149,6 +165,7 @@ pub struct Prepared<'kernel> {
     pub hits: usize,
     pub build_ms: f64,
     pub tessellation_ms: f64,
+    pub refinement_pending: bool,
 }
 
 pub struct Cache<'kernel> {
@@ -309,6 +326,14 @@ impl<'kernel> Cache<'kernel> {
     }
 
     pub fn prepare(&mut self, model: &Model) -> Result<Prepared<'kernel>, String> {
+        self.prepare_quality(model, DisplayQuality::Final)
+    }
+
+    pub fn prepare_quality(
+        &mut self,
+        model: &Model,
+        quality: DisplayQuality,
+    ) -> Result<Prepared<'kernel>, String> {
         assert!(!model.parts.is_empty());
         assert!(model.parts.len() <= PART_COUNT_MAX);
         let mut next: Vec<Entry<'kernel>> = Vec::with_capacity(model.parts.len());
@@ -318,6 +343,7 @@ impl<'kernel> Cache<'kernel> {
             hits: 0,
             build_ms: 0.0,
             tessellation_ms: 0.0,
+            refinement_pending: false,
         };
         let mut steps = 0;
         let mut vertices = 0;
@@ -341,15 +367,38 @@ impl<'kernel> Cache<'kernel> {
                         "Model exceeds 512 evaluation steps; reduce repeated subtrees".into(),
                     );
                 }
-                Entry {
+                let mut reused = Entry {
                     recipe: Rc::clone(&model.recipe),
                     solid: part.solid,
                     steps: entry.steps,
                     body: Rc::clone(&entry.body),
                     geometry: Arc::clone(&entry.geometry),
+                    quality: entry.quality,
                     presentations: entry.presentations.clone(),
                     planes: entry.planes.clone(),
+                };
+                if reused.quality < quality {
+                    self.checkpoint()?;
+                    let started = std::time::Instant::now();
+                    let mut body = reused.body.try_clone()?;
+                    let crate::kernel::Tessellation {
+                        mut mesh,
+                        volume_mm3,
+                    } = quality.mesh(&mut body)?;
+                    self.checkpoint()?;
+                    mesh.smooth_normals();
+                    reused.geometry = Arc::new(Geometry {
+                        mesh,
+                        edges: body.edges()?,
+                        volume_mm3,
+                        bounds: reused.geometry.bounds,
+                    });
+                    reused.quality = quality;
+                    reused.presentations = Default::default();
+                    reused.planes = None;
+                    prepared.tessellation_ms += started.elapsed().as_secs_f64() * 1000.0;
                 }
+                reused
             } else {
                 let before = steps;
                 let started = std::time::Instant::now();
@@ -368,7 +417,7 @@ impl<'kernel> Cache<'kernel> {
                 let crate::kernel::Tessellation {
                     mut mesh,
                     volume_mm3,
-                } = body.mesh()?;
+                } = quality.mesh(&mut body)?;
                 self.checkpoint()?;
                 mesh.smooth_normals();
                 let geometry = Arc::new(Geometry {
@@ -384,6 +433,7 @@ impl<'kernel> Cache<'kernel> {
                     steps: steps - before,
                     body: Rc::new(body),
                     geometry,
+                    quality,
                     presentations: Default::default(),
                     planes: None,
                 }
@@ -397,6 +447,7 @@ impl<'kernel> Cache<'kernel> {
                 return Err("Assembly exceeds its display edge budget".into());
             }
             prepared.bodies.push(Rc::clone(&entry.body));
+            prepared.refinement_pending |= entry.quality == DisplayQuality::Interactive;
             prepared.geometry.push(Arc::clone(&entry.geometry));
             next.push(entry);
         }
@@ -694,6 +745,114 @@ mod tests {
         assert!(allocated_bytes <= OPERATION_CACHE_BYTES_MAX);
         assert!(allocated_bytes > 0);
         assert_eq!(allocated_bytes, measured_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn interactive_geometry_refines_without_rebuilding_and_never_downgrades() -> Result<(), String>
+    {
+        let kernel = Kernel::new()?;
+        let model = super::super::compile(include_str!("../../models/mounting-bracket.luau"))?;
+        let mut cache = Cache::new(&kernel);
+        let interactive = cache.prepare_quality(&model, DisplayQuality::Interactive)?;
+        let repeated = cache.prepare_quality(&model, DisplayQuality::Interactive)?;
+        let refined = cache.prepare(&model)?;
+        let final_repeated = cache.prepare(&model)?;
+        let dragging = cache.prepare_quality(&model, DisplayQuality::Interactive)?;
+        let observations = [
+            (
+                "canonical body reused",
+                Rc::ptr_eq(&interactive.bodies[0], &refined.bodies[0]),
+            ),
+            ("interactive pending", interactive.refinement_pending),
+            ("repeated interactive pending", repeated.refinement_pending),
+            ("refined final", !refined.refinement_pending),
+            ("no downgrade", !dragging.refinement_pending),
+            ("no CAD rebuild", refined.build_ms == 0.0),
+            ("cached body hit", refined.hits == 1),
+            (
+                "interactive cache hit",
+                Arc::ptr_eq(&interactive.geometry[0], &repeated.geometry[0]),
+            ),
+            (
+                "new final mesh",
+                !Arc::ptr_eq(&interactive.geometry[0], &refined.geometry[0]),
+            ),
+            (
+                "final cache hit",
+                Arc::ptr_eq(&refined.geometry[0], &final_repeated.geometry[0]),
+            ),
+            (
+                "drag reuses final mesh",
+                Arc::ptr_eq(&refined.geometry[0], &dragging.geometry[0]),
+            ),
+            (
+                "fewer interactive triangles",
+                interactive.geometry[0].mesh.vertices.len()
+                    < refined.geometry[0].mesh.vertices.len(),
+            ),
+            (
+                "same face count",
+                interactive.geometry[0].mesh.face_count == refined.geometry[0].mesh.face_count,
+            ),
+            (
+                "same exact bounds",
+                interactive.geometry[0].bounds == refined.geometry[0].bounds,
+            ),
+            (
+                "same exact volume",
+                interactive.geometry[0].volume_mm3 == refined.geometry[0].volume_mm3,
+            ),
+        ];
+        drop(cache);
+        drop(dragging);
+        drop(final_repeated);
+        drop(refined);
+        drop(repeated);
+        drop(interactive);
+        drop(kernel);
+        for (name, valid) in observations {
+            assert!(valid, "{name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Manual interactive tessellation comparison; run without concurrent builds"]
+    fn profile_interactive_tessellation() -> Result<(), String> {
+        for (name, source) in [
+            (
+                "bracket",
+                include_str!("../../models/mounting-bracket.luau"),
+            ),
+            ("rack", include_str!("../../models/rack-parts.luau")),
+            ("rocket", include_str!("../../models/rocket-engine.luau")),
+        ] {
+            let kernel = Kernel::new()?;
+            let model = super::super::compile(source)?;
+            for sample in 0..5 {
+                let mut bodies = model.build(&kernel)?;
+                for body in &mut bodies {
+                    body.volume()?;
+                    for coarse in [sample % 2 == 0, sample % 2 != 0] {
+                        let started = std::time::Instant::now();
+                        let mut mesh = if coarse {
+                            body.game_mesh()?
+                        } else {
+                            body.mesh()?
+                        }
+                        .mesh;
+                        mesh.smooth_normals();
+                        eprintln!(
+                            "{name} sample {sample} coarse {coarse}: {:.3} ms, {} triangles, {} faces",
+                            started.elapsed().as_secs_f64() * 1000.0,
+                            mesh.vertices.len() / 3,
+                            mesh.face_count
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

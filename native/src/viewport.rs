@@ -634,6 +634,22 @@ pub fn metrics(frame: &eframe::Frame) -> Metrics {
         .unwrap_or_default()
 }
 
+pub fn geometry_prepared(frame: &eframe::Frame, geometry: &Arc<Geometry>) -> bool {
+    frame.wgpu_render_state().is_some_and(|state| {
+        state
+            .renderer
+            .read()
+            .callback_resources
+            .get::<Gpu>()
+            .is_some_and(|gpu| {
+                gpu.scene
+                    .geometry
+                    .as_ref()
+                    .is_some_and(|prepared| Arc::ptr_eq(prepared, geometry))
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

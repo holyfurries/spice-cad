@@ -275,6 +275,7 @@ impl Scene {
     }
 }
 struct Snapshot {
+    refinement_pending: bool,
     thumbnails_pending: bool,
     thumbnail_renders: u64,
     input: Option<performance::Input>,
@@ -510,6 +511,7 @@ fn build_snapshot(
     });
     let display = Arc::new(viewport::Geometry::new(&[geometry])?);
     Ok(Snapshot {
+        refinement_pending: false,
         thumbnails_pending: false,
         thumbnail_renders: 0,
         input: None,
@@ -567,7 +569,12 @@ fn build_script_snapshot_with_thumbnails(
     let total = Instant::now();
     let model = cache.compile(&source)?;
     cache.checkpoint()?;
-    let prepared = cache.prepare(&model)?;
+    let quality = if thumbnails == model::ThumbnailMode::Deferred {
+        model::DisplayQuality::Interactive
+    } else {
+        model::DisplayQuality::Final
+    };
+    let prepared = cache.prepare_quality(&model, quality)?;
     let geometry = prepared.geometry;
     let display = cache.display(&geometry)?;
     let build_ms = prepared.build_ms;
@@ -601,6 +608,7 @@ fn build_script_snapshot_with_thumbnails(
     let tessellation_ms = prepared.tessellation_ms + start.elapsed().as_secs_f64() * 1000.0;
     cache.checkpoint()?;
     Ok(Snapshot {
+        refinement_pending: prepared.refinement_pending,
         thumbnails_pending,
         thumbnail_renders: cache.thumbnail_renders,
         input: None,
@@ -3233,7 +3241,7 @@ impl eframe::App for Editor {
             if let (Some(snapshot), Some(script), Some(edited)) =
                 (&self.snapshot, &self.script, self.parameter_edited_at)
             {
-                if snapshot.thumbnails_pending
+                if (snapshot.thumbnails_pending || snapshot.refinement_pending)
                     && snapshot.editor_revision == Some(script.buffer.revision)
                 {
                     let delay = THUMBNAIL_IDLE_DELAY.saturating_sub(edited.elapsed());
@@ -3273,11 +3281,11 @@ impl eframe::App for Editor {
         if let Some(sweep) = &self.sweep {
             let now = Instant::now();
             let metrics = viewport::metrics(frame);
-            let ready = self
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| !snapshot.thumbnails_pending)
-                && matches!(self.work, WorkerState::Idle);
+            let ready = self.snapshot.as_ref().is_some_and(|snapshot| {
+                !snapshot.thumbnails_pending
+                    && !snapshot.refinement_pending
+                    && viewport::geometry_prepared(frame, &snapshot.scene.display)
+            }) && matches!(self.work, WorkerState::Idle);
             if sweep.finish(
                 metrics
                     .input_latency
@@ -3285,6 +3293,12 @@ impl eframe::App for Editor {
                     .map(|latency| latency.revision),
                 now,
             ) {
+                eprintln!(
+                    "Profile: preview_sweep_quality final={}",
+                    self.snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| !snapshot.refinement_pending)
+                );
                 eprintln!(
                     "Profile: preview_sweep_gpu uploads={} geometry_allocations={} geometry_bytes={} placement_uploads={}",
                     metrics.uploads,
@@ -3837,6 +3851,47 @@ mod tests {
             assert_eq!(initial.thumbnail_renders, current.thumbnail_renders);
             assert_eq!(current.cached_parts, 4);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn slider_snapshot_converges_to_final_quality_and_clears_unstable_face_selection()
+    -> Result<(), String> {
+        let source = include_str!("../../models/mounting-bracket.luau").to_owned();
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let interactive = build_script_snapshot_with_thumbnails(
+            source.clone(),
+            1,
+            &mut cache,
+            model::ThumbnailMode::Deferred,
+        )?;
+        let refined = build_script_snapshot_cached(source.clone(), 2, &mut cache)?;
+        let direct = build_script_snapshot_cached(source, 3, &mut model::Cache::new(&kernel))?;
+        let selected = inspection::Selection::Face(
+            *interactive
+                .scene
+                .faces
+                .values()
+                .next()
+                .expect("Bracket faces"),
+        );
+        let restored = refined.restore_selection(&interactive, &selected, None);
+        let vertices = |snapshot: &Snapshot| {
+            let mesh = snapshot.scene.world_mesh();
+            bytemuck::cast_slice::<mesh::Vertex, u8>(&mesh.vertices).to_vec()
+        };
+        drop(cache);
+        drop(kernel);
+        assert!(interactive.refinement_pending);
+        assert!(interactive.thumbnails_pending);
+        assert!(!refined.refinement_pending);
+        assert!(!refined.thumbnails_pending);
+        assert_eq!(refined.build_ms, 0.0);
+        assert_eq!(refined.cached_parts, 1);
+        assert!(restored.is_none());
+        assert_eq!(refined.volume_mm3, direct.volume_mm3);
+        assert_eq!(vertices(&refined), vertices(&direct));
         Ok(())
     }
 
