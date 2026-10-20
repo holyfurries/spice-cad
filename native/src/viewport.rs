@@ -6,6 +6,7 @@ use glam::{Mat4, Vec3};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+#[derive(Clone, Copy)]
 pub struct Camera {
     pub target: Vec3,
     pub distance: f32,
@@ -14,6 +15,16 @@ pub struct Camera {
 }
 
 impl Camera {
+    pub fn frame(&mut self, bounds: [Vec3; 2], aspect: f32) {
+        assert!(bounds.iter().all(|point| point.is_finite()));
+        assert!(aspect.is_finite());
+        assert!(aspect > 0.0);
+        assert!(bounds[1].cmpge(bounds[0]).all());
+        self.target = (bounds[0] + bounds[1]) * 0.5;
+        self.distance =
+            ((bounds[1] - bounds[0]).length() * 1.7 / aspect.min(1.0)).clamp(10.0, 5000.0);
+    }
+
     pub fn rack(dimensions: [f64; 3]) -> Self {
         let size = Vec3::new(
             dimensions[0] as f32,
@@ -73,6 +84,7 @@ impl Camera {
 }
 
 pub struct Draw {
+    pub visible_parts: u32,
     pub input: Option<crate::performance::Input>,
     pub edge_width_px: f32,
     pub edges_enabled: bool,
@@ -281,10 +293,15 @@ struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
 struct Instance { matrix:mat4x4<f32>, color:vec4<f32> }
 @group(0) @binding(1) var<uniform> instances:array<Instance,32>;
+fn part_visible(part:u32)->bool {
+ let mask=u32(uniforms.part.z)|(u32(uniforms.part.w)<<16u);
+ return (mask&(1u<<part))!=0u;
+}
 struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32> }
 @vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
  let instance=instances[part]; let world=instance.matrix*vec4<f32>(position,1.0);
- var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; return output;
+ var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb;
+ if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
 }
 @fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
  let normal=normalize(input.normal);
@@ -312,7 +329,8 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
  let selected=segment>=u32(uniforms.edges.x) && segment<u32(uniforms.edges.y);
  let width=select(uniforms.selection.w,max(uniforms.selection.w,3.0),selected);
  clip=vec4<f32>(clip.xy+perpendicular*corner.y*width*clip.w/viewport,clip.zw);
- var output:LineOutput; output.position=clip; output.side=corner.y; output.selected=u32(selected); return output;
+ var output:LineOutput; output.position=clip; output.side=corner.y; output.selected=u32(selected);
+ if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
 }
 @fragment fn line_fragment(input:LineOutput)->@location(0) vec4<f32> {
  if uniforms.edges.z==0.0 && input.selected==0u { discard; }
@@ -538,6 +556,8 @@ impl egui_wgpu::CallbackTrait for Draw {
         uniform[26] = f32::from(self.edges_enabled);
         uniform[28] = self.selected_part[0] as f32;
         uniform[29] = self.selected_part[1] as f32;
+        uniform[30] = (self.visible_parts & 0xffff) as f32;
+        uniform[31] = (self.visible_parts >> 16) as f32;
         let bits = uniform.map(f32::to_bits);
         if gpu.uniform_previous != Some(bits) {
             queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));

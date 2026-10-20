@@ -374,6 +374,25 @@ menus stay open after toggles; click outside or press Escape to close them.
 The pane groups selectable parts, source parameters with full-width sliders,
 selected-geometry dimensions, and named measurements. Geometry statistics live
 under **Geometry details**.
+
+**Parts** is the model outliner. Its checkboxes hide or show individual parts;
+the row menu (`…`) and right-click menu offer **Isolate part**, **Show and frame
+part**, and **Reveal source**. Exit isolation restores the previous visibility;
+changing a checkbox during isolation keeps the currently visible set and exits
+isolation. **Show all** restores every part. F outside the editor frames the
+selected part, or the visible assembly when nothing is selected, preserving the
+camera orientation. Framing a hidden part shows it first.
+
+Visibility and part selection follow unique `cad.show` names through geometry
+rebuilds and output reordering. New names start visible; removed names are
+forgotten. Assembly/Print switching keeps visibility. This is per-document
+session state and resets when another document is opened. Hidden geometry is
+excluded from picking and viewport dimensions. Visibility changes update a
+GPU uniform without rebuilding or uploading geometry; exports still include
+the entire authored model. Reveal source moves the editor to the output's
+`cad.show` declaration, and is disabled until the displayed result matches the
+current source revision.
+
 Declare the values you want to expose; ordinary locals remain private:
 
 ```lua
@@ -716,8 +735,8 @@ Rotation angles are bounded to ±360000 degrees. Mesh volume checks allow a
 surface-area/chord tolerance for curved tessellation; closure and winding checks
 remain mandatory. The scripting environment exposes no file/process access or
 module imports. Repeated operand recipes are evaluated again; incremental
-geometry caching is not implemented. Interactive sketch editing, per-part
-pivots, and part visibility controls are not implemented. The existing P1S rack
+geometry caching is not implemented. Interactive sketch editing and per-part
+pivots are not implemented. The existing P1S rack
 export remains available in the rack-tools build with `--rack`.
 
 Format source with `cargo fmt --all`, Luau files with

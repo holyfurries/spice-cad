@@ -29,6 +29,7 @@ mod lsp;
 mod mesh;
 mod modal;
 mod model;
+mod outliner;
 mod palette;
 mod parameters;
 mod performance;
@@ -217,10 +218,21 @@ struct Scene {
 }
 
 impl Scene {
+    fn visible_bounds(&self, mask: u32) -> Option<[glam::Vec3; 2]> {
+        assert!(self.part_bounds.len() <= 32);
+        self.part_bounds
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| mask & (1 << index) != 0)
+            .map(|(_, bounds)| *bounds)
+            .reduce(|first, second| [first[0].min(second[0]), first[1].max(second[1])])
+    }
+
     fn picking(&self) -> picking::View<'_> {
         picking::View {
             parts: &self.display.parts,
             instances: &self.instances,
+            visible_parts: u32::MAX,
         }
     }
 
@@ -278,6 +290,20 @@ struct Snapshot {
     revision: u64,
 }
 impl Snapshot {
+    fn visible_parts(&self, outliner: &outliner::State) -> u32 {
+        match &self.source {
+            ModelSource::Rack(_) => u32::MAX,
+            ModelSource::Script(_) => outliner.visible_parts(&self.parts),
+        }
+    }
+
+    fn part_source(&self, index: usize, revision: u64) -> Option<usize> {
+        if self.editor_revision != Some(revision) {
+            return None;
+        }
+        Some(self.parts.get(index)?.line)
+    }
+
     fn restore_selection(
         &self,
         previous: &Self,
@@ -304,6 +330,15 @@ impl Snapshot {
                 .iter()
                 .find(|measurement| measurement.name == name)?
                 .selection(&self.scene.faces);
+        }
+        if let inspection::Selection::Part { index, .. } = selected {
+            let name = &previous.parts.get(*index as usize)?.name;
+            let index = self.parts.iter().position(|part| part.name == *name)?;
+            return self.scene.selection(&inspection::Selection::Part {
+                index: index as u32,
+                faces: [0; 2],
+                bounds: [glam::Vec3::ZERO; 2],
+            });
         }
         if Arc::ptr_eq(&previous.scene.display, &self.scene.display) {
             return self.scene.selection(selected);
@@ -465,7 +500,7 @@ fn build_snapshot(
             )]),
             layout: placement::Layout::Assembly,
             outputs: Arc::new(Vec::new()),
-            part_bounds: Vec::new(),
+            part_bounds: vec![bounds],
             faces,
             bounds,
             annotations: dimensions::Annotations::default(),
@@ -707,6 +742,7 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
 const THUMBNAIL_IDLE_DELAY: Duration = Duration::from_millis(150);
 
 struct Editor {
+    outliner: outliner::State,
     sweep: Option<performance::Sweep>,
     preview_input: Option<performance::Input>,
     parameter_edited_at: Option<Instant>,
@@ -759,6 +795,35 @@ enum ExitState {
 }
 
 impl Editor {
+    fn frame_selection(&mut self) {
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+        let mask = snapshot.visible_parts(&self.outliner);
+        let picking = picking::View {
+            visible_parts: mask,
+            ..snapshot.scene.picking()
+        };
+        let bounds = self
+            .selected
+            .as_ref()
+            .and_then(|selection| picking.selection_part(selection))
+            .filter(|index| mask & (1 << index) != 0)
+            .map(|index| snapshot.scene.part_bounds[index])
+            .or_else(|| snapshot.scene.visible_bounds(mask));
+        if let Some(bounds) = bounds {
+            self.camera.frame(bounds, self.viewport_aspect);
+            self.message = if self.selected.is_some() {
+                "Framed selected part"
+            } else {
+                "Framed visible parts"
+            }
+            .into();
+        } else {
+            self.message = "No visible parts to frame · use Show all in Parts".into();
+        }
+    }
+
     fn new(
         context: &eframe::CreationContext<'_>,
         model_path: Option<std::path::PathBuf>,
@@ -800,6 +865,7 @@ impl Editor {
             }
         }
         Ok(Self {
+            outliner: outliner::State::default(),
             sweep,
             preview_input: None,
             parameter_edited_at: None,
@@ -867,6 +933,7 @@ impl Editor {
         }
         self.script = Some(document);
         self.snapshot = None;
+        self.outliner = outliner::State::default();
         self.preview_input = None;
         self.parameter_edited_at = None;
         self.watcher = Some(watcher);
@@ -1021,6 +1088,12 @@ impl Editor {
             .iter()
             .find(|measurement| measurement.name == name)
             .ok_or("Measurement is not in the current layout")?;
+        if !measurement.visible(&picking::View {
+            visible_parts: snapshot.visible_parts(&self.outliner),
+            ..snapshot.scene.picking()
+        }) {
+            return Err("Show both measured parts before selecting this measurement".into());
+        }
         let selection = measurement
             .selection(&snapshot.scene.faces)
             .ok_or("Measurement faces are unavailable")?;
@@ -1213,6 +1286,7 @@ impl Editor {
                 } else {
                     match result {
                         Ok(Outcome::Model(mut snapshot)) => {
+                            self.outliner.sync(&snapshot.parts);
                             if let Some(input) = &mut snapshot.input {
                                 input.received_ms = input.elapsed_ms(Instant::now());
                             }
@@ -1461,6 +1535,7 @@ impl eframe::App for Editor {
         let mut close_after_save = false;
         let mut file_dialog_requested = None;
         let mut measurement_requested = None;
+        let mut part_action = None;
         if shortcuts_enabled {
             if ui.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -1564,9 +1639,7 @@ impl eframe::App for Editor {
                         }
                         Navigation::Performance => self.show_performance = !self.show_performance,
                         Navigation::Frame => {
-                            if let Some(snapshot) = &self.snapshot {
-                                self.camera = snapshot_camera(snapshot, self.viewport_aspect);
-                            }
+                            frame_layout = true;
                         }
                         Navigation::Front => {
                             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
@@ -2109,34 +2182,15 @@ impl eframe::App for Editor {
                         ui.small("Shift-click a parallel face to measure separation. Click empty space to clear.");
                     }
                     egui::CollapsingHeader::new(format!("Parts ({})", snapshot.parts.len())).id_salt("properties_parts").default_open(true).show(ui, |ui| {
-                        egui::ScrollArea::vertical().id_salt("assembly_parts").max_height(140.0).show(ui, |ui| {
-                            for (index, (part, canonical)) in snapshot.parts.iter().zip(&snapshot.scene.display.parts).enumerate() {
-                                let faces = [*canonical.faces.start(), *canonical.faces.end()];
-                                let selected = self.selected.as_ref().is_some_and(|selection| match selection {
-                                    inspection::Selection::Part { faces: selected, .. } => *selected == faces,
-                                    _ => selection.latest().is_some_and(|face| canonical.faces.contains(&face.id)),
-                                });
-                                let color: egui::Color32 = egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2]).into();
-                                let response = egui::Frame::NONE.fill(if selected { interface::SELECTION } else { egui::Color32::TRANSPARENT })
-                                    .corner_radius(4.0).inner_margin(egui::vec2(6.0, 0.0)).show(ui, |ui| {
-                                        ui.set_min_width(ui.available_width());
-                                        ui.horizontal(|ui| {
-                                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                                            ui.painter().rect_filled(swatch, 2.0, color);
-                                            ui.add(egui::Label::new(&part.name).truncate());
-                                        });
-                                    }).response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if response.hovered() {
-                                    ui.painter().rect_stroke(response.rect, 4.0, egui::Stroke::new(1.0, interface::MUTED), egui::StrokeKind::Inside);
-                                }
-                                if response.clicked() {
-                                    self.selected = Some(inspection::Selection::Part {
-                                        index: index as u32, faces, bounds: snapshot.scene.part_bounds[index],
-                                    });
-                                    self.selected_measurement = None;
-                                }
-                            }
-                        });
+                        let selected = self.selected.as_ref().and_then(|selection| snapshot.scene.picking().selection_part(selection));
+                        let source_ready = self.script.as_ref().is_some_and(|script| snapshot.editor_revision == Some(script.buffer.revision));
+                        let before = snapshot.visible_parts(&self.outliner);
+                        part_action = self.outliner.show(ui, &snapshot.parts, selected, source_ready);
+                        let after = snapshot.visible_parts(&self.outliner);
+                        if before != after {
+                            self.message = format!("{} / {} parts visible", after.count_ones(), snapshot.parts.len());
+                            ui.ctx().request_repaint();
+                        }
                     });
                 }
                 if let Some(script) = &self.script {
@@ -2158,7 +2212,7 @@ impl eframe::App for Editor {
                     if snapshot.scene.layout == placement::Layout::Print {
                         ui.small("Switch to Assembly to edit these dimensions.");
                     }
-                    for measurement in &snapshot.checks.measurements {
+                    for measurement in snapshot.checks.measurements.iter().filter(|measurement| measurement.visible(&picking::View { visible_parts: snapshot.visible_parts(&self.outliner), ..snapshot.scene.picking() })) {
                         let current = snapshot.scene.layout == placement::Layout::Assembly && self.script.as_ref().is_some_and(|script| snapshot.editor_revision == Some(script.buffer.revision));
                         let selected = self.selected_measurement.as_ref().map_or_else(|| self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection)), |name| *name == measurement.name);
                         if ui.add_enabled(current, egui::Button::new("").left_text(&measurement.name).shortcut_text(format!("{:.2} mm", measurement.distance_mm)).min_size(egui::vec2(ui.available_width(), 28.0)).selected(selected).frame_when_inactive(false))
@@ -2449,6 +2503,62 @@ impl eframe::App for Editor {
                 diagnostics.sync(&script.buffer, ui.ctx());
             }
         }
+        if let Some(snapshot) = &self.snapshot {
+            let mask = snapshot.visible_parts(&self.outliner);
+            let picking = picking::View {
+                visible_parts: mask,
+                ..snapshot.scene.picking()
+            };
+            if self
+                .selected
+                .as_ref()
+                .is_some_and(|selection| !picking.selection_visible(selection))
+            {
+                self.selected = None;
+                self.selected_measurement = None;
+            }
+            if let Some(action) = part_action {
+                match action {
+                    outliner::Action::Select(index) | outliner::Action::Frame(index) => {
+                        let faces = &snapshot.scene.display.parts[index].faces;
+                        let bounds = snapshot.scene.part_bounds[index];
+                        self.selected = Some(inspection::Selection::Part {
+                            index: index as u32,
+                            faces: [*faces.start(), *faces.end()],
+                            bounds,
+                        });
+                        self.selected_measurement = None;
+                        self.message = format!("Selected part · {}", snapshot.parts[index].name);
+                        if matches!(action, outliner::Action::Frame(_)) {
+                            self.camera.frame(bounds, self.viewport_aspect);
+                            self.focus_editor = false;
+                            self.message = format!("Framed part · {}", snapshot.parts[index].name);
+                        }
+                    }
+                    outliner::Action::Source(index) => {
+                        if let Some(script) = &self.script {
+                            if let Some(line) = snapshot
+                                .part_source(index, script.buffer.revision)
+                                .filter(|line| *line < script.buffer.rope.len_lines())
+                            {
+                                let start = script.buffer.rope.line_to_char(line);
+                                if self.code_state.modal.enabled {
+                                    self.code_state.modal.mode = modal::Mode::Normal;
+                                }
+                                self.code_state.jump_to(start..start);
+                                self.show_code = true;
+                                self.message = format!(
+                                    "Source · {} · line {}",
+                                    snapshot.parts[index].name,
+                                    line + 1
+                                );
+                            }
+                        }
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(interface::VIEWPORT))
             .show(ui, |ui| {
@@ -2495,7 +2605,7 @@ impl eframe::App for Editor {
                             }
                             if ui
                                 .button("Frame")
-                                .on_hover_text("F · Fit the model in the viewport")
+                                .on_hover_text("F · Frame the selected part, or all visible parts")
                                 .clicked()
                             {
                                 frame_layout = true;
@@ -2545,9 +2655,7 @@ impl eframe::App for Editor {
                     return;
                 }
                 if frame_layout {
-                    if let Some(snapshot) = &self.snapshot {
-                        self.camera = snapshot_camera(snapshot, self.viewport_aspect);
-                    }
+                    self.frame_selection();
                 }
                 if rect.width() >= 100.0 {
                     if let Some(request) = self.code_state.outputs.take_focus() {
@@ -2559,6 +2667,7 @@ impl eframe::App for Editor {
                                 self.viewport_aspect,
                                 &self.camera,
                             ) {
+                                self.outliner.reveal(&request.name);
                                 self.selected = Some(selection);
                                 self.selected_measurement = None;
                                 self.camera = camera;
@@ -2571,11 +2680,11 @@ impl eframe::App for Editor {
                 if ui.input(|input| input.key_pressed(egui::Key::F))
                     && !ui.ctx().egui_wants_keyboard_input()
                 {
-                    if let Some(snapshot) = &self.snapshot {
-                        self.camera = snapshot_camera(snapshot, self.viewport_aspect);
-                    }
+                    self.frame_selection();
                 }
                 if let Some(snapshot) = &self.snapshot {
+                    let visible_parts = snapshot.visible_parts(&self.outliner);
+                    let picking = picking::View { visible_parts, ..snapshot.scene.picking() };
                     let matrix = self
                         .camera
                         .matrix(rect.width().max(1.0) / rect.height().max(1.0));
@@ -2590,7 +2699,7 @@ impl eframe::App for Editor {
                         if let Some(position) = response.interact_pointer_pos() {
                             let extend = ui.input(|input| input.modifiers.shift);
                             let edge = if self.show_edges && !extend {
-                                snapshot.scene.picking().pick_edge(
+                                picking.pick_edge(
                                     matrix,
                                     [rect.width(), rect.height()],
                                     [position.x - rect.left(), position.y - rect.top()],
@@ -2602,7 +2711,7 @@ impl eframe::App for Editor {
                                 self.selected = Some(inspection::Selection::Edge(edge));
                                 self.selected_measurement = None;
                                 self.message = "Edge dimensions · reference measurements".into();
-                            } else if let Some(hit) = snapshot.scene.picking().pick(
+                            } else if let Some(hit) = picking.pick(
                                 matrix,
                                 [
                                     (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
@@ -2644,6 +2753,7 @@ impl eframe::App for Editor {
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                         rect,
                         viewport::Draw {
+                            visible_parts,
                             input: snapshot.input,
                             edge_width_px: self.edge_width_px,
                             edges_enabled: self.show_edges,
@@ -2670,14 +2780,16 @@ impl eframe::App for Editor {
                             },
                         },
                     ));
-                    if self.show_dimensions || self.selected.is_some() {
+                    if let Some(bounds) = snapshot.scene.visible_bounds(visible_parts)
+                        .filter(|_| self.show_dimensions || self.selected.is_some()) {
                         if let Some(name) = dimensions::draw(
                             ui,
                             rect,
                             matrix,
-                            snapshot.scene.bounds,
+                            bounds,
                             &snapshot.scene.annotations,
                             self.selected.as_ref(),
+                            |id| picking.face_visible(id),
                         ) {
                             measurement_requested = Some(name);
                         }
@@ -3196,11 +3308,8 @@ fn focus_part(
         .position(|part| part.name == request.name)?;
     let faces = &snapshot.scene.display.parts.get(index)?.faces;
     let bounds = *snapshot.scene.part_bounds.get(index)?;
-    let mut camera = viewport::Camera::rack((bounds[1] - bounds[0]).as_dvec3().to_array());
-    camera.target = (bounds[0] + bounds[1]) / 2.0;
-    camera.distance /= aspect.min(1.0);
-    camera.yaw = previous.yaw;
-    camera.pitch = previous.pitch;
+    let mut camera = *previous;
+    camera.frame(bounds, aspect);
     Some((
         inspection::Selection::Part {
             index: index as u32,
@@ -3287,6 +3396,56 @@ fn benchmark() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "rack-tools")]
+    #[test]
+    fn outliner_keeps_the_rack_tools_model_visible_and_frameable() -> Result<(), String> {
+        let kernel = kernel::Kernel::new()?;
+        let snapshot = build_snapshot(&kernel, PARAMETERS, 1)?;
+        let mask = snapshot.visible_parts(&outliner::State::default());
+        assert_eq!(mask, u32::MAX);
+        assert_eq!(
+            snapshot.scene.visible_bounds(mask),
+            Some(snapshot.scene.bounds)
+        );
+        assert_eq!(
+            snapshot.scene.part_bounds.len(),
+            snapshot.scene.display.parts.len()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outliner_part_selection_tracks_names_even_when_geometry_is_shared() -> Result<(), String> {
+        let source = "cad.show('first',cad.box({width=10,depth=10,height=10}));cad.show('second',cad.box({width=10,depth=10,height=10}))";
+        let before = build_script_snapshot(source, 1)?;
+        let selection = inspection::Selection::Part {
+            index: 0,
+            faces: [1, 6],
+            bounds: before.scene.part_bounds[0],
+        };
+        let mut after = build_script_snapshot(source, 2)?;
+        after.scene.display = Arc::clone(&before.scene.display);
+        after.parts.swap(0, 1);
+        let restored = after
+            .restore_selection(&before, &selection, None)
+            .expect("Named part retained");
+        assert_eq!(after.scene.picking().selection_part(&restored), Some(1));
+        after.parts[1].name = "renamed".into();
+        assert!(after.restore_selection(&before, &selection, None).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn outliner_source_locations_require_the_current_revision() -> Result<(), String> {
+        let source = "local part=cad.box({width=10,depth=10,height=10})\n\ncad.show('part',part)";
+        let mut snapshot = build_script_snapshot(source, 1)?;
+        snapshot.editor_revision = Some(42);
+        assert_eq!(snapshot.part_source(0, 42), Some(2));
+        assert_eq!(snapshot.part_source(0, 43), None);
+        assert_eq!(snapshot.part_source(1, 42), None);
+        Ok(())
+    }
 
     #[test]
     fn named_measurements_survive_shape_changes_and_clear_when_removed() -> Result<(), String> {

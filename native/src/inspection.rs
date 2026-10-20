@@ -534,6 +534,7 @@ mod tests {
                     bounds,
                     &crate::dimensions::Annotations::default(),
                     Some(&selection),
+                    |_| true,
                 );
             });
         for expected in ["R ≈3.00 mm", "Ø ≈6.00 mm"] {
@@ -703,6 +704,7 @@ mod tests {
                     snapshot.scene.bounds,
                     &snapshot.scene.annotations,
                     Some(&selected),
+                    |_| true,
                 );
             });
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, eframe::egui::Shape::Text(text) if text.galley.job.text == "≈8.00 mm")));

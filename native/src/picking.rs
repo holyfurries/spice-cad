@@ -17,9 +17,40 @@ pub struct Part {
 pub struct View<'a> {
     pub parts: &'a [Part],
     pub instances: &'a [Instance],
+    pub visible_parts: u32,
 }
 
 impl View<'_> {
+    pub fn face_visible(&self, id: u32) -> bool {
+        self.parts
+            .iter()
+            .position(|part| part.faces.contains(&id))
+            .is_some_and(|index| self.visible_parts & (1 << index) != 0)
+    }
+
+    pub fn selection_part(&self, selection: &crate::inspection::Selection) -> Option<usize> {
+        match selection {
+            crate::inspection::Selection::Part { index, .. } => {
+                ((*index as usize) < self.parts.len()).then_some(*index as usize)
+            }
+            crate::inspection::Selection::Edge(edge) => {
+                self.source_edge(edge.segments).map(|(index, _)| index)
+            }
+            _ => {
+                let id = selection.latest()?.id;
+                self.parts.iter().position(|part| part.faces.contains(&id))
+            }
+        }
+    }
+
+    pub fn selection_visible(&self, selection: &crate::inspection::Selection) -> bool {
+        if let crate::inspection::Selection::Pair { first, second } = selection {
+            return self.face_visible(first.id) && self.face_visible(second.id);
+        }
+        self.selection_part(selection)
+            .is_some_and(|index| self.visible_parts & (1 << index) != 0)
+    }
+
     pub fn pick(&self, matrix: Mat4, position: [f32; 2]) -> Option<Hit> {
         assert_eq!(self.parts.len(), self.instances.len());
         assert!(self.parts.len() <= 32);
@@ -32,7 +63,10 @@ impl View<'_> {
         }
         let mut distance = f32::INFINITY;
         let mut selected = None;
-        for (part, instance) in self.parts.iter().zip(self.instances) {
+        for (index, (part, instance)) in self.parts.iter().zip(self.instances).enumerate() {
+            if self.visible_parts & (1 << index) == 0 {
+                continue;
+            }
             let placement = instance.matrix();
             let local = placement.inverse();
             let local_origin = local.transform_point3(origin);
@@ -87,7 +121,10 @@ impl View<'_> {
         let mut closest = 6.0_f32;
         let mut depth = f32::INFINITY;
         let mut selected = None;
-        for (part, instance) in self.parts.iter().zip(self.instances) {
+        for (index, (part, instance)) in self.parts.iter().zip(self.instances).enumerate() {
+            if self.visible_parts & (1 << index) == 0 {
+                continue;
+            }
             let placement = instance.matrix();
             let projection = matrix * placement;
             for edge in &part.geometry.edges.items {
@@ -229,6 +266,60 @@ fn ray_bounds(origin: Vec3, direction: Vec3, bounds: [Vec3; 2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_parts_do_not_occlude_or_receive_face_and_edge_picks() -> Result<(), String> {
+        let snapshot = crate::build_script_snapshot(
+            "cad.show('front',cad.box({width=10,depth=10,height=10}),{assembly={position={y=-20}}});cad.show('rear',cad.box({width=10,depth=10,height=10}))",
+            1,
+        )?;
+        let matrix = Mat4::perspective_rh(40_f32.to_radians(), 1.0, 0.1, 10000.0)
+            * Mat4::look_at_rh(
+                Vec3::new(5.0, -100.0, 5.0),
+                Vec3::new(5.0, 5.0, 5.0),
+                Vec3::Z,
+            );
+        let mut view = snapshot.scene.picking();
+        let front = view.pick(matrix, [0.0; 2]).expect("Front hit");
+        assert!(view.parts[0].faces.contains(&front.face_id));
+        view.visible_parts = 2;
+        let rear = view
+            .pick(matrix, [0.0; 2])
+            .expect("Visible rear hit through hidden front");
+        assert!(view.parts[1].faces.contains(&rear.face_id));
+        let clip = matrix.project_point3(Vec3::new(0.0, 0.0, 5.0));
+        let pixel = [(clip.x + 1.0) * 500.0, (1.0 - clip.y) * 500.0];
+        let edge = view
+            .pick_edge(matrix, [1000.0; 2], pixel)
+            .expect("Visible rear edge");
+        assert!(view.parts[1].segments.contains(&edge.segments[0]));
+        assert!(!view.face_visible(front.face_id));
+        assert!(view.face_visible(rear.face_id));
+        let front_face = *snapshot
+            .scene
+            .faces
+            .get(&front.face_id)
+            .expect("Front face");
+        let rear_face = *snapshot.scene.faces.get(&rear.face_id).expect("Rear face");
+        assert!(!view.selection_visible(&crate::inspection::Selection::Face(front_face)));
+        assert!(view.selection_visible(&crate::inspection::Selection::Face(rear_face)));
+        assert!(
+            !view.selection_visible(&crate::inspection::Selection::Pair {
+                first: front_face,
+                second: rear_face
+            })
+        );
+        assert!(view.selection_visible(&crate::inspection::Selection::Edge(edge)));
+        assert_eq!(
+            snapshot.scene.visible_bounds(2),
+            Some(snapshot.scene.part_bounds[1])
+        );
+        view.visible_parts = 0;
+        assert!(view.pick(matrix, [0.0; 2]).is_none());
+        assert!(view.pick_edge(matrix, [1000.0; 2], pixel).is_none());
+        assert!(snapshot.scene.visible_bounds(0).is_none());
+        Ok(())
+    }
 
     const SOURCE: &str = "local a=cad.box({width=30,depth=20,height=10});local b=cad.cylinder({radius=8,height=35});cad.show('box',a,{assembly={rotation={x=15,z=25},position={x=20,y=-10}},print={rotation={y=90},position={x=20,z=30}}});cad.show('cylinder',b,{assembly={rotation={y=35},position={x=30,y=5}},print={rotation={x=90},position={x=55,z=8}}});cad.show('occluder',cad.box({width=40,depth=40,height=5}),{assembly={position={x=10,y=-20,z=45}},print={position={x=10,y=30}}})";
 

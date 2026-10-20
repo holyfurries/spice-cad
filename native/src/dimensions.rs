@@ -248,6 +248,10 @@ pub fn planes(mesh: &Mesh) -> Planes {
 }
 
 impl Measurement {
+    pub fn visible(&self, view: &crate::picking::View<'_>) -> bool {
+        self.faces.iter().all(|id| view.face_visible(*id))
+    }
+
     pub fn matches_selection(&self, selection: &crate::inspection::Selection) -> bool {
         let ids = selection.ids();
         match selection {
@@ -458,7 +462,10 @@ pub fn draw(
     bounds: [Vec3; 2],
     annotations: &Annotations,
     selected: Option<&crate::inspection::Selection>,
+    face_visible: impl Fn(u32) -> bool,
 ) -> Option<String> {
+    let measurement_visible =
+        |measurement: &Measurement| measurement.faces.into_iter().all(&face_visible);
     let project = |point: Vec3| -> Option<egui::Pos2> {
         let point = matrix * point.extend(1.0);
         if point.w <= 0.1 || !(0.0..=point.w).contains(&point.z) {
@@ -475,10 +482,9 @@ pub fn draw(
     if let Some(selection) = selected {
         let spans = selection.spans();
         let named_pair = matches!(selection, crate::inspection::Selection::Pair { .. })
-            && annotations
-                .measurements
-                .iter()
-                .any(|measurement| measurement.matches_selection(selection));
+            && annotations.measurements.iter().any(|measurement| {
+                measurement_visible(measurement) && measurement.matches_selection(selection)
+            });
         let local = spans
             .iter()
             .flatten()
@@ -502,7 +508,9 @@ pub fn draw(
         let related = annotations
             .measurements
             .iter()
-            .filter(|measurement| measurement.matches_selection(selection))
+            .filter(|measurement| {
+                measurement_visible(measurement) && measurement.matches_selection(selection)
+            })
             .map(|measurement| DisplayDimension {
                 measurement: Some(measurement),
                 direction: ["X", "Y", "Z", "Distance"][measurement.axis],
@@ -558,6 +566,9 @@ pub fn draw(
     };
     let primary: [Option<&Measurement>; 3] = std::array::from_fn(|axis| {
         annotations.measurements.iter().find(|measurement| {
+            if !measurement_visible(measurement) {
+                return false;
+            }
             let first = measurement.points[0][axis];
             let second = measurement.points[1][axis];
             measurement.axis == axis
@@ -582,6 +593,7 @@ pub fn draw(
     let extra = annotations
         .measurements
         .iter()
+        .filter(|measurement| measurement_visible(measurement))
         .filter(|measurement| {
             !primary
                 .iter()
@@ -775,6 +787,47 @@ fn draw_dimensions<'a>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn hidden_measurement_parts_do_not_leave_dimension_labels() -> Result<(), String> {
+        let snapshot = crate::build_script_snapshot(
+            "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{z=20});cad.show('a',a);cad.show('b',b);local first=cad.face(a,{name='first',normal='z+'});local second=cad.face(b,{name='second',normal='z+'});cad.measure('cross part',{from=first,to=second})",
+            1,
+        )?;
+        let mut view = snapshot.scene.picking();
+        assert!(snapshot.checks.measurements[0].visible(&view));
+        view.visible_parts = 1;
+        assert!(!snapshot.checks.measurements[0].visible(&view));
+        let bounds = snapshot.scene.visible_bounds(1).expect("Visible bounds");
+        let mut camera = crate::snapshot_camera(&snapshot, 1.0);
+        camera.frame(bounds, 1.0);
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            draw(
+                ui,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0)),
+                camera.matrix(1.0),
+                bounds,
+                &snapshot.scene.annotations,
+                None,
+                |id| view.face_visible(id),
+            );
+        });
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        let hidden_label = labels.iter().any(|label| label.contains("20.00"));
+        let visible_bounds =
+            labels.len() == 3 && labels.iter().all(|label| label.contains("10.00"));
+        output.drop_without_applying_deltas();
+        assert!(!hidden_label);
+        assert!(visible_bounds);
+        Ok(())
+    }
+
     fn camera_labels(
         camera: &crate::viewport::Camera,
         bounds: [Vec3; 2],
@@ -794,6 +847,7 @@ mod tests {
                     bounds,
                     &Annotations::default(),
                     selected,
+                    |_| true,
                 );
             },
         );
@@ -920,6 +974,7 @@ mod tests {
                     [Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)],
                     &annotations,
                     None,
+                    |_| true,
                 );
             },
         );
@@ -1071,6 +1126,7 @@ mod tests {
                         snapshot.scene.bounds,
                         &snapshot.scene.annotations,
                         None,
+                        |_| true,
                     )
                     .or(clicked.take());
                 },
