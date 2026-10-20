@@ -66,6 +66,7 @@ enum Modification {
     Translate([f64; 3]),
     Rotate { axis: [f64; 3], angle: f64 },
     EdgeTreatment(usize),
+    Hole(usize),
 }
 
 enum EdgeTargets {
@@ -89,6 +90,7 @@ impl UserData for Edge {}
 
 #[derive(Default)]
 struct Recipe {
+    holes: Vec<crate::hole::Recipe>,
     edges: Vec<crate::edge_reference::Reference>,
     edge_treatments: Vec<EdgeTreatmentRecipe>,
     profiles: Vec<crate::profile::Polygon>,
@@ -441,6 +443,56 @@ pub fn compile_cached(
     )
     .map_err(|error| error.to_string())?;
     let definitions = crate::dimensions::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    let faces = Rc::clone(&definitions);
+    cad.set(
+        "hole",
+        lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
+            options_fields(&options, &["face", "u", "v", "radius", "depth"])?;
+            let source = solid.borrow::<Solid>()?.0;
+            let face_index = options
+                .get::<AnyUserData>("face")?
+                .borrow::<crate::dimensions::Face>()?
+                .0;
+            let radius = dimension(&options, "radius")?;
+            let depth = if options.contains_key("depth")? {
+                Some(dimension(&options, "depth")?)
+            } else {
+                None
+            };
+            let u = options.get::<Option<f64>>("u")?.unwrap_or(0.0);
+            let v = options.get::<Option<f64>>("v")?.unwrap_or(0.0);
+            if !u.is_finite() || !v.is_finite() || u.abs() > 2000.0 || v.abs() > 2000.0 {
+                return Err(mlua::Error::runtime(
+                    "Hole offsets must be finite and within ±2000 mm",
+                ));
+            }
+            let face = faces.borrow_mut().modeling_face(face_index, source)?;
+            let index = {
+                let mut recipe = state.borrow_mut();
+                if recipe.holes.len() >= OPERATION_COUNT_MAX {
+                    return Err(mlua::Error::runtime("Model exceeds 256 holes"));
+                }
+                let index = recipe.holes.len();
+                recipe.holes.push(crate::hole::Recipe {
+                    face,
+                    offset: [u, v],
+                    radius,
+                    depth,
+                });
+                index
+            };
+            push_operation(
+                &state,
+                Operation::Modify {
+                    source,
+                    modification: Modification::Hole(index),
+                },
+            )
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     cad.set_readonly(true);
     lua.globals()
         .set("cad", cad)
@@ -660,6 +712,9 @@ impl Model {
                         match modification {
                             Modification::Translate(offset) => body.translate(offset)?,
                             Modification::Rotate { axis, angle } => body.rotate(axis, angle)?,
+                            Modification::Hole(index) => {
+                                self.recipe.holes[index].apply(kernel, &mut body)?
+                            }
                             Modification::EdgeTreatment(index) => {
                                 let operation = &self.recipe.edge_treatments[index];
                                 match &operation.edges {

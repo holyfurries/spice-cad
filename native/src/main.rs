@@ -21,6 +21,7 @@ mod edge_reference;
 mod export;
 mod files;
 mod game_asset;
+mod hole;
 mod inline_output;
 mod inspection;
 mod interface;
@@ -4241,7 +4242,7 @@ mod tests {
         let blank = format!(
             "{}\ncad.show('blank', bracket)",
             source
-                .split("for _, x")
+                .split("for index, u")
                 .next()
                 .ok_or("Missing bracket feature")?
         );

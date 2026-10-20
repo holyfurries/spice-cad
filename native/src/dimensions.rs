@@ -8,14 +8,15 @@ const COUNT_MAX: usize = 64;
 const TOLERANCE_MM: f32 = 0.001;
 
 #[derive(Clone, Copy)]
-struct Face(usize);
+pub(crate) struct Face(pub usize);
 impl UserData for Face {}
 
-struct Selector {
-    solid: usize,
-    name: String,
-    axis: usize,
-    positive: bool,
+#[derive(Clone)]
+pub(crate) struct Selector {
+    pub solid: usize,
+    pub name: String,
+    pub axis: usize,
+    pub positive: bool,
     at: Option<f32>,
     near: Option<Vec3>,
 }
@@ -31,6 +32,7 @@ struct Requirement {
 #[derive(Default)]
 pub struct Definitions {
     faces: Vec<Selector>,
+    modeling_faces: u64,
     measurements: Vec<Requirement>,
     parameters: Vec<crate::parameters::Parameter>,
 }
@@ -274,7 +276,62 @@ impl Measurement {
     }
 }
 
+impl Selector {
+    pub fn resolve(&self, planes: &Planes) -> Result<(u32, [Vec3; 2]), String> {
+        let matches = planes.faces.iter().filter(|(_, plane)| {
+            plane.axis == Some((self.axis, self.positive))
+                && self
+                    .at
+                    .is_none_or(|at| (plane.minimum[self.axis] - at).abs() <= TOLERANCE_MM)
+        });
+        let mut chosen = None;
+        let mut second_distance = f32::INFINITY;
+        for (id, plane) in matches {
+            let distance = self.near.map_or(0.0, |near| {
+                near.distance((plane.minimum + plane.maximum) * 0.5)
+            });
+            match chosen {
+                None => chosen = Some((*id, plane, distance)),
+                Some((_, _, previous)) if distance < previous => {
+                    second_distance = previous;
+                    chosen = Some((*id, plane, distance));
+                }
+                _ => second_distance = second_distance.min(distance),
+            }
+        }
+        let (id, plane, distance) = chosen
+            .ok_or_else(|| format!("Face '{}': no matching axis-aligned planar face", self.name))?;
+        if second_distance - distance <= TOLERANCE_MM {
+            return Err(format!(
+                "Face '{}': ambiguous selector; add an at coordinate or a near point",
+                self.name
+            ));
+        }
+        Ok((id, [plane.minimum, plane.maximum]))
+    }
+
+    pub fn geometry_matches(&self, other: &Self) -> bool {
+        self.axis == other.axis
+            && self.positive == other.positive
+            && self.at == other.at
+            && self.near == other.near
+    }
+}
+
 impl Definitions {
+    pub fn modeling_face(&mut self, index: usize, solid: usize) -> mlua::Result<Selector> {
+        assert!(index < self.faces.len());
+        assert!(index < COUNT_MAX);
+        let face = &self.faces[index];
+        if face.solid != solid {
+            return Err(mlua::Error::runtime(format!(
+                "Face '{}' belongs to a different source solid; select it on the solid passed to cad.hole",
+                face.name
+            )));
+        }
+        self.modeling_faces |= 1u64 << index;
+        Ok(face.clone())
+    }
     pub fn validate_parameters(
         &mut self,
         parameters: Option<Vec<crate::parameters::Parameter>>,
@@ -321,71 +378,49 @@ impl Definitions {
         if self.faces.is_empty() {
             return Ok(annotations);
         }
-        for selector in &self.faces {
-            let (_, range, placement, planes) = outputs
+        let mut face_indices = [None; COUNT_MAX];
+        for (index, selector) in self.faces.iter().enumerate() {
+            let output = outputs
                 .iter()
-                .find(|(solid, _, _, _)| *solid == selector.solid)
-                .ok_or_else(|| {
-                    format!(
-                        "Face '{}': select faces on the final solid passed to cad.show",
-                        selector.name
-                    )
-                })?;
-            let matches = planes.faces.iter().filter(|(_, plane)| {
-                plane.axis == Some((selector.axis, selector.positive))
-                    && selector
-                        .at
-                        .is_none_or(|at| (plane.minimum[selector.axis] - at).abs() <= TOLERANCE_MM)
-            });
-            let mut chosen = None;
-            let mut second_distance = f32::INFINITY;
-            for (id, plane) in matches {
-                let distance = selector.near.map_or(0.0, |near| {
-                    near.distance((plane.minimum + plane.maximum) * 0.5)
-                });
-                match chosen {
-                    None => chosen = Some((id, plane, distance)),
-                    Some((_, _, previous)) if distance < previous => {
-                        second_distance = previous;
-                        chosen = Some((id, plane, distance));
-                    }
-                    _ => second_distance = second_distance.min(distance),
-                }
+                .find(|(solid, _, _, _)| *solid == selector.solid);
+            if output.is_none()
+                && self.modeling_faces & (1u64 << index) != 0
+                && !self
+                    .measurements
+                    .iter()
+                    .any(|measurement| measurement.first == index || measurement.second == index)
+            {
+                continue;
             }
-            let (id, plane, distance) = chosen.ok_or_else(|| {
+            let (_, range, placement, planes) = output.ok_or_else(|| {
                 format!(
-                    "Face '{}': no matching axis-aligned planar face",
+                    "Face '{}': select faces on the final solid passed to cad.show",
                     selector.name
                 )
             })?;
-            if second_distance - distance <= TOLERANCE_MM {
-                return Err(format!(
-                    "Face '{}': ambiguous selector; add an at coordinate or a near point",
-                    selector.name
-                ));
-            }
+            let (id, bounds) = selector.resolve(planes)?;
+            face_indices[index] = Some(annotations.faces.len());
             annotations.faces.push(NamedFace {
                 name: selector.name.clone(),
                 id: range.start() + id - 1,
-                point: placement.transform_point3((plane.minimum + plane.maximum) * 0.5),
+                point: placement.transform_point3((bounds[0] + bounds[1]) * 0.5),
                 normal: placement
                     .transform_vector3(Vec3::AXES[selector.axis])
                     .normalize(),
             });
         }
         for requirement in &self.measurements {
-            let first = &annotations.faces[requirement.first];
-            let second = &annotations.faces[requirement.second];
+            let first = &annotations.faces
+                [face_indices[requirement.first].ok_or("Missing measurement face")?];
+            let second = &annotations.faces
+                [face_indices[requirement.second].ok_or("Missing measurement face")?];
             if first.normal.cross(second.normal).length_squared() > 1e-8 {
                 return Err(format!(
                     "Measurement '{}': faces must be parallel",
                     requirement.name
                 ));
             }
-            let mut points = [
-                annotations.faces[requirement.first].point,
-                annotations.faces[requirement.second].point,
-            ];
+            let mut points = [first.point, second.point];
             let signed_distance = (points[1] - points[0]).dot(first.normal);
             let distance_mm = signed_distance.abs();
             if requirement
@@ -426,10 +461,7 @@ impl Definitions {
                 line: requirement.line,
                 name: requirement.name.clone(),
                 axis,
-                faces: [
-                    annotations.faces[requirement.first].id,
-                    annotations.faces[requirement.second].id,
-                ],
+                faces: [first.id, second.id],
                 points,
                 distance_mm,
                 checked: requirement.minimum.is_some() || requirement.maximum.is_some(),

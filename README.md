@@ -820,8 +820,31 @@ Selectors must resolve to exactly one planar face. Missing or ambiguous faces
 fail the build; face indices are never persistent identifiers. Names and
 selectors are reevaluated after every rebuild. Intermediate solids,
 oblique/curved face selectors, and propagation of names through later operations
-are not supported. Face handles currently feed measurements; face-based modeling
-operations are not implemented.
+are not supported for measurements. Modeling can select intermediate solids
+with the same selectors using `cad.hole`:
+
+```lua
+local part = cad.box({ width = 60, depth = 30, height = 8 })
+local top = cad.face(part, { name = "mounting face", normal = "z+" })
+part = cad.hole(part, { face = top, radius = 2, u = -20, v = 0 })
+cad.show("Mount", part)
+```
+
+`cad.hole` cuts inward from the selected face. Omit `depth` to cut through the
+whole solid along that direction; supply a positive depth for a blind hole.
+Offsets `u` and `v` default to zero, measured from the face bounding-box center
+in the solid's local coordinates. X-normal faces use +Y/+Z; Y-normal faces use
++X/+Z; Z-normal faces use +X/+Y. These axes are the same for either normal sign.
+Resizing the face moves its center and the attached holes. Assembly and print
+placements are applied afterward. Centers outside the face or inside existing
+openings fail; circles may intersect an edge to form an open cut.
+
+Each handle belongs to its exact input solid. After a cut, select the face on
+the new solid before making another hole. Modeling handles do not appear as
+measurements on later solids; select final faces again for `cad.measure`.
+Selection currently uses tessellated planar-face bounds (0.001 mm tolerance);
+the cylindrical cutter and boolean result remain analytic B-rep geometry.
+See `models/mounting-bracket.luau` for a four-hole example with two face normals.
 
 `cad.measure` reports perpendicular separation between parallel face planes.
 Without `min`/`max` it is a reference dimension; with either limit it becomes an

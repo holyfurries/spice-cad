@@ -343,6 +343,17 @@ fn cache_matches(
                 },
             ) => {
                 match (b, d) {
+                    (Modification::Hole(a), Modification::Hole(b)) => {
+                        let a = &first.holes[a];
+                        let b = &second.holes[b];
+                        if !a.face.geometry_matches(&b.face)
+                            || a.offset != b.offset
+                            || a.radius != b.radius
+                            || a.depth != b.depth
+                        {
+                            return false;
+                        }
+                    }
                     (Modification::Translate(a), Modification::Translate(b)) if a == b => {}
                     (
                         Modification::Rotate { axis: a, angle: b },

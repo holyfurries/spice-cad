@@ -25,6 +25,7 @@ local cad: {
 	fillet: (Solid, { radius: number, edges: { Edge }? }) -> Solid,
 	chamfer: (Solid, { width: number, edges: { Edge }? }) -> Solid,
 	edge: (Solid, { name: string, from: Point, to: Point }) -> Edge,
+	hole: (Solid, { face: Face, radius: number, u: number?, v: number?, depth: number? }) -> Solid,
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
