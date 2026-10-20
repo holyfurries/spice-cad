@@ -204,11 +204,11 @@ executable and created once at
 `$XDG_DATA_HOME/spice-cad/models/spice-rack-measurements.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
-**Examples → Spice rack · four parts** opens four named, colored rack pieces
+**File → Examples → Spice rack · four parts** opens four named, colored rack pieces
 with the same dovetail dimensions and 0.2 mm clearance as the dedicated rack
 exporter. Set `separation = 0` to inspect the assembly, or increase it to expose
-the joints. Use **Layout · Assembly / Print** in the toolbar to inspect either
-arrangement. **Export → 3D print · STEP + STL** always exports the four
+the joints. Use **Assembly / Print layout** with the viewport tools to inspect either
+arrangement. **File → Export → 3D print · STEP + STL** always exports the four
 bed-oriented parts, regardless of the displayed layout. `parts.json` maps the
 numbered files to their part names; slice each part separately. The original
 **Spice rack** example remains an unsplit blank. Examples open through the
@@ -271,11 +271,11 @@ nix develop -c cargo run --release --locked -p spice-cad -- --model models/mount
 ```
 
 The resizable **Code** pane provides syntax highlighting, line numbers, and text
-undo/redo. **Auto Preview** is enabled by default: committed source edits
+undo/redo. **Live preview** is enabled by default: committed source edits
 rebuild after a 250 ms typing pause, using the existing geometry worker. New
 edits replace the pending revision; results and errors from older revisions are
 discarded. Errors keep the last valid geometry visible without retrying
-unchanged code. Turn Auto Preview off beside Run for expensive models. **Run**
+unchanged code. For expensive models, disable **Model → Live preview**. **Update model**
 (Ctrl/Command+Enter) checks and previews the current buffer without saving.
 **Save** (Ctrl/Command+S) saves atomically, then checks and rebuilds; a matching
 validated preview is reused. Export includes the exact validated source,
@@ -285,8 +285,7 @@ disables export until the current buffer builds successfully.
 External editor saves are detected automatically. If local edits conflict with a
 disk change, **Reload disk** discards the local draft; **Keep editor** keeps it
 and permits a subsequent save over the disk version. Closing or opening another
-model with unsaved edits offers save, discard, or cancel. **File → Browse
-files** (Ctrl+O) browses `.luau` and `.lua` files without restarting the app;
+model with unsaved edits offers save, discard, or cancel. **File → Open…** (Ctrl+O) browses `.luau` and `.lua` files without restarting the app;
 the path field also accepts an exact file or directory. File loading runs off
 the UI thread. The header separates navigation from document actions. **Code**,
 **Split** and **Model** switch between editor focus, side-by-side editing and
@@ -294,9 +293,9 @@ viewport focus (Ctrl+1 / Ctrl+2 / Ctrl+3). Drag the Code pane boundary to resize
 it. **View** controls Properties and Diagnostics. Diagnostics start collapsed;
 errors keep the workspace layout unchanged. The footer shows checking progress
 or issue counts. Click that indicator or press Ctrl+Shift+J to open the full
-list. The footer also shows the current Vim mode and cursor position. A viewport
-badge distinguishes a current preview from pending changes or errors. Run
-previews unsaved edits; Save writes the file and updates the preview.
+list. The footer also shows the current Vim mode, cursor position, and total line count. A viewport
+badge distinguishes a current preview from pending changes or errors. Update
+model previews unsaved edits; Save writes the file and updates the preview.
 
 **File → New model** (Ctrl+N) chooses a filename and opens a small parametric
 box as an unsaved draft. No file is created until Save; canceling a model switch
@@ -304,10 +303,10 @@ preserves the previous source. **Save as** (Ctrl+Shift+S) writes a copy in the
 background, switches the active path, and preserves undo history. Existing
 targets require confirmation and are checked again before writing. New
 destinations are created without overwriting a file that appeared in the
-meantime. Both actions, and the Auto Preview toggle, are available through the
+meantime. Both actions, and the Live preview toggle, are available through the
 command palette.
 
-Vim-style modal keys are enabled by default and can be toggled in **Editor**.
+Vim-style modal keys are enabled by default and can be toggled in **Edit**.
 Escape enters Normal mode; `i`/`a` enter Insert, `v`/`V` select, and `h/j/k/l`,
 `w/b/e`, `0/^/$`, `gg/G` move with optional counts. Supported edits include
 `d/c/y` with motions, `dd/cc/yy`, `x`, `p/P`, `r` followed by a replacement
@@ -335,7 +334,7 @@ the bar. Normal-mode `n` repeats the search direction and `N` reverses it; both
 wrap at the document boundaries. **Replace** (Ctrl+H) offers **Replace match**
 and **Replace all**. Replace All runs on a worker and applies as one undo
 operation only if the searched revision is still current. Replacements
-participate in Auto Preview; with it disabled, use Run or Save. Regex and
+participate in Live preview; with it disabled, use Update model or Save. Regex and
 substitution commands are not implemented. Details and limits are in
 [native search](evaluation/search.md).
 
@@ -349,7 +348,7 @@ levels; generated and hidden directories and symlinks are skipped. The most
 recent 20 files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
 (default `~/.local/state/spice-cad/`).
 
-The properties pane opens by default; **Properties** in the toolbar toggles it.
+The properties pane opens by default; **View → Properties** toggles it.
 Declare the values you want to expose; ordinary locals remain private:
 
 ```lua
@@ -368,14 +367,12 @@ code.
 Only top-level declarations with literal values and literal option tables become
 controls. Up to 64 properties are shown from the first 4,096 top-level syntax
 nodes; each declaration is limited to 4 KiB. Controls edit only the value
-literal, preserving the declaration and comments. With Auto Preview enabled,
+literal, preserving the declaration and comments. With Live preview enabled,
 sliders update the model during a drag, at the geometry worker's pace. Only the
 latest pending values are kept; the final value is retained after release. Each drag
 is one editor undo. Checkboxes commit immediately. Enter or leaving a numeric
-field applies it; Escape cancels the pending field edit. Save and Run also commit
-the active field. Parameter edits bypass the typing debounce; code edits still
-wait for a pause. Disable Auto Preview to edit values and rebuild with Run or
-Save. Existing personal example files are preserved; the new startup file is
+field applies it; Escape cancels the pending field edit. Save and Update model also commit the active field. Parameter edits bypass the typing debounce; code edits still
+wait for a pause. Disable Live preview to edit values and rebuild with Update model or Save. Existing personal example files are preserved; the new startup file is
 `spice-rack-measurements.luau`, leaving older rack copies intact. See
 [navigation and parameter notes](evaluation/navigation.md).
 
@@ -449,7 +446,7 @@ local corner = cad.edge(part, {
 cad.show("Rounded corner", cad.fillet(part, { radius = 2, edges = { corner } }))
 ```
 
-**Examples → Selected edge fillets** rounds two plate corners while preserving
+**File → Examples → Selected edge fillets** rounds two plate corners while preserving
 the mounting hole rims. Select a straight edge and click **Copy edge selector**
 in Properties to copy the `cad.edge(...)` expression. Replace `part` with the
 solid variable being filleted and give the reference a unique name. Use
@@ -465,7 +462,7 @@ These references do not track arbitrary topology changes. Circular-edge modeling
 selectors remain future work.
 
 Use `cad.chamfer(part, { width = 2, edges = { corner } })` to bevel the selected
-straight edges. **Examples → Selected edge chamfers** preserves sharp hole rims
+straight edges. **File → Examples → Selected edge chamfers** preserves sharp hole rims
 while beveling two plate corners. `width` is measured across the flat bevel
 face, not along either neighboring face: at a right-angle corner, a 2 mm bevel
 has approximately 1.414 mm setback on each face. Omit `edges` to chamfer all
@@ -474,7 +471,7 @@ also require a size smaller than half the solid's smallest bounding dimension.
 Use new edge references on each resulting solid when combining fillets and
 chamfers.
 
-**Examples → Extruded bracket** demonstrates a concave polygon profile, a
+**File → Examples → Extruded bracket** demonstrates a concave polygon profile, a
 diagonal web, and mounting holes. `cad.polygon(points)` snapshots a closed 2D
 outline; list each vertex once, in either winding order.
 `cad.extrude(profile, { height })` creates a capped solid from Z=0 along +Z.
@@ -501,7 +498,7 @@ define at most 256 profiles. These profiles use straight segments. Cut holes
 with subtract; curved profiles, nested loops and interactive sketch constraints
 remain future work.
 
-**Examples → Revolved bushing** demonstrates a flanged part with a through-bore.
+**File → Examples → Revolved bushing** demonstrates a flanged part with a through-bore.
 `cad.revolve(profile, { angle = 360 })` interprets X as radius and Y as height,
 maps the section into the XZ plane, and turns it around +Z. For example:
 
@@ -553,7 +550,7 @@ measurement checks run before writing. Existing directories are preserved, and a
 failed write removes the newly created directory. Rendering uses a bounded CPU
 rasterizer shared with inline thumbnails; it does not initialize a window or GPU.
 
-Choose **Export → 3D print · STEP + STL** to create a new
+Choose **File → Export → 3D print · STEP + STL** to create a new
 `output/native/model-<timestamp>/` directory. Or choose a new directory from the
 command line:
 
@@ -574,8 +571,8 @@ preserve volume within `1e-5` relative plus `0.001 mm³`, or export is cancelled
 STL uses a 0.02 mm chord tolerance and passes the same closed-mesh audit as the
 viewport.
 
-For static game props and vehicle parts, choose **Export → Game asset · GLB** or
-use the command palette's **Model: export game asset GLB**:
+For static game props and vehicle parts, choose **File → Export → Game asset · GLB** or
+use the command palette's **File: export game asset GLB**:
 
 ```sh
 nix develop -c cargo run --release --locked -p spice-cad -- --export-game models/revolved-bushing.luau output/game-bushing
@@ -597,7 +594,7 @@ declared dimension checks still apply. Each named part exports as a separate
 object with its own color material. UVs, textures, collision meshes, rigging,
 and animation remain future work. These are static hard-surface asset workflows.
 
-Use **Examples → Rocket engine assembly** to try a three-part asset. Its toolbar
+Use **File → Examples → Rocket engine assembly** to try a three-part asset. Its toolbar
 layout switch shows the assembly or each part on Z=0; no source edit is needed
 for print export. The model is a static visual asset.
 
@@ -644,8 +641,8 @@ selection. Scripts build recipes before any SMLib operations execute, and failed
 saves keep the previous valid preview. Models run on the geometry worker; camera
 interaction continues during analysis and rebuilding. A background watcher
 checks source every 250 ms and wakes the UI only when the content or read-error
-state changes. Auto Preview uses a 250 ms debounce for source edits, including
-external changes; the initial load and explicit Run/Save have no debounce delay.
+state changes. Live preview uses a 250 ms debounce for source edits, including
+external changes; the initial load and explicit Update model/Save have no debounce delay.
 Unchanged files do not schedule viewport redraws. Worker completion, input, and
 window events wake the UI independently. Unchanged file metadata avoids repeated
 whole-file reads. The editor uses a Ropey B-tree buffer with structurally shared
@@ -654,9 +651,10 @@ and preview eligibility use revision identities rather than per-frame text
 comparisons. Only visible rows and columns are shaped and highlighted; very long
 individual lines are horizontally virtualized too. Undo/redo uses Ctrl+Z,
 Ctrl+Shift+Z, or Ctrl+Y. The workspace keeps camera controls over the viewport,
-appearance controls in the top **Display** menu, selection and geometry in the
-optional Properties pane, and Save/Run/Export in the header. Full build errors
-are available through **Details**. **Debug → Performance** opens a separate
+appearance controls under **View → Appearance**, selection and geometry in the
+optional Properties pane, and open/save/export actions under **File**. Workspace
+layouts and **Update model** occupy the document bar below the menus. Full build
+errors are available through **Details**. **View → Performance** opens a separate
 window that separates analysis, script, kernel, and display preparation times;
 its mesh timing includes mesh validation, smooth normals, and CAD edge sampling.
 The headless check reports mesh/audit time without viewport preparation. Upload
@@ -672,15 +670,15 @@ Native interface colors, typography and control sizing live in
 corners, and subtle borders. Blue marks primary actions, selection, and focus;
 secondary labels use muted text. The Properties pane puts selection details
 first, followed by a bounded part list, source parameters, and geometry/check
-summaries. Code, model, and diagnostics share panel-title styling; editor text
-remains 14-point monospace. Keep new controls on these defaults instead of
+summaries. The source starts directly below the document bar. **View → Inline results**
+toggles code previews. Editor text remains 14-point monospace. Keep new controls on these defaults instead of
 adding local themes. The grouping and neutral surfaces draw from Plasticity's
 [interface overview](https://doc.plasticity.xyz/plasticity-essentials/plasticity-interface/user-interface-overview),
 with larger text and controls for this code-based workspace.
 
 Editing, saving, and execution accept UTF-8 sources up to 16 MiB. Analysis has a
 5-second request deadline. The background language server has a 1 GiB
-address-space limit on Linux and bounded 64 MiB protocol messages. Run's
+address-space limit on Linux and bounded 64 MiB protocol messages. Update model's
 independent analyzer uses one thread, a 512 MiB limit and a 64 KiB output
 budget. The UI retains at most 200 diagnostics. VM memory remains limited to 8
 MiB, script execution to 250 ms, recipes to 256 operations, and geometry
@@ -708,7 +706,7 @@ diagnostic navigation, and resource budgets are described in
 
 ### Measurements and named faces
 
-Open **Examples → Measured block**, then click **Measures** in the viewport
+Open **File → Examples → Measured block**, then click **Measures** in the viewport
 toolbar or enable **View → Measurements & face names**. The overlay shows
 overall X/Y/Z dimensions, named faces, and declared measurements. Selecting a
 face shows its name in Properties; **Copy face selector** copies a Luau
@@ -734,7 +732,7 @@ lip remains readable at the rack's overall scale.
 Click within 6 screen points of a visible edge to highlight and inspect it.
 Straight edges show their length; circular edges and arcs show **R** (radius)
 and **Ø** (diameter), both on the model and in Properties. Click inside a face
-to return to face inspection. Edge picking follows **Display → Surface edges**;
+to return to face inspection. Edge picking follows **View → Appearance → Surface edges**;
 Shift-click continues to select faces for separation measurements. These are
 approximate reference measurements from evaluated CAD curves. Other curve types
 remain selectable but do not report a length or radius.

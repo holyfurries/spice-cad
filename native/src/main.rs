@@ -925,7 +925,7 @@ impl Editor {
 
     fn export(&mut self, target: export::Target) -> Result<(), String> {
         if !self.can_export() {
-            return Err("Run the current code successfully before exporting".into());
+            return Err("Update the model successfully before exporting".into());
         }
         let command = match &self.snapshot.as_ref().expect("Validated export").source {
             #[cfg(feature = "rack-tools")]
@@ -992,7 +992,7 @@ impl Editor {
         let snapshot = self.snapshot.as_ref().ok_or("No model preview")?;
         let script = self.script.as_ref().ok_or("No source document")?;
         if snapshot.editor_revision != Some(script.buffer.revision) {
-            return Err("Run the current source before selecting a measurement".into());
+            return Err("Update the model before selecting a measurement".into());
         }
         let measurement = snapshot
             .scene
@@ -1053,6 +1053,31 @@ impl Editor {
         self.show_inspector = true;
         self.focus_editor = false;
         Ok(())
+    }
+
+    fn change_layout(&mut self, layout: placement::Layout) -> bool {
+        let Some(snapshot) = &mut self.snapshot else {
+            return false;
+        };
+        if !snapshot.set_layout(layout) {
+            return false;
+        }
+        if let Some(revision) = snapshot.editor_revision {
+            self.code_state
+                .outputs
+                .set(revision, Arc::clone(&snapshot.scene.outputs));
+        }
+        self.selected = None;
+        self.selected_measurement = None;
+        self.focus_editor = false;
+        self.camera = snapshot_camera(snapshot, self.viewport_aspect);
+        self.message = if layout == placement::Layout::Print {
+            "Print layout · export checks each part separately"
+        } else {
+            "Assembly layout"
+        }
+        .into();
+        true
     }
 
     fn start_preview(&mut self, pointer_down: bool) {
@@ -1563,85 +1588,75 @@ impl eframe::App for Editor {
             self.show_diagnostics = !self.show_diagnostics;
         }
         egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.add_space(3.0);
-            ui.horizontal(|ui| {
-                ui.style_mut().visuals.button_frame = false;
+            egui::MenuBar::new().style(interface::menu_style).ui(ui, |ui| {
                 interface::logo(ui);
-                ui.label(egui::RichText::new("SPICE CAD").size(15.0).strong());
-                ui.separator();
                 ui.menu_button("File", |ui| {
-                    if ui.button("New model · Ctrl+N").clicked() {
+                    if ui.add(egui::Button::new("New model").shortcut_text("Ctrl+N")).clicked() {
                         file_dialog_requested = Some(save::Mode::NewModel);
                         ui.close();
                     }
-                    if ui
-                        .add_enabled(
-                            self.script.is_some(),
-                            egui::Button::new("Save as · Ctrl+Shift+S"),
-                        )
-                        .clicked()
-                    {
-                        file_dialog_requested = Some(save::Mode::SaveAs);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Quick Open · Ctrl+P").clicked() {
-                        palette_requested = Some(palette::Mode::Files);
-                        ui.close();
-                    }
-                    if ui.button("Browse files · Ctrl+O").clicked() {
+                    if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
                         open_requested = true;
                         ui.close();
                     }
-                    if ui.button("Commands · Ctrl+Shift+P").clicked() {
-                        palette_requested = Some(palette::Mode::Commands);
+                    if ui.add(egui::Button::new("Quick Open").shortcut_text("Ctrl+P")).clicked() {
+                        palette_requested = Some(palette::Mode::Files);
                         ui.close();
                     }
-                });
-                ui.menu_button("Examples", |ui| {
-                    for (label, example) in [
-                        ("Spice rack", document::Example::Rack),
-                        ("Spice rack · four parts", document::Example::RackParts),
-                        ("Mounting bracket", document::Example::MountingBracket),
-                        ("Measured block", document::Example::MeasuredBlock),
-                        ("Extruded bracket", document::Example::ExtrudedBracket),
-                        ("Selected edge fillets", document::Example::EdgeFillets),
-                        ("Selected edge chamfers", document::Example::EdgeChamfers),
-                        ("Revolved bushing", document::Example::RevolvedBushing),
-                        ("Rocket engine assembly", document::Example::RocketEngine),
-                    ] {
-                        if ui.button(label).clicked() {
-                            example_requested = Some(example);
+                    ui.add_enabled_ui(self.script.is_some(), |ui| {
+                        if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
+                            save_requested = true;
                             ui.close();
                         }
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    ui.add_enabled_ui(self.script.is_some(), |ui| {
-                        if ui.checkbox(&mut self.show_code, "Code editor").changed()
-                            && !self.show_code
-                        {
-                            self.focus_editor = false;
-                        }
-                        if ui
-                            .checkbox(&mut self.focus_editor, "Focus editor")
-                            .changed()
-                            && self.focus_editor
-                        {
-                            self.show_code = true;
+                        if ui.add(egui::Button::new("Save as…").shortcut_text("Ctrl+Shift+S")).clicked() {
+                            file_dialog_requested = Some(save::Mode::SaveAs);
+                            ui.close();
                         }
                     });
-                    ui.checkbox(&mut self.show_inspector, "Parameters & properties");
-                    ui.checkbox(&mut self.show_diagnostics, "Diagnostics");
-                    ui.checkbox(&mut self.show_dimensions, "Measurements & face names");
+                    ui.separator();
+                    let can_export = self.can_export();
+                    if self.script.is_some() {
+                        ui.add_enabled_ui(can_export, |ui| {
+                            ui.menu_button("Export", |ui| {
+                                if ui.button("3D print · STEP + STL").clicked() {
+                                    export_requested = true;
+                                    ui.close();
+                                }
+                                if ui.button("Game asset · GLB").clicked() {
+                                    export_requested = true;
+                                    export_target = export::Target::Game;
+                                    ui.close();
+                                }
+                            });
+                        })
+                        .response
+                        .on_disabled_hover_text("Update the model successfully before exporting");
+                    } else {
+                        export_requested |= ui
+                            .add_enabled(can_export, egui::Button::new("Export P1S parts"))
+                            .clicked();
+                    }
+                    ui.separator();
+                    ui.menu_button("Examples", |ui| {
+                        for (label, example) in [
+                            ("Spice rack", document::Example::Rack),
+                            ("Spice rack · four parts", document::Example::RackParts),
+                            ("Mounting bracket", document::Example::MountingBracket),
+                            ("Measured block", document::Example::MeasuredBlock),
+                            ("Extruded bracket", document::Example::ExtrudedBracket),
+                            ("Selected edge fillets", document::Example::EdgeFillets),
+                            ("Selected edge chamfers", document::Example::EdgeChamfers),
+                            ("Revolved bushing", document::Example::RevolvedBushing),
+                            ("Rocket engine assembly", document::Example::RocketEngine),
+                        ] {
+                            if ui.button(label).clicked() {
+                                example_requested = Some(example);
+                                ui.close();
+                            }
+                        }
+                    });
                 });
-                ui.menu_button("Debug", |ui| {
-                    ui.checkbox(&mut self.show_performance, "Performance");
-                });
-                ui.menu_button("Display", |ui| {
-                    interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px);
-                });
-                ui.menu_button("Editor", |ui| {
+                ui.menu_button("Edit", |ui| {
                     let mut vim = self.code_state.modal.enabled;
                     if ui.checkbox(&mut vim, "Vim-style keys").changed() {
                         self.code_state.modal.enable(vim);
@@ -1667,9 +1682,75 @@ impl eframe::App for Editor {
                     ] {
                         if ui.button(label).clicked() {
                             self.code_state.action = Some(action);
+                            ui.close();
                         }
                     }
                 });
+                ui.menu_button("View", |ui| {
+                    let mut properties_visible = self.show_inspector && !self.focus_editor;
+                    if ui.checkbox(&mut properties_visible, "Properties").changed() {
+                        self.show_inspector = properties_visible;
+                        if properties_visible {
+                            self.focus_editor = false;
+                        }
+                    }
+                    ui.add_enabled_ui(self.script.is_some(), |ui| {
+                        let mut visible = !self.code_state.outputs.hidden;
+                        if ui.checkbox(&mut visible, "Inline results").on_hover_text("Part previews and measurements alongside the source").changed() {
+                            self.code_state.outputs.hidden = !visible;
+                        }
+                    });
+                    ui.checkbox(&mut self.show_diagnostics, "Diagnostics");
+                    ui.checkbox(&mut self.show_dimensions, "Measurements & face names");
+                    ui.separator();
+                    ui.menu_button("Appearance", |ui| {
+                        interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px);
+                    });
+                    ui.checkbox(&mut self.show_performance, "Performance");
+                    ui.separator();
+                    if ui.add(egui::Button::new("Command palette").shortcut_text("Ctrl+Shift+P")).clicked() {
+                        palette_requested = Some(palette::Mode::Commands);
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Model", |ui| {
+                    ui.add_enabled_ui(self.script.is_some(), |ui| {
+                        if ui.add(egui::Button::new("Update model").shortcut_text("Ctrl+Enter")).clicked() {
+                            run_requested = true;
+                            ui.close();
+                        }
+                        let mut automatic = self.preview.automatic();
+                        if ui.checkbox(&mut automatic, "Live preview")
+                            .on_hover_text("Update the model after a 250 ms typing pause; parameter controls update while dragging")
+                            .changed() {
+                            if let Some(script) = &self.script {
+                                self.preview.set_automatic(automatic, script.buffer.revision, Instant::now());
+                            }
+                        }
+                    });
+                });
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if let Some(script) = &self.script {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(280.0, interface::CONTROL_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(egui::Label::new(script.path.file_name().unwrap_or_default().to_string_lossy()).truncate())
+                                .on_hover_text(script.path.display().to_string());
+                            if script.edited() {
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 12.0), egui::Sense::hover());
+                                ui.painter().circle_filled(rect.center(), 2.5, interface::ACCENT);
+                            }
+                        },
+                    );
+                    run_requested |= ui.add(
+                        egui::Button::new(egui::RichText::new("Update model").color(interface::ON_ACCENT))
+                            .fill(interface::ACCENT)
+                            .min_size(egui::vec2(110.0, interface::CONTROL_HEIGHT)),
+                    ).on_hover_text("Ctrl+Enter · Build the current source without saving").clicked();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for (label, code, focus) in [
@@ -1702,142 +1783,6 @@ impl eframe::App for Editor {
                     }
                 });
             });
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                if let Some(script) = &self.script {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(180.0, interface::CONTROL_HEIGHT),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    script
-                                        .path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy(),
-                                )
-                                .truncate(),
-                            )
-                            .on_hover_text(script.path.display().to_string());
-                        },
-                    );
-                    if script.edited() {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(8.0, 12.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle_filled(rect.center(), 2.5, interface::ACCENT);
-                    }
-                    ui.small(
-                        egui::RichText::new(if script.edited() { "Unsaved" } else { "Saved" })
-                            .color(interface::MUTED),
-                    );
-                    ui.add_space(8.0);
-                    open_requested |= ui
-                        .button("Open…")
-                        .on_hover_text("Ctrl+O · Open a model file")
-                        .clicked();
-                    save_requested |= ui
-                        .add(
-                            egui::Button::new("Save")
-                                .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Ctrl+S · Save and rebuild")
-                        .clicked();
-                    ui.separator();
-                    run_requested |= ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("Run").color(interface::ON_ACCENT),
-                            )
-                            .fill(interface::ACCENT)
-                            .min_size(egui::vec2(80.0, interface::CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Ctrl+Enter · Preview editor buffer")
-                        .clicked();
-                    let mut automatic = self.preview.automatic();
-                    if ui
-                        .checkbox(&mut automatic, "Auto preview")
-                        .on_hover_text("Update geometry after a 250 ms typing pause")
-                        .changed()
-                    {
-                        self.preview.set_automatic(
-                            automatic,
-                            script.buffer.revision,
-                            Instant::now(),
-                        );
-                    }
-                }
-                ui.separator();
-                if let Some(snapshot) = &self.snapshot {
-                    if snapshot.alternate.is_some() {
-                        ui.menu_button(
-                            if snapshot.scene.layout == placement::Layout::Assembly {
-                                "Layout · Assembly"
-                            } else {
-                                "Layout · Print"
-                            },
-                            |ui| {
-                                for (layout, label) in [
-                                    (placement::Layout::Assembly, "Assembly"),
-                                    (placement::Layout::Print, "Print"),
-                                ] {
-                                    if ui
-                                        .selectable_label(snapshot.scene.layout == layout, label)
-                                        .clicked()
-                                    {
-                                        layout_requested = Some(layout);
-                                        ui.close();
-                                    }
-                                }
-                            },
-                        )
-                        .response
-                        .on_hover_text(
-                            "Switch cached placements without changing source or rebuilding solids",
-                        );
-                    }
-                }
-                let can_export = self.can_export();
-                if self.script.is_some() {
-                    ui.add_enabled_ui(can_export, |ui| {
-                        ui.menu_button("Export", |ui| {
-                            if ui.button("3D print · STEP + STL").clicked() {
-                                export_requested = true;
-                                ui.close();
-                            }
-                            if ui.button("Game asset · GLB").clicked() {
-                                export_requested = true;
-                                export_target = export::Target::Game;
-                                ui.close();
-                            }
-                        });
-                    })
-                    .response
-                    .on_disabled_hover_text("Run the current code successfully before exporting");
-                } else {
-                    export_requested |= ui
-                        .add_enabled(can_export, egui::Button::new("Export P1S parts"))
-                        .clicked();
-                }
-                if self.script.is_some() {
-                    ui.separator();
-                    if ui
-                        .add(
-                            egui::Button::selectable(
-                                self.show_inspector && !self.focus_editor,
-                                "Properties",
-                            )
-                            .min_size(egui::vec2(100.0, interface::CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Show parts, source parameters, and selected geometry")
-                        .clicked()
-                    {
-                        self.show_inspector = !self.show_inspector || self.focus_editor;
-                        self.focus_editor = false;
-                    }
-                }
-            });
             ui.add_space(3.0);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -1865,9 +1810,10 @@ impl eframe::App for Editor {
                     let cursor = self.code_state.cursor().min(script.buffer.rope.len_chars());
                     let line = script.buffer.rope.char_to_line(cursor);
                     ui.small(format!(
-                        "Ln {}, Col {}",
+                        "Ln {}, Col {} · {} lines",
                         line + 1,
-                        cursor - script.buffer.rope.line_to_char(line) + 1
+                        cursor - script.buffer.rope.line_to_char(line) + 1,
+                        script.buffer.rope.len_lines()
                     ));
                 }
                 let message = self
@@ -1960,26 +1906,8 @@ impl eframe::App for Editor {
                     interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px)
                 });
         }
-        if let Some(layout) = layout_requested {
-            if let Some(snapshot) = &mut self.snapshot {
-                if snapshot.set_layout(layout) {
-                    if let Some(revision) = snapshot.editor_revision {
-                        self.code_state
-                            .outputs
-                            .set(revision, Arc::clone(&snapshot.scene.outputs));
-                    }
-                    self.selected = None;
-                    self.selected_measurement = None;
-                    self.focus_editor = false;
-                    frame_layout = true;
-                    self.message = if layout == placement::Layout::Print {
-                        "Print layout · export checks each part separately"
-                    } else {
-                        "Assembly layout"
-                    }
-                    .into();
-                }
-            }
+        if let Some(layout) = layout_requested.take() {
+            frame_layout = self.change_layout(layout);
         }
         let mut parameter_edit = None;
         if let Some(editor) = &mut self.parameter_editor {
@@ -2174,9 +2102,9 @@ impl eframe::App for Editor {
                         self.parameter_edited_at = Some(now);
                         self.preview.parameter(script.buffer.revision, now);
                         self.message = if self.preview.automatic() {
-                            "Parameter changed · Auto Preview pending"
+                            "Parameter changed · Live preview pending"
                         } else {
-                            "Parameter changed in source · Run to update preview"
+                            "Parameter changed in source · Update model to refresh preview"
                         }
                         .into();
                     }
@@ -2208,34 +2136,6 @@ impl eframe::App for Editor {
                     (ui.available_width() - 320.0).max(240.0)
                 })
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        interface::panel_title(ui, "CODE");
-                        ui.label("Luau")
-                            .on_hover_text(script.path.display().to_string());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .selectable_label(!self.code_state.outputs.hidden, "Results")
-                                .on_hover_text("Show inline part previews and measurements")
-                                .clicked()
-                            {
-                                self.code_state.outputs.hidden = !self.code_state.outputs.hidden;
-                            }
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} lines",
-                                    script.buffer.rope.len_lines()
-                                ))
-                                .small()
-                                .color(interface::MUTED),
-                            );
-                        });
-                    })
-                    .response
-                    .on_hover_text(if self.code_state.modal.enabled {
-                        "Ctrl+Space complete · Esc normal mode"
-                    } else {
-                        "Ctrl+Space complete · Ctrl+Z undo"
-                    });
                     if self.code_state.modal.mode == modal::Mode::Command {
                         ui.monospace(format!(":{}", self.code_state.modal.command));
                     }
@@ -2256,12 +2156,11 @@ impl eframe::App for Editor {
                             }
                         });
                     }
-                    ui.separator();
                     if code_editor::show(ui, &mut script.buffer, &mut self.code_state) {
                         self.message = if self.preview.automatic() {
-                            "Source changed · Auto Preview pending"
+                            "Source changed · Live preview pending"
                         } else {
-                            "Source changed · Run previews without saving"
+                            "Source changed · Update model to preview without saving"
                         }
                         .into();
                     }
@@ -2521,7 +2420,7 @@ impl eframe::App for Editor {
                                             "Preview needs attention"
                                         }
                                     } else {
-                                        "Code changed · Run to update preview"
+                                        "Code changed · Update model to refresh preview"
                                     },
                                     interface::WARNING,
                                 )
@@ -2544,7 +2443,30 @@ impl eframe::App for Editor {
                         .inner_margin(8.0)
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
-                                ui.visuals_mut().button_frame = false;
+                                if let Some(snapshot) = &self.snapshot {
+                                    if snapshot.alternate.is_some() {
+                                        ui.menu_button(
+                                            if snapshot.scene.layout == placement::Layout::Assembly {
+                                                "Assembly"
+                                            } else {
+                                                "Print layout"
+                                            },
+                                            |ui| {
+                                                for (layout, label) in [
+                                                    (placement::Layout::Assembly, "Assembly"),
+                                                    (placement::Layout::Print, "Print"),
+                                                ] {
+                                                    if ui.selectable_label(snapshot.scene.layout == layout, label).clicked() {
+                                                        layout_requested = Some(layout);
+                                                        ui.close();
+                                                    }
+                                                }
+                                            },
+                                        ).response.on_hover_text(
+                                            "Switch cached placements without changing source or rebuilding solids",
+                                        );
+                                    }
+                                }
                                 if ui
                                     .add(
                                         egui::Button::new("Frame · F")
@@ -2581,6 +2503,11 @@ impl eframe::App for Editor {
                         });
                 });
             });
+        if let Some(layout) = layout_requested {
+            if self.change_layout(layout) {
+                ui.ctx().request_repaint();
+            }
+        }
         if let Some(diagnostics) = &mut self.diagnostics {
             if let Some(insight) = diagnostics.take_insight() {
                 if self.language_request_cursor == Some(self.code_state.cursor()) {

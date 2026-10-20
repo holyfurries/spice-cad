@@ -55,14 +55,14 @@ pub enum Command {
 pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::NewModel, "File: new model", "Ctrl+N"),
     (Command::SaveAs, "File: save model as", "Ctrl+Shift+S"),
-    (Command::AutoPreview, "Model: toggle Auto Preview", ""),
+    (Command::AutoPreview, "Model: toggle live preview", ""),
     (Command::Open, "File: browse models", "Ctrl+O"),
-    (Command::Run, "Model: run source", "Ctrl+Enter"),
+    (Command::Run, "Model: update model", "Ctrl+Enter"),
     (Command::Save, "File: save model", "Ctrl+S"),
-    (Command::Export, "Model: export STEP and STL", ""),
-    (Command::ExportGame, "Model: export game asset GLB", ""),
-    (Command::Find, "Editor: find", "Ctrl+F"),
-    (Command::Replace, "Editor: replace", "Ctrl+H"),
+    (Command::Export, "File: export STEP and STL", ""),
+    (Command::ExportGame, "File: export game asset GLB", ""),
+    (Command::Find, "Edit: find", "Ctrl+F"),
+    (Command::Replace, "Edit: replace", "Ctrl+H"),
     (Command::Code, "View: focus code", "Ctrl+1"),
     (Command::Split, "View: split code and model", "Ctrl+2"),
     (Command::Model, "View: focus model", "Ctrl+3"),
@@ -74,10 +74,10 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
         "View: toggle diagnostics",
         "Ctrl+Shift+J",
     ),
-    (Command::Display, "Display: appearance settings", ""),
-    (Command::Edges, "Display: toggle surface edges", ""),
-    (Command::Vim, "Editor: toggle Vim-style keys", ""),
-    (Command::Performance, "Debug: toggle performance", ""),
+    (Command::Display, "View: appearance settings", ""),
+    (Command::Edges, "View: toggle surface edges", ""),
+    (Command::Vim, "Edit: toggle Vim-style keys", ""),
+    (Command::Performance, "View: toggle performance", ""),
     (Command::Frame, "Camera: frame model", "F"),
     (Command::Front, "Camera: front view", ""),
     (Command::Top, "Camera: top view", ""),
@@ -773,7 +773,7 @@ mod tests {
         };
         state.open(Mode::Commands, PathBuf::new(), &context);
         assert!(render(&mut state, Vec::new()).is_none());
-        assert!(render(&mut state, vec![egui::Event::Text("run".into())]).is_none());
+        assert!(render(&mut state, vec![egui::Event::Text("update model".into())]).is_none());
         assert!(!state.rows.is_empty());
         let key = |key| egui::Event::Key {
             key,

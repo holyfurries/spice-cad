@@ -78,6 +78,14 @@ pub fn configure(context: &egui::Context) {
     context.set_style_of(egui::Theme::Dark, style);
 }
 
+pub fn menu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.interact_size.y = CONTROL_HEIGHT;
+    style.visuals.button_frame = true;
+    style.visuals.widgets.open = style.visuals.widgets.active;
+}
+
 pub fn panel_title(ui: &mut egui::Ui, title: &str) {
     ui.add_sized(
         egui::vec2(0.0, CONTROL_HEIGHT),
