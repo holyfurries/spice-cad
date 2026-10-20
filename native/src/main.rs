@@ -801,6 +801,7 @@ struct Editor {
     show_code: bool,
     show_details: bool,
     show_about: bool,
+    splash: Option<studio::Splash>,
     show_diagnostics: bool,
     show_edges: bool,
     show_dimensions: bool,
@@ -924,6 +925,7 @@ impl Editor {
             show_code: true,
             show_details: false,
             show_about: false,
+            splash: Some(studio::Splash::default()),
             show_diagnostics: false,
             show_edges: true,
             show_dimensions: false,
@@ -3256,10 +3258,21 @@ impl eframe::App for Editor {
                 }
             }
         }
-        if self.snapshot.is_none() {
-            if matches!(self.work, WorkerState::Busy(_)) || self.preview.pending() {
-                studio::loading(ui.ctx());
+        let startup_pending = self.snapshot.is_none()
+            && (matches!(self.work, WorkerState::Busy(_)) || self.preview.pending());
+        if startup_pending {
+            if let Some(splash) = &mut self.splash {
+                match splash.show(ui.ctx()) {
+                    Ok(true) => {}
+                    Ok(false) => self.splash = None,
+                    Err(error) => {
+                        self.message = format!("Could not load shared splash: {error}");
+                        self.splash = None;
+                    }
+                }
             }
+        } else {
+            self.splash = None;
         }
         self.ui_ms = started.elapsed().as_secs_f64() * 1000.0;
         if let Some(profile) = &mut self.profile {

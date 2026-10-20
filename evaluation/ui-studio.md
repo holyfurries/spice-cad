@@ -27,6 +27,13 @@ orientations and existing edge/measurement settings.
 
 ## Holy Furries Studio
 
+The following records the original product-specific design. Startup now uses
+the approved shared native poster from `holyfurries/brand-assets`, pinned at
+`ca733e8c6f2652e8583538b2564bae48334a5585`. Its full-window forest background,
+transparent artwork, skip controls, and asset provenance are documented in
+`native/assets/brand/README.md`. The custom product card remains in About;
+it is no longer the startup splash.
+
 The startup splash and About card trace the original fox-and-halo mark from
 [static/mark.svg](https://github.com/holyfurries/website/blob/e16f05643eee14cc7b772dacfd6e9b6dfa38127b/static/mark.svg),
 with the site's paper, red, ink, and forest palette from

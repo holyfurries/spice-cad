@@ -17,6 +17,7 @@
 !/native/Cargo.toml
 !/native/build.rs
 !/native/assets/spice-cad.svg
+!/native/assets/brand/**
 !/native/src/**/*.rs
 !/native/examples/**/*.rs
 !/native/types/**/*.luau

@@ -1,0 +1,20 @@
+{
+    "version": 1,
+    "duration_ms": 1500,
+    "motion_end_ms": 1185,
+    "background": "oklch(28.3468% 0.01742 141.66)",
+    "view_box": [0, 0, 480, 400],
+    "source": "splash/source.svg",
+    "poster": "splash/poster.svg",
+    "fallback": "splash/poster.png",
+    "fallback_size": [1536, 1280],
+    "logos": ["logos/mark.svg", "logos/favicon.svg"],
+    "animations": [
+        { "selector": "fox", "name": "appear", "duration_ms": 255 },
+        { "selector": "face", "name": "face", "duration_ms": 675 },
+        { "selector": "halo", "name": "halo", "duration_ms": 870 },
+        { "selector": "eyes", "name": "glance", "duration_ms": 1065 },
+        { "selector": "wordmark", "name": "wordmark", "duration_ms": 1125 },
+        { "selector": "subtitle", "name": "subtitle", "duration_ms": 1185 }
+    ]
+}

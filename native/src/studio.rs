@@ -5,21 +5,73 @@ const RED: Color32 = Color32::from_rgb(216, 66, 46);
 const INK: Color32 = Color32::from_rgb(36, 39, 31);
 const FOREST: Color32 = Color32::from_rgb(37, 44, 36);
 
-pub fn loading(context: &egui::Context) {
-    let rect = context.content_rect();
-    let id = egui::Id::unique("startup");
-    let area = egui::Modal::default_area(id).fade_in(false);
-    context
-        .layer_painter(area.layer())
-        .rect_filled(rect, 0.0, PAPER);
-    egui::Modal::new(id)
-        .area(area)
-        .backdrop_color(Color32::TRANSPARENT)
-        .frame(egui::Frame::NONE)
-        .show(context, |ui| {
-            ui.set_width(360.0_f32.min(rect.width()));
-            identity(ui, "Preparing your model…");
+#[derive(Default)]
+pub struct Splash {
+    texture: Option<egui::TextureHandle>,
+}
+
+impl Splash {
+    pub fn show(&mut self, context: &egui::Context) -> Result<bool, String> {
+        let skip = context.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                || input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+                || input.pointer.any_click()
         });
+        if skip {
+            return Ok(false);
+        }
+        let texture = match &self.texture {
+            Some(texture) => texture,
+            None => self.texture.insert(context.load_texture(
+                "holy-furries-splash",
+                splash_image()?,
+                egui::TextureOptions::LINEAR,
+            )),
+        };
+        let rect = context.content_rect();
+        let id = egui::Id::unique("startup");
+        let area = egui::Modal::default_area(id).fade_in(false);
+        let painter = context.layer_painter(area.layer());
+        painter.rect_filled(rect, 0.0, FOREST);
+        let scale = (rect.width() / 480.0).min(rect.height() / 400.0).min(1.0);
+        let artwork = egui::Rect::from_center_size(rect.center(), egui::vec2(480.0, 400.0) * scale);
+        painter.image(
+            texture.id(),
+            artwork,
+            egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        egui::Modal::new(id)
+            .area(area)
+            .backdrop_color(Color32::TRANSPARENT)
+            .frame(egui::Frame::NONE)
+            .show(context, |_| {});
+        Ok(true)
+    }
+}
+
+fn splash_image() -> Result<egui::ColorImage, String> {
+    const SIZE: [usize; 2] = [1536, 1280];
+    const SIZE_BYTES: usize = SIZE[0] * SIZE[1] * 4;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!(
+        "../assets/brand/poster.png"
+    )));
+    decoder.set_limits(png::Limits { bytes: SIZE_BYTES });
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    if [reader.info().width as usize, reader.info().height as usize] != SIZE {
+        return Err("Shared splash has an unexpected canvas size".into());
+    }
+    if reader.output_buffer_size() != Some(SIZE_BYTES) {
+        return Err("Shared splash has an unexpected pixel format".into());
+    }
+    let mut bytes = vec![0; SIZE_BYTES];
+    let frame = reader
+        .next_frame(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if frame.color_type != png::ColorType::Rgba || frame.bit_depth != png::BitDepth::Eight {
+        return Err("Shared splash requires eight-bit RGBA pixels".into());
+    }
+    Ok(egui::ColorImage::from_rgba_unmultiplied(SIZE, &bytes))
 }
 
 pub fn identity(ui: &mut egui::Ui, status: &str) {
@@ -173,22 +225,92 @@ mod tests {
     #[test]
     fn splash_covers_the_application_after_resizing() {
         let context = egui::Context::default();
-        for size in [egui::vec2(1400.0, 900.0), egui::vec2(1100.0, 650.0)] {
+        let mut splash = Splash::default();
+        let mut texture_id = None;
+        for size in [
+            egui::vec2(1400.0, 900.0),
+            egui::vec2(1100.0, 650.0),
+            egui::vec2(320.0, 200.0),
+        ] {
             let rect = egui::Rect::from_min_size(Pos2::ZERO, size);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
                     ..Default::default()
                 },
-                |ui| loading(ui.ctx()),
+                |ui| assert!(splash.show(ui.ctx()).unwrap()),
             );
             let covers_window = output.shapes.iter().any(|shape| {
                 matches!(&shape.shape, egui::Shape::Rect(background)
-                    if background.rect == rect && background.fill == PAPER)
+                    if background.rect == rect && background.fill == FOREST)
             });
+            let texture = splash.texture.as_ref().unwrap();
+            if let Some(texture_id) = texture_id {
+                assert_eq!(texture.id(), texture_id);
+                assert!(output.textures_delta.set.is_empty());
+            } else {
+                assert!(
+                    output
+                        .textures_delta
+                        .set
+                        .iter()
+                        .any(|(id, _)| *id == texture.id())
+                );
+                texture_id = Some(texture.id());
+            }
+            let artwork = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                        Some(mesh.calc_bounds())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(rect.contains_rect(artwork));
+            assert_eq!(artwork.center(), rect.center());
+            assert!((artwork.width() / artwork.height() - 1.2).abs() < 0.0001);
             output.drop_without_applying_deltas();
             assert!(covers_window);
             assert!(context.memory(|memory| memory.top_modal_layer().is_some()));
+        }
+    }
+
+    #[test]
+    fn shared_poster_matches_manifest_and_retains_transparency() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../assets/brand/manifest.json")).unwrap();
+        let image = splash_image().unwrap();
+        assert_eq!(image.size, [1536, 1280]);
+        assert_eq!(manifest["fallback_size"], serde_json::json!(image.size));
+        assert_eq!(manifest["view_box"], serde_json::json!([0, 0, 480, 400]));
+        assert_eq!(manifest["background"], "oklch(28.3468% 0.01742 141.66)");
+        assert_eq!(image.pixels[0], Color32::TRANSPARENT);
+        assert!(image.pixels.iter().any(|pixel| pixel.a() == 255));
+    }
+
+    #[test]
+    fn splash_can_be_skipped_without_decoding_the_poster() {
+        for key in [egui::Key::Escape, egui::Key::Space] {
+            let context = egui::Context::default();
+            let mut splash = Splash::default();
+            let output = context.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| assert!(!splash.show(ui.ctx()).unwrap()),
+            );
+            output.drop_without_applying_deltas();
+            assert!(splash.texture.is_none());
+            assert!(context.memory(|memory| memory.top_modal_layer().is_none()));
         }
     }
 }
