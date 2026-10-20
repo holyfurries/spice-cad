@@ -56,6 +56,7 @@ mod ffi {
         include!("SmApiBrep.h");
         include!("SmApiQueries.h");
         include!("SmFace.h");
+        include!("SmSurface.h");
         include!("SmFaceuse.h");
         include!("SmRegion.h");
         include!("SmApiFillets.h");
@@ -132,6 +133,25 @@ mod ffi {
             minimum: &mut SmVector3d,
             maximum: &mut SmVector3d,
         ) -> Result<i64>;
+        unsafe fn SmApiFaceBoundingBox(
+            face: *const SmFace,
+            tight: i32,
+            minimum: &mut SmVector3d,
+            maximum: &mut SmVector3d,
+        ) -> Result<i64>;
+        unsafe fn SmApiFaceClosestPoint(
+            face: *mut SmFace,
+            point: &SmVector3d,
+            closest: &mut SmVector3d,
+            distance: &mut f64,
+        ) -> Result<i64>;
+        unsafe fn IsPlanar(
+            self: &SmSurface,
+            tolerance: f64,
+            point: *mut SmVector3d,
+            normal: *mut SmVector3d,
+            deviation: *mut f64,
+        ) -> Result<i32>;
         unsafe fn SmApiEdgeParameterRange(
             edge: *const SmEdge,
             minimum: &mut f64,
@@ -775,6 +795,114 @@ impl Body<'_> {
                 ))
             }
         }
+    }
+
+    pub fn hole_origin(
+        &mut self,
+        selector: &crate::dimensions::Selector,
+        offset: [f64; 2],
+    ) -> Result<glam::DVec3, String> {
+        assert!(selector.axis < 3);
+        assert!(offset.iter().all(|value| value.is_finite()));
+        let mut candidates = Vec::new();
+        let mut face_count = 0u32;
+        for region in unsafe { topology_list(children(self.shape.as_ptr())) }? {
+            let region_ref = unsafe { &*region.cast::<ffi::SmRegion>() };
+            if region_ref.IsVoid() == 1 {
+                continue;
+            }
+            for shell in unsafe { topology_list(children(region)) }? {
+                for faceuse in unsafe { topology_list(children(shell)) }? {
+                    face_count += 1;
+                    if face_count > 10000 {
+                        return Err("Face query budget exceeded".into());
+                    }
+                    let faceuse = unsafe { &*faceuse.cast::<ffi::SmFaceuse>() };
+                    let face = faceuse.GetFace();
+                    let face_ref = unsafe { face.as_ref() }.ok_or("Missing source face")?;
+                    let surface =
+                        unsafe { face_ref.GetSurface().as_ref() }.ok_or("Missing face surface")?;
+                    let mut normal = Vector::default();
+                    let planar = unsafe {
+                        surface.IsPlanar(
+                            1e-8,
+                            std::ptr::null_mut(),
+                            &mut normal,
+                            std::ptr::null_mut(),
+                        )
+                    }
+                    .map_err(|error| error.to_string())?;
+                    if planar != 1 {
+                        continue;
+                    }
+                    let outward =
+                        unsafe { faceuse.GetMate().as_ref() }.ok_or("Missing outward face side")?;
+                    let mut normal = glam::DVec3::new(normal.x, normal.y, normal.z);
+                    if !normal.is_finite() || normal.length_squared() < 0.5 {
+                        return Err("Invalid planar face normal".into());
+                    }
+                    normal = normal.normalize();
+                    match outward.face_orientation().0 {
+                        1 => {}
+                        2 => normal = -normal,
+                        value => return Err(format!("Invalid outward face orientation: {value}")),
+                    }
+                    let expected = glam::DVec3::AXES[selector.axis]
+                        * if selector.positive { 1.0 } else { -1.0 };
+                    if (normal - expected).abs().max_element() > 1e-8 {
+                        continue;
+                    }
+                    candidates.push(face);
+                }
+            }
+        }
+        let bounds = candidates.into_iter().map(|face| {
+            let mut minimum = Vector::default();
+            let mut maximum = Vector::default();
+            let status = unsafe { ffi::SmApiFaceBoundingBox(face, 1, &mut minimum, &mut maximum) }
+                .map_err(|error| error.to_string())?;
+            let bounds = [
+                glam::DVec3::new(minimum.x, minimum.y, minimum.z),
+                glam::DVec3::new(maximum.x, maximum.y, maximum.z),
+            ];
+            if status != 1000
+                || !bounds[0].is_finite()
+                || !bounds[1].is_finite()
+                || !bounds[0].cmple(bounds[1]).all()
+            {
+                return Err(format!("SMLib face bounds failed: {status}"));
+            }
+            Ok((face, bounds))
+        });
+        let (face, bounds) = selector.resolve_candidates(bounds)?;
+        let axes = match selector.axis {
+            0 => [1, 2],
+            1 => [0, 2],
+            2 => [0, 1],
+            _ => unreachable!(),
+        };
+        let mut center = (bounds[0] + bounds[1]) * 0.5;
+        center[axes[0]] += offset[0];
+        center[axes[1]] += offset[1];
+        let point = Vector {
+            x: center.x,
+            y: center.y,
+            z: center.z,
+        };
+        let mut closest = Vector::default();
+        let mut distance = f64::NAN;
+        let status =
+            unsafe { ffi::SmApiFaceClosestPoint(face, &point, &mut closest, &mut distance) }
+                .map_err(|error| error.to_string())?;
+        if status != 1000 || !distance.is_finite() || distance < 0.0 {
+            return Err(format!("SMLib face containment failed: {status}"));
+        }
+        if distance > 1e-7 {
+            return Err(
+                "Hole center lies outside the selected face or inside an existing opening".into(),
+            );
+        }
+        Ok(center)
     }
 
     pub fn mesh(&mut self) -> Result<crate::mesh::Mesh, String> {

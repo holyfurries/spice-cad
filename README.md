@@ -842,8 +842,11 @@ openings fail; circles may intersect an edge to form an open cut.
 Each handle belongs to its exact input solid. After a cut, select the face on
 the new solid before making another hole. Modeling handles do not appear as
 measurements on later solids; select final faces again for `cad.measure`.
-Selection currently uses tessellated planar-face bounds (0.001 mm tolerance);
-the cylindrical cutter and boolean result remain analytic B-rep geometry.
+Hole selection queries planar surfaces and trimmed-face bounds directly from
+the B-rep, with a 0.001 mm selector tolerance. Kernel closest-point queries
+check centers against the trimmed face, including curved openings. Selection
+avoids intermediate tessellation; the cylindrical cutter and boolean result
+remain analytic B-rep geometry.
 See `models/mounting-bracket.luau` for a four-hole example with two face normals.
 
 `cad.measure` reports perpendicular separation between parallel face planes.

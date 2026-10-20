@@ -2,7 +2,6 @@ use crate::{
     dimensions::Selector,
     kernel::{Body, Kernel},
 };
-use glam::DVec3;
 
 pub struct Recipe {
     pub face: Selector,
@@ -28,43 +27,8 @@ impl Recipe {
     ) -> Result<(), String> {
         assert!(self.radius.is_finite());
         assert!(self.radius > 0.0);
-        let mesh = body.mesh()?;
-        let (face_id, bounds) = self.face.resolve(&crate::dimensions::planes(&mesh))?;
+        let mut center = body.hole_origin(&self.face, self.offset)?;
         let axis = self.face.axis;
-        let axes = match axis {
-            0 => [1, 2],
-            1 => [0, 2],
-            2 => [0, 1],
-            _ => unreachable!(),
-        };
-        let mut center = (bounds[0].as_dvec3() + bounds[1].as_dvec3()) * 0.5;
-        center[axes[0]] += self.offset[0];
-        center[axes[1]] += self.offset[1];
-        let on_face = mesh
-            .vertices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .filter(|triangle| triangle[0].face_id == face_id)
-            .any(|triangle| {
-                let [a, b, c] = std::array::from_fn(|index| {
-                    DVec3::from_array(triangle[index].position.map(f64::from))
-                });
-                let normal = (b - a).cross(c - a);
-                let length_squared = normal.length_squared();
-                if length_squared <= 1e-20 {
-                    return false;
-                }
-                let first = (b - center).cross(c - center).dot(normal) / length_squared;
-                let second = (c - center).cross(a - center).dot(normal) / length_squared;
-                let third = 1.0 - first - second;
-                first >= -1e-8 && second >= -1e-8 && third >= -1e-8
-            });
-        if !on_face {
-            return Err(
-                "Hole center lies outside the selected face or inside an existing opening".into(),
-            );
-        }
         let body_bounds = body.bounds(false)?;
         let sign = if self.face.positive { 1.0 } else { -1.0 };
         let length = self.depth.unwrap_or_else(|| {

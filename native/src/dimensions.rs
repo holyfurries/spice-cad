@@ -278,36 +278,49 @@ impl Measurement {
 
 impl Selector {
     pub fn resolve(&self, planes: &Planes) -> Result<(u32, [Vec3; 2]), String> {
-        let matches = planes.faces.iter().filter(|(_, plane)| {
-            plane.axis == Some((self.axis, self.positive))
-                && self
-                    .at
-                    .is_none_or(|at| (plane.minimum[self.axis] - at).abs() <= TOLERANCE_MM)
-        });
+        let candidates = planes
+            .faces
+            .iter()
+            .filter(|(_, plane)| plane.axis == Some((self.axis, self.positive)))
+            .map(|(id, plane)| Ok((*id, [plane.minimum.as_dvec3(), plane.maximum.as_dvec3()])));
+        let (id, bounds) = self.resolve_candidates(candidates)?;
+        Ok((id, bounds.map(|point| point.as_vec3())))
+    }
+
+    pub fn resolve_candidates<T>(
+        &self,
+        candidates: impl Iterator<Item = Result<(T, [glam::DVec3; 2]), String>>,
+    ) -> Result<(T, [glam::DVec3; 2]), String> {
         let mut chosen = None;
-        let mut second_distance = f32::INFINITY;
-        for (id, plane) in matches {
+        let mut second_distance = f64::INFINITY;
+        for candidate in candidates {
+            let (id, bounds) = candidate?;
+            if self.at.is_some_and(|at| {
+                (bounds[0][self.axis] - f64::from(at)).abs() > f64::from(TOLERANCE_MM)
+            }) {
+                continue;
+            }
             let distance = self.near.map_or(0.0, |near| {
-                near.distance((plane.minimum + plane.maximum) * 0.5)
+                near.as_dvec3().distance((bounds[0] + bounds[1]) * 0.5)
             });
-            match chosen {
-                None => chosen = Some((*id, plane, distance)),
-                Some((_, _, previous)) if distance < previous => {
-                    second_distance = previous;
-                    chosen = Some((*id, plane, distance));
+            match chosen.as_ref() {
+                None => chosen = Some((id, bounds, distance)),
+                Some((_, _, previous)) if distance < *previous => {
+                    second_distance = *previous;
+                    chosen = Some((id, bounds, distance));
                 }
                 _ => second_distance = second_distance.min(distance),
             }
         }
-        let (id, plane, distance) = chosen
+        let (id, bounds, distance) = chosen
             .ok_or_else(|| format!("Face '{}': no matching axis-aligned planar face", self.name))?;
-        if second_distance - distance <= TOLERANCE_MM {
+        if second_distance - distance <= f64::from(TOLERANCE_MM) {
             return Err(format!(
                 "Face '{}': ambiguous selector; add an at coordinate or a near point",
                 self.name
             ));
         }
-        Ok((id, [plane.minimum, plane.maximum]))
+        Ok((id, bounds))
     }
 
     pub fn geometry_matches(&self, other: &Self) -> bool {
@@ -817,6 +830,146 @@ fn draw_dimensions<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_face_queries_respect_circular_trims_without_polygon_approximation()
+    -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let mut body = kernel.cylinder([0.0; 3], 10.0, 8.0)?;
+        body.subtract(kernel.cylinder([0.0, 0.0, -1.0], 2.0, 10.0)?)?;
+        let selector = super::Selector {
+            solid: 0,
+            name: "annulus".into(),
+            axis: 2,
+            positive: true,
+            at: None,
+            near: None,
+        };
+        let angle = 7.5f64.to_radians();
+        for (radius, valid) in [
+            (1.995, false),
+            (2.005, true),
+            (9.995, true),
+            (10.005, false),
+        ] {
+            let offset = [radius * angle.cos(), radius * angle.sin()];
+            let origin = body.hole_origin(&selector, offset);
+            if valid {
+                let point = origin?;
+                assert!((point - glam::DVec3::new(offset[0], offset[1], 8.0)).length() < 1e-6);
+            } else {
+                assert!(origin.is_err(), "Accepted radius {radius}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn direct_face_queries_keep_rust_allocations_small_across_curved_surface_sizes()
+    -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let selector = super::Selector {
+            solid: 0,
+            name: "top".into(),
+            axis: 2,
+            positive: true,
+            at: None,
+            near: None,
+        };
+        let mut previous = None;
+        for radius in [5.0, 100.0] {
+            let mut body = kernel.cylinder([0.0; 3], radius, 8.0)?;
+            let (origin, counts) =
+                crate::allocations::measure(|| body.hole_origin(&selector, [0.0; 2]));
+            assert!((origin? - glam::DVec3::Z * 8.0).length() < 1e-6);
+            assert!(counts.bytes < 4096, "{counts:?}");
+            if let Some(previous) = previous {
+                assert_eq!(counts, previous);
+            }
+            previous = Some(counts);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn direct_face_queries_use_cavity_normals_and_exact_local_coordinates() -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let mut body = kernel.box_shape([0.0; 3], [20.0; 3])?;
+        body.subtract(kernel.box_shape([5.0; 3], [15.0; 3])?)?;
+        for axis in 0..3 {
+            for positive in [false, true] {
+                let coordinate = if positive { 5.0 } else { 15.0 };
+                let selector = super::Selector {
+                    solid: 0,
+                    name: "cavity".into(),
+                    axis,
+                    positive,
+                    at: Some(coordinate as f32),
+                    near: None,
+                };
+                let mut expected = glam::DVec3::splat(10.0);
+                expected[axis] = coordinate;
+                assert!((body.hole_origin(&selector, [0.0; 2])? - expected).length() < 1e-6);
+            }
+        }
+        let mut precise = kernel.box_shape(
+            [7.123456789, 11.876543219, 13.123456789],
+            [27.123456789, 31.876543219, 21.123456789],
+        )?;
+        let selector = super::Selector {
+            solid: 0,
+            name: "precise".into(),
+            axis: 2,
+            positive: true,
+            at: None,
+            near: None,
+        };
+        let expected = glam::dvec3(17.123456789, 21.876543219, 21.123456789);
+        assert!((precise.hole_origin(&selector, [0.0; 2])? - expected).length() < 1e-8);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_face_queries_resolve_steps_and_reject_concave_gaps_and_oblique_planes()
+    -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let mut body = kernel.box_shape([0.0; 3], [20.0, 20.0, 8.0])?;
+        body.union(kernel.box_shape([0.0; 3], [10.0, 10.0, 16.0])?)?;
+        let mut selector = super::Selector {
+            solid: 0,
+            name: "step".into(),
+            axis: 2,
+            positive: true,
+            at: None,
+            near: None,
+        };
+        assert!(
+            body.hole_origin(&selector, [0.0; 2])
+                .err()
+                .is_some_and(|error| error.contains("ambiguous"))
+        );
+        selector.near = Some(glam::vec3(5.0, 5.0, 16.0));
+        assert!(
+            (body.hole_origin(&selector, [0.0; 2])? - glam::dvec3(5.0, 5.0, 16.0)).length() < 1e-6
+        );
+        selector.near = None;
+        selector.at = Some(8.0);
+        assert!(body.hole_origin(&selector, [-5.0, -5.0]).is_err());
+        assert!(
+            (body.hole_origin(&selector, [5.0, 5.0])? - glam::dvec3(15.0, 15.0, 8.0)).length()
+                < 1e-6
+        );
+        let mut tilted = kernel.box_shape([0.0; 3], [20.0, 20.0, 8.0])?;
+        tilted.rotate([1.0, 0.0, 0.0], 15.0)?;
+        selector.at = None;
+        assert!(
+            tilted
+                .hole_origin(&selector, [0.0; 2])
+                .err()
+                .is_some_and(|error| error.contains("no matching"))
+        );
+        Ok(())
+    }
+
     use super::*;
 
     #[test]
