@@ -50,6 +50,99 @@ struct Entry<'kernel> {
     planes: Option<Arc<crate::dimensions::Planes>>,
 }
 
+const OPERATION_CACHE_COUNT_MAX: usize = 16;
+const OPERATION_CACHE_BYTES_MAX: u64 = 16 * 1024 * 1024;
+
+struct OperationEntry<'kernel> {
+    recipe: Rc<Recipe>,
+    solid: usize,
+    steps: usize,
+    body: Body<'kernel>,
+    allocated_bytes: u64,
+}
+
+pub(super) struct Operations<'kernel> {
+    entries: Vec<OperationEntry<'kernel>>,
+    comparisons: Vec<(usize, usize)>,
+    allocated_bytes: u64,
+    hits: usize,
+}
+
+impl<'kernel> Operations<'kernel> {
+    fn new() -> Self {
+        Self {
+            entries: Vec::with_capacity(OPERATION_CACHE_COUNT_MAX),
+            comparisons: Vec::with_capacity(EVALUATION_COUNT_MAX),
+            allocated_bytes: 0,
+            hits: 0,
+        }
+    }
+
+    pub(super) fn find(
+        &mut self,
+        recipe: &Recipe,
+        solid: usize,
+    ) -> Result<Option<(Body<'kernel>, usize)>, String> {
+        let found = self.entries.iter().rposition(|entry| {
+            cache_matches(
+                recipe,
+                solid,
+                &entry.recipe,
+                entry.solid,
+                &mut self.comparisons,
+            )
+        });
+        let Some(index) = found else {
+            return Ok(None);
+        };
+        let body = self.entries[index].body.try_clone()?;
+        let entry = self.entries.remove(index);
+        let steps = entry.steps;
+        self.entries.push(entry);
+        self.hits += 1;
+        Ok(Some((body, steps)))
+    }
+
+    pub(super) fn insert(
+        &mut self,
+        recipe: &Rc<Recipe>,
+        solid: usize,
+        steps: usize,
+        body: &Body<'kernel>,
+    ) -> Result<(), String> {
+        assert!(steps > 0);
+        assert!(steps <= EVALUATION_COUNT_MAX);
+        let allocated_bytes = body.memory_allocated_bytes()?;
+        if allocated_bytes == 0 || allocated_bytes > OPERATION_CACHE_BYTES_MAX {
+            return Ok(());
+        }
+        while self.entries.len() >= OPERATION_CACHE_COUNT_MAX
+            || self.allocated_bytes + allocated_bytes > OPERATION_CACHE_BYTES_MAX
+        {
+            self.allocated_bytes -= self.entries.remove(0).allocated_bytes;
+        }
+        let body = body.try_clone()?;
+        let allocated_bytes = body.memory_allocated_bytes()?;
+        if allocated_bytes == 0 || allocated_bytes > OPERATION_CACHE_BYTES_MAX {
+            return Ok(());
+        }
+        while self.allocated_bytes + allocated_bytes > OPERATION_CACHE_BYTES_MAX {
+            self.allocated_bytes -= self.entries.remove(0).allocated_bytes;
+        }
+        self.entries.push(OperationEntry {
+            recipe: Rc::clone(recipe),
+            solid,
+            steps,
+            body,
+            allocated_bytes,
+        });
+        self.allocated_bytes += allocated_bytes;
+        assert!(self.entries.len() <= OPERATION_CACHE_COUNT_MAX);
+        assert!(self.allocated_bytes <= OPERATION_CACHE_BYTES_MAX);
+        Ok(())
+    }
+}
+
 pub struct Prepared<'kernel> {
     pub bodies: Vec<Rc<Body<'kernel>>>,
     pub geometry: Vec<Arc<Geometry>>,
@@ -62,6 +155,7 @@ pub struct Cache<'kernel> {
     kernel: &'kernel Kernel,
     pub thumbnail_renders: u64,
     entries: Vec<Entry<'kernel>>,
+    operations: Operations<'kernel>,
     comparisons: Vec<(usize, usize)>,
     analysis: crate::analysis::Cache,
     display: Option<Arc<crate::viewport::Geometry>>,
@@ -73,6 +167,7 @@ impl<'kernel> Cache<'kernel> {
             kernel,
             thumbnail_renders: 0,
             entries: Vec::new(),
+            operations: Operations::new(),
             comparisons: Vec::with_capacity(EVALUATION_COUNT_MAX),
             analysis: Default::default(),
             display: None,
@@ -228,7 +323,12 @@ impl<'kernel> Cache<'kernel> {
                 let before = steps;
                 let started = std::time::Instant::now();
                 let mut body = model
-                    .build_solid(self.kernel, part.solid, &mut steps)
+                    .build_solid_cached(
+                        self.kernel,
+                        part.solid,
+                        &mut steps,
+                        Some(&mut self.operations),
+                    )
                     .map_err(|error| format!("Part '{}': {error}", part.name))?;
                 prepared.build_ms += started.elapsed().as_secs_f64() * 1000.0;
                 let started = std::time::Instant::now();
@@ -397,6 +497,92 @@ fn cache_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn later_hole_edits_reuse_the_filleted_body_without_mutating_it() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let source = "local p=cad.fillet(cad.box({width=20,depth=20,height=10}),{radius=1});local f=cad.face(p,{name='top',normal='z+'});cad.show('part',cad.hole(p,{face=f,radius=2,depth=4}))";
+        let first = cache.prepare(&super::super::compile(source)?)?;
+        let hits_before = cache.operations.hits;
+        let edited = source.replace("radius=2", "radius=3");
+        let second_model = super::super::compile(&edited)?;
+        let second = cache.prepare(&second_model)?;
+        let hits = cache.operations.hits - hits_before;
+        let mut direct = second_model.build(&kernel)?;
+        let expected_volume = direct[0].mesh()?.volume_mm3;
+        let restored = cache.prepare(&super::super::compile(source)?)?;
+        let first_volume = first.geometry[0].volume_mm3;
+        let second_volume = second.geometry[0].volume_mm3;
+        let restored_volume = restored.geometry[0].volume_mm3;
+        let final_hits = second.hits;
+        let hits_before = cache.operations.hits;
+        let changed = cache.prepare(&super::super::compile(
+            &source.replace("width=20", "width=30"),
+        )?)?;
+        let upstream_hits = cache.operations.hits - hits_before;
+        let changed_width = changed.geometry[0].bounds[1].x;
+        drop(changed);
+        drop(direct);
+        drop(restored);
+        drop(second);
+        drop(first);
+        drop(cache);
+        drop(kernel);
+        assert_eq!(hits, 1);
+        assert_eq!(final_hits, 0);
+        assert!((second_volume - expected_volume).abs() < 1e-6);
+        assert!(second_volume < first_volume);
+        assert!((restored_volume - first_volume).abs() < 1e-6);
+        assert_eq!(upstream_hits, 0);
+        assert!((changed_width - 30.0).abs() < 0.001);
+        Ok(())
+    }
+
+    #[test]
+    fn intermediate_cache_preserves_logical_steps_and_retention_limits() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut operations = Operations::new();
+        let source = "local p=cad.box({width=20,depth=20,height=10});local q=cad.translate(p,{x=2});cad.show('part',cad.translate(q,{y=2}))";
+        let model = super::super::compile(source)?;
+        let solid = model.parts[0].solid;
+        let mut first_steps = 0;
+        model.build_solid_cached(&kernel, solid, &mut first_steps, Some(&mut operations))?;
+        let mut cached_steps = 0;
+        model.build_solid_cached(&kernel, solid, &mut cached_steps, Some(&mut operations))?;
+        let mut near_limit = EVALUATION_COUNT_MAX - first_steps + 1;
+        let exhausted = model
+            .build_solid_cached(&kernel, solid, &mut near_limit, Some(&mut operations))
+            .is_err();
+        for width in 1..=40 {
+            let model = super::super::compile(&format!(
+                "local p=cad.box({{width={width},depth=2,height=3}});cad.show('part',cad.translate(p,{{x=1}}))"
+            ))?;
+            model.build_solid_cached(
+                &kernel,
+                model.parts[0].solid,
+                &mut 0,
+                Some(&mut operations),
+            )?;
+        }
+        let count = operations.entries.len();
+        let allocated_bytes = operations.allocated_bytes;
+        let measured_bytes: u64 = operations
+            .entries
+            .iter()
+            .map(|entry| entry.allocated_bytes)
+            .sum();
+        drop(operations);
+        drop(kernel);
+        assert_eq!(first_steps, 5);
+        assert_eq!(cached_steps, first_steps);
+        assert!(exhausted);
+        assert_eq!(count, OPERATION_CACHE_COUNT_MAX);
+        assert!(allocated_bytes <= OPERATION_CACHE_BYTES_MAX);
+        assert!(allocated_bytes > 0);
+        assert_eq!(allocated_bytes, measured_bytes);
+        Ok(())
+    }
 
     #[test]
     #[ignore = "Manual display-geometry stage timings and Rust allocation counts"]

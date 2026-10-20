@@ -1,5 +1,32 @@
 # Cache and allocation audit
 
+## Intermediate operation retention
+
+Preview construction now retains up to 16 intermediate B-reps in a least-recently
+used cache, capped at 16 MiB of SMLib-reported allocated body memory. This cap is
+separate from the existing final-part bodies, display meshes, recipe metadata,
+and temporary working copies. Oversized bodies are evaluated without retention.
+SMLib's `GetMemoryUsed` accounts for topology, geometry and attributes; the cloned
+body is measured again before retention rather than assuming clone size matches.
+
+Structural comparison uses the same bounded recipe matcher as the final-part
+cache. Geometry inputs, profiles, edge selections and named-face selectors
+invalidate affected subtrees; source offsets, names and presentation metadata do
+not. Changing a later hole therefore clones the unchanged filleted predecessor
+and rebuilds the cut. Cache-owned bodies never enter mutating kernel operations.
+
+Hits charge the full original subtree evaluation cost against the 512-step model
+budget. Cache capacity cannot make an otherwise over-budget model acceptable.
+Failed downstream operations may leave valid predecessors cached; unsuccessful
+parts never replace the previously prepared final-part cache. Eviction drops the
+native body and its recipe reference. There is no unbounded revision history.
+
+Regression tests compare a cached hole edit with uncached construction, restore
+the original cut to check body isolation, enforce retention limits, and check
+that cached and uncached paths consume identical logical evaluation steps.
+Cold builds pay for copying retained intermediates; end-to-end slider benchmarks
+should distinguish this cost from warm dependency reuse and tessellation.
+
 ## Scope and measurements
 
 2026-10-19, Linux development release, native SMLib backend. Three independent

@@ -91,6 +91,7 @@ mod ffi {
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
         fn spice_copy_brep(body: &SmBrep) -> Result<UniquePtr<SmBrep>>;
+        fn GetMemoryUsed(self: &SmBrep, allocated: &mut u64) -> u64;
         unsafe fn spice_treat_edges(
             body: *mut SmBrep,
             edges: *const *mut SmEdge,
@@ -475,6 +476,13 @@ impl Kernel {
 }
 
 impl Body<'_> {
+    pub fn memory_allocated_bytes(&self) -> Result<u64, String> {
+        let shape = self.shape.as_ref().ok_or("Missing source body")?;
+        let mut allocated = 0;
+        let used = shape.GetMemoryUsed(&mut allocated);
+        Ok(allocated.max(used))
+    }
+
     pub fn try_clone(&self) -> Result<Self, String> {
         let shape = ffi::spice_copy_brep(self.shape.as_ref().ok_or("Missing source body")?)
             .map_err(|error| error.to_string())?;

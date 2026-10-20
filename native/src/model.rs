@@ -680,10 +680,36 @@ impl Model {
         output: usize,
         count: &mut usize,
     ) -> Result<Body<'kernel>, String> {
+        self.build_solid_cached(kernel, output, count, None)
+    }
+
+    fn build_solid_cached<'kernel>(
+        &self,
+        kernel: &'kernel Kernel,
+        output: usize,
+        count: &mut usize,
+        mut cache: Option<&mut cache::Operations<'kernel>>,
+    ) -> Result<Body<'kernel>, String> {
         assert!(output < self.recipe.operations.len());
-        let mut pending = vec![(output, false)];
+        let mut pending = vec![(output, false, *count)];
         let mut bodies = Vec::<Body<'kernel>>::new();
-        while let Some((index, visited)) = pending.pop() {
+        while let Some((index, visited, started)) = pending.pop() {
+            let started = if visited { started } else { *count };
+            if !visited {
+                if let Some(cache) = cache.as_deref_mut() {
+                    if let Some((body, steps)) = cache.find(&self.recipe, index)? {
+                        *count += steps;
+                        if *count > EVALUATION_COUNT_MAX {
+                            return Err(
+                                "Model exceeds 512 evaluation steps; reduce repeated subtrees"
+                                    .into(),
+                            );
+                        }
+                        bodies.push(body);
+                        continue;
+                    }
+                }
+            }
             *count += 1;
             if *count > EVALUATION_COUNT_MAX {
                 return Err("Model exceeds 512 evaluation steps; reduce repeated subtrees".into());
@@ -736,7 +762,8 @@ impl Model {
                         }
                         bodies.push(body);
                     } else {
-                        pending.extend([(index, true), (source, false)]);
+                        pending.extend([(index, true, started), (source, false, 0)]);
+                        continue;
                     }
                 }
                 Operation::Box { minimum, maximum } => {
@@ -759,8 +786,23 @@ impl Model {
                         }
                         bodies.push(first);
                     } else {
-                        pending.extend([(index, true), (second, false), (first, false)]);
+                        pending.extend([
+                            (index, true, started),
+                            (second, false, 0),
+                            (first, false, 0),
+                        ]);
+                        continue;
                     }
+                }
+            }
+            if index != output {
+                if let Some(cache) = cache.as_deref_mut() {
+                    cache.insert(
+                        &self.recipe,
+                        index,
+                        *count - started,
+                        bodies.last().ok_or("Missing cached operation body")?,
+                    )?;
                 }
             }
         }
