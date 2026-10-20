@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
   <title>Spice CAD</title>
-  <desc>A geometric spice jar with chamfered shoulders, a faceted lid, and three spice grains.</desc>
-  <path d="M28 8H72L78 14V24H22V14Z" fill="#d8422e"/>
-  <path d="M32 30V35L20 47V84L28 92H72L80 84V47L68 35V30Z" stroke="#d8422e" stroke-width="6" stroke-linejoin="bevel"/>
-  <path d="M50 48L57 55L50 62L43 55ZM38 68L43 73L38 78L33 73ZM62 68L67 73L62 78L57 73Z" fill="#d8422e"/>
+  <desc>A tall geometric spice jar tilted diagonally, with chamfered shoulders and a faceted lid.</desc>
+  <g transform="rotate(45 50 50)">
+    <path d="M34 4H66L70 8V17H30V8Z" fill="#d8422e"/>
+    <path d="M36 24V30L30 38V88L36 94H64L70 88V38L64 30V24Z" stroke="#d8422e" stroke-width="6" stroke-linejoin="bevel"/>
+  </g>
 </svg>

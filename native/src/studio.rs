@@ -63,15 +63,20 @@ pub fn product_mark(ui: &mut egui::Ui, size: f32) {
     assert!(size.is_finite());
     assert!((16.0..=200.0).contains(&size));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    let point = |x: f32, y: f32| rect.min + egui::vec2(x, y) * size / 100.0;
+    let point = |x: f32, y: f32| {
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        rect.min
+            + egui::vec2(50.0 + (x - y) * diagonal, 50.0 + (x + y - 100.0) * diagonal) * size
+                / 100.0
+    };
     ui.painter().add(egui::Shape::convex_polygon(
         [
-            [28.0, 8.0],
-            [72.0, 8.0],
-            [78.0, 14.0],
-            [78.0, 24.0],
-            [22.0, 24.0],
-            [22.0, 14.0],
+            [34.0, 4.0],
+            [66.0, 4.0],
+            [70.0, 8.0],
+            [70.0, 17.0],
+            [30.0, 17.0],
+            [30.0, 8.0],
         ]
         .map(|[x, y]| point(x, y))
         .to_vec(),
@@ -80,34 +85,21 @@ pub fn product_mark(ui: &mut egui::Ui, size: f32) {
     ));
     ui.painter().add(egui::Shape::closed_line(
         [
-            [32.0, 30.0],
-            [32.0, 35.0],
-            [20.0, 47.0],
-            [20.0, 84.0],
-            [28.0, 92.0],
-            [72.0, 92.0],
-            [80.0, 84.0],
-            [80.0, 47.0],
-            [68.0, 35.0],
-            [68.0, 30.0],
+            [36.0, 24.0],
+            [36.0, 30.0],
+            [30.0, 38.0],
+            [30.0, 88.0],
+            [36.0, 94.0],
+            [64.0, 94.0],
+            [70.0, 88.0],
+            [70.0, 38.0],
+            [64.0, 30.0],
+            [64.0, 24.0],
         ]
         .map(|[x, y]| point(x, y))
         .to_vec(),
         Stroke::new(6.0 * size / 100.0, RED),
     ));
-    for (x, y, radius) in [(50.0, 55.0, 7.0), (38.0, 73.0, 5.0), (62.0, 73.0, 5.0)] {
-        ui.painter().add(egui::Shape::convex_polygon(
-            [
-                point(x, y - radius),
-                point(x + radius, y),
-                point(x, y + radius),
-                point(x - radius, y),
-            ]
-            .to_vec(),
-            RED,
-            Stroke::NONE,
-        ));
-    }
 }
 
 fn mark(ui: &mut egui::Ui, size: f32) {

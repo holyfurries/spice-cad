@@ -43,11 +43,13 @@ established and the first model fits correctly. Failed builds reveal the editor
 and diagnostics instead of trapping the user behind loading. Help → About Spice
 CAD reopens a compact identity card.
 
-Spice CAD has its own geometric spice jar with chamfered shoulders and spice grains, replacing
+Spice CAD has its own tall geometric spice jar with chamfered shoulders, replacing
 the generic wire cube. It appears in the header, splash, and About, with a reusable
 vector at `native/assets/spice-cad.svg`, installed as the Nix desktop launcher
 icon. The Holy Furries fox remains the studio
 signature. Both marks render natively without an image decoder.
+The jar has an empty interior and leans 45 degrees to fill its square icon bounds
+while retaining the proportions of a tall spice jar.
 
 ## Verification
 
