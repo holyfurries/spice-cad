@@ -8,8 +8,10 @@ Stage profiling of the mounting bracket identified an exact-volume calculation
 inside tessellation validation followed by a second identical query while
 assembling cached geometry. The redundant query took approximately 98 ms in a
 local debug build. Tessellation now returns `Tessellation { mesh, volume_mm3 }`;
-scene preparation stores that validated exact volume directly. No mutable
-volume cache or new invalidation rules are needed. Game tessellation retains
+scene preparation stores that validated exact volume directly. That change
+required no mutable volume cache. Later [body-local reuse](exact-volume.md)
+also avoids repeated integration across exports and mesh quality settings.
+Game tessellation retains
 its separate quality settings and also returns the solid's exact volume.
 
 Polygon extraction uses a four-point stack buffer instead of allocating a

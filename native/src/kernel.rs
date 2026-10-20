@@ -1,4 +1,5 @@
 use cxx::UniquePtr;
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -294,6 +295,9 @@ pub struct Kernel {
 }
 pub struct Body<'kernel> {
     shape: UniquePtr<ffi::SmBrep>,
+    volume_mm3: Cell<Option<f64>>,
+    #[cfg(test)]
+    volume_integrations: Cell<u32>,
     _kernel: &'kernel Kernel,
 }
 
@@ -334,6 +338,9 @@ impl Kernel {
         }
         Ok(Body {
             shape,
+            volume_mm3: Cell::new(None),
+            #[cfg(test)]
+            volume_integrations: Cell::new(0),
             _kernel: self,
         })
     }
@@ -417,6 +424,9 @@ impl Kernel {
         }
         Ok(Body {
             shape,
+            volume_mm3: Cell::new(None),
+            #[cfg(test)]
+            volume_integrations: Cell::new(0),
             _kernel: self,
         })
     }
@@ -438,6 +448,9 @@ impl Kernel {
         }
         Ok(Body {
             shape,
+            volume_mm3: Cell::new(None),
+            #[cfg(test)]
+            volume_integrations: Cell::new(0),
             _kernel: self,
         })
     }
@@ -491,6 +504,9 @@ impl Body<'_> {
         }
         Ok(Self {
             shape,
+            volume_mm3: Cell::new(self.volume_mm3.get()),
+            #[cfg(test)]
+            volume_integrations: Cell::new(0),
             _kernel: self._kernel,
         })
     }
@@ -614,6 +630,7 @@ impl Body<'_> {
         Ok(crate::inspection::Edges { segments, items })
     }
     pub fn translate(&mut self, offset: [f64; 3]) -> Result<(), String> {
+        let volume_mm3 = self.volume_mm3.take();
         let offset = Vector {
             x: offset[0],
             y: offset[1],
@@ -624,10 +641,12 @@ impl Body<'_> {
         if status != 1000 {
             return Err(format!("SMLib translation failed: {status}"));
         }
+        self.volume_mm3.set(volume_mm3);
         Ok(())
     }
 
     pub fn rotate(&mut self, axis: [f64; 3], angle: f64) -> Result<(), String> {
+        let volume_mm3 = self.volume_mm3.take();
         let axis = Vector {
             x: axis[0],
             y: axis[1],
@@ -645,6 +664,7 @@ impl Body<'_> {
         if status != 1000 {
             return Err(format!("SMLib rotation failed: {status}"));
         }
+        self.volume_mm3.set(volume_mm3);
         Ok(())
     }
 
@@ -653,6 +673,7 @@ impl Body<'_> {
         treatment: EdgeTreatment,
         references: Option<&[&crate::edge_reference::Reference]>,
     ) -> Result<(), String> {
+        self.volume_mm3.set(None);
         let (name, size_mm, chamfer) = match treatment {
             EdgeTreatment::Fillet { radius_mm } => ("fillet", radius_mm, false),
             EdgeTreatment::Chamfer { width_mm } => ("chamfer", width_mm, true),
@@ -767,12 +788,19 @@ impl Body<'_> {
         Ok([minimum, maximum])
     }
     pub fn volume(&self) -> Result<f64, String> {
+        if let Some(volume) = self.volume_mm3.get() {
+            return Ok(volume);
+        }
         let mut volume = 0.0;
+        #[cfg(test)]
+        self.volume_integrations
+            .set(self.volume_integrations.get() + 1);
         let status = unsafe { ffi::SmApiBrepComputeVolume(self.shape.as_ptr(), 1e-8, &mut volume) }
             .map_err(|error| error.to_string())?;
         if status != 1000 || !volume.is_finite() || volume < 0.0 {
             return Err(format!("Volume failed: {status}"));
         }
+        self.volume_mm3.set(Some(volume));
         Ok(volume)
     }
     pub fn union(&mut self, other: Body) -> Result<(), String> {
@@ -786,6 +814,7 @@ impl Body<'_> {
     fn boolean(&mut self, other: Body, subtract: bool) -> Result<(), String> {
         assert!(!self.shape.is_null());
         assert!(!other.shape.is_null());
+        self.volume_mm3.set(None);
         let first = self.shape.as_mut_ptr();
         let second = other.shape.into_raw();
         let mut result = std::ptr::null_mut();
@@ -1106,4 +1135,128 @@ unsafe fn topology_list(first: *mut ffi::SmTopology) -> Result<Vec<*mut ffi::SmT
         }
     }
     Err("Topology list exceeds its budget".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_volume_reuses_queries_meshes_and_rigid_copies() -> Result<(), String> {
+        let results = {
+            let kernel = Kernel::new()?;
+            let mut body = kernel.cylinder([0.0; 3], 5.0, 2.0)?;
+            let volume = body.volume()?;
+            let repeated = body.volume()?;
+            let preview = body.mesh()?;
+            let game = body.game_mesh()?;
+            let mut copy = body.try_clone()?;
+            copy.translate([17.0, -8.0, 5.0])?;
+            copy.rotate([0.0, 1.0, 0.0], 37.0)?;
+            let moved = copy.volume()?;
+            let cached_integrations = copy.volume_integrations.get();
+            copy.volume_mm3.set(None);
+            let independently_integrated = copy.volume()?;
+            (
+                volume,
+                repeated,
+                preview.volume_mm3,
+                game.volume_mm3,
+                moved,
+                independently_integrated,
+                body.volume_integrations.get(),
+                cached_integrations,
+                copy.volume_integrations.get(),
+                preview.mesh.vertices.len(),
+                game.mesh.vertices.len(),
+            )
+        };
+        let (
+            volume,
+            repeated,
+            preview,
+            game,
+            moved,
+            independent,
+            calls,
+            copy_calls,
+            fresh_calls,
+            preview_vertices,
+            game_vertices,
+        ) = results;
+        assert!((volume - std::f64::consts::PI * 50.0).abs() < 1e-5);
+        assert_eq!([repeated, preview, game, moved], [volume; 4]);
+        assert!((independent - volume).abs() < 1e-5);
+        assert_eq!(calls, 1);
+        assert_eq!(copy_calls, 0);
+        assert_eq!(fresh_calls, 1);
+        assert!(game_vertices < preview_vertices);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_volume_recomputes_after_shape_changes_and_step_conversion() -> Result<(), String> {
+        let results = {
+            let kernel = Kernel::new()?;
+            let mut body = kernel.box_shape([0.0; 3], [10.0; 3])?;
+            let initial = body.volume()?;
+            body.subtract(kernel.box_shape([0.0; 3], [1.0, 10.0, 10.0])?)?;
+            let subtract_invalidated = body.volume_mm3.get().is_none();
+            let subtracted = body.volume()?;
+            body.union(kernel.box_shape([9.0, 0.0, 0.0], [12.0, 10.0, 10.0])?)?;
+            let union_invalidated = body.volume_mm3.get().is_none();
+            let united = body.volume()?;
+            body.apply_edge_treatment(EdgeTreatment::Chamfer { width_mm: 0.5 }, None)?;
+            let chamfer_invalidated = body.volume_mm3.get().is_none();
+            let chamfered = body.volume()?;
+            let failed = body
+                .apply_edge_treatment(EdgeTreatment::Fillet { radius_mm: 100.0 }, None)
+                .is_err();
+            let failure_invalidated = body.volume_mm3.get().is_none();
+            let before_step = body.volume()?;
+            body.step_data("volume-regression")?;
+            let step_invalidated = body.volume_mm3.get().is_none();
+            let after_step = body.volume()?;
+            (
+                [
+                    initial,
+                    subtracted,
+                    united,
+                    chamfered,
+                    before_step,
+                    after_step,
+                ],
+                [
+                    subtract_invalidated,
+                    union_invalidated,
+                    chamfer_invalidated,
+                    failure_invalidated,
+                    step_invalidated,
+                    failed,
+                ],
+                body.volume_integrations.get(),
+            )
+        };
+        let (
+            [
+                initial,
+                subtracted,
+                united,
+                chamfered,
+                before_step,
+                after_step,
+            ],
+            invalidated,
+            calls,
+        ) = results;
+        assert!((initial - 1000.0).abs() < 1e-5);
+        assert!((subtracted - 900.0).abs() < 1e-5);
+        assert!((united - 1100.0).abs() < 1e-5);
+        assert!(chamfered < united);
+        assert!(chamfered > 1000.0);
+        assert!((before_step - after_step).abs() < 1e-5);
+        assert_eq!(invalidated, [true; 6]);
+        assert_eq!(calls, 6);
+        Ok(())
+    }
 }

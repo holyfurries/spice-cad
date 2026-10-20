@@ -14,6 +14,7 @@ struct Writer {
 
 impl Body<'_> {
     pub fn step_data(&mut self, name: &str) -> Result<String, String> {
+        self.volume_mm3.set(None);
         let status = unsafe { ffi::SmApiTurnToNurbs(self.shape.as_mut_ptr()) }
             .map_err(|error| error.to_string())?;
         status_ok(status)?;
