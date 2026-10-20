@@ -10,12 +10,16 @@ Script previews check the ticket before compilation, between recipe evaluation
 steps, before and after tessellation, and between presentation phases. A native
 kernel call already in progress finishes before its next checkpoint. Completed
 intermediate bodies remain in the existing 16-body / 16 MiB cache. Cancellation
-does not publish a partial scene or erase the previous finished-part cache.
+does not publish a partial scene. Incomplete geometry preparation preserves the
+previous finished-part cache; geometry completed before a later cancellation
+can remain cached for reuse.
 
 Cancellation produces a dedicated worker outcome rather than a geometry error.
-Receiving it releases the worker's busy state; completing the obsolete revision
-does not remove a newer pending source revision. The latest source can then run
-normally. The last accepted scene remains visible during this transition.
+Receiving it releases the worker's busy state. Dispatch consumes a pending
+request; responses never consume requests. This also preserves a queued rebuild
+when undo returns to the same editor revision as a cancelled in-flight build.
+The latest source can then run normally. The last accepted scene remains visible
+during this transition.
 
 The cache's cancellation scope is cleared on both successful and failed builds.
 Exports do not enter this scope and always perform their normal final-quality

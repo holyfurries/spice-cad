@@ -69,7 +69,9 @@ call count and retained memory measure different costs. Results are recorded in
 Geometry and syntax results are revision checked before adoption. Syntax and LSP
 use replaceable pending slots; geometry has a capacity-one command/result channel
 and only one active operation. Preview requests coalesce during the 250 ms debounce.
-An in-flight obsolete CAD build still completes before the latest revision starts.
+Obsolete script previews now stop at checkpoints between CAD operations and
+around tessellation and presentation. An in-progress native call finishes first;
+completed intermediate bodies remain cached. See [preview cancellation](preview-cancellation.md).
 SMLib is protected by a global context mutex; adding geometry threads would not
 establish parallel kernel execution.
 
@@ -270,8 +272,8 @@ before attributing headless delivery delays to the application's command queue.
 2. Measure the bounded intermediate cache on larger changed-part workloads,
    separating cold-build copying from warm dependency reuse and tessellation.
 3. Send LSP document deltas when negotiated and update special-character indexes
-   for changed lines. Add stale-work checks between CAD operations and before
-   scene generation. An individual native call may remain non-interruptible.
+   for changed lines. Cancellation checkpoints now cover CAD operations and
+   scene generation; individual native calls remain non-interruptible.
 
 For each step, compare identical release workloads, record retained bytes and
 allocation counts separately, and prove invalidation after edits/undo/file changes.

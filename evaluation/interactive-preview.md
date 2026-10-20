@@ -8,6 +8,9 @@ only finishes once its latest revision has final geometry and thumbnails.
 Completion additionally requires the viewport's prepared geometry allocation
 to match the final snapshot, so receiving a refined mesh is insufficient.
 Its `preview_sweep_quality final=true` line exposes that completion condition.
+Final refinement consumes its idle trigger when dispatched. If it fails, the
+last valid preview remains visible with the error; another parameter edit or
+explicit Run can retry. Failed refinement does not create a background retry loop.
 
 The cache keeps one active mesh per part. A final mesh also satisfies an
 interactive request, so moving or rotating unchanged geometry preserves its

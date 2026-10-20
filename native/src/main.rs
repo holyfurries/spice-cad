@@ -297,6 +297,10 @@ struct Snapshot {
     revision: u64,
 }
 impl Snapshot {
+    fn complete(&self) -> bool {
+        !self.refinement_pending && !self.thumbnails_pending
+    }
+
     fn visible_parts(&self, outliner: &outliner::State) -> u32 {
         match &self.source {
             ModelSource::Rack(_) => u32::MAX,
@@ -771,13 +775,11 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
     Ok(())
 }
 
-const THUMBNAIL_IDLE_DELAY: Duration = Duration::from_millis(150);
-
 struct Editor {
     outliner: outliner::State,
     sweep: Option<performance::Sweep>,
     preview_input: Option<performance::Input>,
-    parameter_edited_at: Option<Instant>,
+    refinement: preview::Refinement,
     save_dialog: Option<save::Dialog>,
     preview: preview::Schedule,
     palette: palette::State,
@@ -900,7 +902,7 @@ impl Editor {
             outliner: outliner::State::default(),
             sweep,
             preview_input: None,
-            parameter_edited_at: None,
+            refinement: preview::Refinement::default(),
             save_dialog: None,
             preview: preview::Schedule::default(),
             palette,
@@ -968,7 +970,7 @@ impl Editor {
         self.snapshot = None;
         self.outliner = outliner::State::default();
         self.preview_input = None;
-        self.parameter_edited_at = None;
+        self.refinement = preview::Refinement::default();
         self.watcher = Some(watcher);
         self.diagnostics = Some(diagnostics);
         self.language_popup = None;
@@ -1002,7 +1004,11 @@ impl Editor {
                     .as_ref()
                     .is_some_and(|snapshot| snapshot.editor_revision == Some(revision))
                 {
-                    let reused = self.preview.reuse(revision);
+                    let reused = if self.snapshot.as_ref().is_some_and(Snapshot::complete) {
+                        self.preview.reuse(revision)
+                    } else {
+                        false
+                    };
                     if changed || reused {
                         self.message = "Preview ready · geometry reused".into();
                     }
@@ -1022,10 +1028,9 @@ impl Editor {
             return false;
         }
         self.parameter_state.has_pending(script.buffer.revision)
-            || !self
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.editor_revision == Some(script.buffer.revision))
+            || !self.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.editor_revision == Some(script.buffer.revision) && snapshot.complete()
+            })
     }
 
     fn can_export(&self) -> bool {
@@ -1216,10 +1221,7 @@ impl Editor {
         let Some(revision) = self.preview.ready(Instant::now()) else {
             return;
         };
-        let thumbnails = if self
-            .parameter_edited_at
-            .is_some_and(|at| pointer_down || at.elapsed() < THUMBNAIL_IDLE_DELAY)
-        {
+        let thumbnails = if self.refinement.interactive(pointer_down, Instant::now()) {
             model::ThumbnailMode::Deferred
         } else {
             model::ThumbnailMode::Complete
@@ -1253,7 +1255,10 @@ impl Editor {
             },
         }) {
             Ok(()) => {
-                self.preview.complete(revision);
+                self.preview.dispatched(revision);
+                if thumbnails == model::ThumbnailMode::Complete {
+                    self.refinement.dispatched();
+                }
                 self.work = WorkerState::Busy(ModelRevision::Script(revision));
                 if let Some(diagnostics) = &mut self.diagnostics {
                     diagnostics.run_started();
@@ -1319,9 +1324,6 @@ impl Editor {
                     Some(ModelRevision::Script(revision)) => Some(revision),
                     _ => None,
                 };
-                if let Some(revision) = run_revision {
-                    self.preview.complete(revision);
-                }
                 if !current {
                     context.request_repaint();
                 } else {
@@ -2348,7 +2350,7 @@ impl eframe::App for Editor {
                             .filter(|_| self.profile.is_some())
                             .map(|at| performance::Input::new(script.buffer.revision, at));
                         let now = Instant::now();
-                        self.parameter_edited_at = Some(now);
+                        self.refinement.edited(now);
                         self.preview.parameter(script.buffer.revision, now);
                         self.message = if self.preview.automatic() {
                             "Parameter changed · Live preview pending"
@@ -3238,13 +3240,13 @@ impl eframe::App for Editor {
         self.observe_preview();
         self.start_preview(ui.input(|input| input.pointer.any_down()));
         if matches!(self.work, WorkerState::Idle) && !ui.input(|input| input.pointer.any_down()) {
-            if let (Some(snapshot), Some(script), Some(edited)) =
-                (&self.snapshot, &self.script, self.parameter_edited_at)
-            {
-                if (snapshot.thumbnails_pending || snapshot.refinement_pending)
-                    && snapshot.editor_revision == Some(script.buffer.revision)
+            if let (Some(snapshot), Some(script), Some(delay)) = (
+                &self.snapshot,
+                &self.script,
+                self.refinement.delay(Instant::now()),
+            ) {
+                if !snapshot.complete() && snapshot.editor_revision == Some(script.buffer.revision)
                 {
-                    let delay = THUMBNAIL_IDLE_DELAY.saturating_sub(edited.elapsed());
                     if delay.is_zero() {
                         self.preview_input = None;
                         self.start_script(script.buffer.revision, model::ThumbnailMode::Complete);
@@ -3282,9 +3284,7 @@ impl eframe::App for Editor {
             let now = Instant::now();
             let metrics = viewport::metrics(frame);
             let ready = self.snapshot.as_ref().is_some_and(|snapshot| {
-                !snapshot.thumbnails_pending
-                    && !snapshot.refinement_pending
-                    && viewport::geometry_prepared(frame, &snapshot.scene.display)
+                snapshot.complete() && viewport::geometry_prepared(frame, &snapshot.scene.display)
             }) && matches!(self.work, WorkerState::Idle);
             if sweep.finish(
                 metrics
@@ -3885,8 +3885,10 @@ mod tests {
         drop(kernel);
         assert!(interactive.refinement_pending);
         assert!(interactive.thumbnails_pending);
+        assert!(!interactive.complete());
         assert!(!refined.refinement_pending);
         assert!(!refined.thumbnails_pending);
+        assert!(refined.complete());
         assert_eq!(refined.build_ms, 0.0);
         assert_eq!(refined.cached_parts, 1);
         assert!(restored.is_none());
