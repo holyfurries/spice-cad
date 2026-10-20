@@ -60,7 +60,7 @@ pub fn configure(context: &egui::Context) {
         &mut visuals.widgets.hovered,
         &mut visuals.widgets.active,
     ] {
-        widget.corner_radius = 6.into();
+        widget.corner_radius = 4.into();
         widget.bg_stroke = Stroke::new(1.0, BORDER);
         widget.fg_stroke = Stroke::new(1.0, TEXT);
     }
@@ -76,6 +76,11 @@ pub fn configure(context: &egui::Context) {
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     context.set_theme(egui::Theme::Dark);
     context.set_style_of(egui::Theme::Dark, style);
+}
+
+pub fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
 }
 
 pub fn menu_style(style: &mut egui::Style) {
@@ -110,9 +115,9 @@ pub fn display_settings(ui: &mut egui::Ui, edges: &mut bool, width_px: &mut f32)
 }
 
 pub fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(16.0);
-    ui.label(egui::RichText::new(title).size(12.0).strong().color(MUTED));
-    ui.add_space(4.0);
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new(title).size(13.0).strong().color(TEXT));
+    ui.add_space(2.0);
 }
 
 pub fn grid(
@@ -178,23 +183,164 @@ pub fn axes(painter: &egui::Painter, rect: egui::Rect, eye_direction: glam::Vec3
     }
 }
 
-pub fn logo(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 26.0), egui::Sense::hover());
-    let point = |x: f32, y: f32| rect.min + egui::vec2(x, y);
-    for (first, second) in [
-        ((11.0, 2.0), (21.0, 7.0)),
-        ((21.0, 7.0), (21.0, 19.0)),
-        ((21.0, 19.0), (11.0, 24.0)),
-        ((11.0, 24.0), (1.0, 19.0)),
-        ((1.0, 19.0), (1.0, 7.0)),
-        ((1.0, 7.0), (11.0, 2.0)),
-        ((1.0, 7.0), (11.0, 12.0)),
-        ((21.0, 7.0), (11.0, 12.0)),
-        ((11.0, 12.0), (11.0, 24.0)),
-    ] {
-        ui.painter().line_segment(
-            [point(first.0, first.1), point(second.0, second.1)],
-            Stroke::new(1.2, ACCENT),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Menus {
+        file: Option<egui::Rect>,
+        view: Option<egui::Rect>,
+        toggle: Option<egui::Rect>,
+        appearance: Option<egui::Rect>,
+        edge: Option<egui::Rect>,
+        file_open: bool,
+        view_open: bool,
+        appearance_open: bool,
+    }
+
+    fn render(context: &egui::Context, values: &mut [bool; 2], events: Vec<egui::Event>) -> Menus {
+        let mut result = Menus::default();
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Panel::top("menus").show(ui, |ui| {
+                        egui::MenuBar::new()
+                            .style(menu_style)
+                            .config(menu_config())
+                            .ui(ui, |ui| {
+                                let file = ui.menu_button("File", |ui| {
+                                    let _ = ui.button("Open");
+                                });
+                                result.file = Some(file.response.rect);
+                                result.file_open = file.inner.is_some();
+                                let view = ui.menu_button("View", |ui| {
+                                    result.toggle =
+                                        Some(ui.checkbox(&mut values[0], "Properties").rect);
+                                    let appearance = ui.menu_button("Appearance", |ui| {
+                                        result.edge =
+                                            Some(ui.checkbox(&mut values[1], "Surface edges").rect);
+                                    });
+                                    result.appearance = Some(appearance.response.rect);
+                                    result.appearance_open = appearance.inner.is_some();
+                                });
+                                result.view = Some(view.response.rect);
+                                result.view_open = view.inner.is_some();
+                            });
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        result
+    }
+
+    fn click(context: &egui::Context, values: &mut [bool; 2], position: egui::Pos2) {
+        for pressed in [true, false] {
+            render(
+                context,
+                values,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn settings_stay_open_after_toggles_and_hovered_submenus_remain_stable() {
+        let context = egui::Context::default();
+        configure(&context);
+        let mut values = [true, true];
+        render(&context, &mut values, Vec::new());
+        let initial = render(&context, &mut values, Vec::new());
+        click(
+            &context,
+            &mut values,
+            initial.view.expect("View menu").center(),
         );
+        let opened = render(&context, &mut values, Vec::new());
+        assert!(opened.view_open);
+        click(
+            &context,
+            &mut values,
+            opened.toggle.expect("Properties toggle").center(),
+        );
+        let toggled = render(&context, &mut values, Vec::new());
+        assert!(!values[0]);
+        assert!(toggled.view_open);
+        render(
+            &context,
+            &mut values,
+            vec![egui::Event::PointerMoved(
+                initial.file.expect("File menu").center(),
+            )],
+        );
+        assert!(render(&context, &mut values, Vec::new()).file_open);
+        render(
+            &context,
+            &mut values,
+            vec![egui::Event::PointerMoved(
+                initial.view.expect("View menu").center(),
+            )],
+        );
+        let view = render(&context, &mut values, Vec::new());
+        assert!(view.view_open);
+        render(
+            &context,
+            &mut values,
+            vec![egui::Event::PointerMoved(
+                view.appearance.expect("Appearance submenu").center(),
+            )],
+        );
+        for _ in 0..16 {
+            let next = render(&context, &mut values, Vec::new());
+            assert!(next.view_open);
+            assert!(next.appearance_open);
+            assert!(!next.file_open);
+            assert_eq!(next.view, initial.view);
+        }
+        let appearance = render(&context, &mut values, Vec::new());
+        click(
+            &context,
+            &mut values,
+            appearance.edge.expect("Edge toggle").center(),
+        );
+        let toggled = render(&context, &mut values, Vec::new());
+        assert!(!values[1]);
+        assert!(toggled.view_open);
+        assert!(toggled.appearance_open);
+        click(&context, &mut values, egui::pos2(800.0, 500.0));
+        assert!(!render(&context, &mut values, Vec::new()).view_open);
+        click(
+            &context,
+            &mut values,
+            initial.view.expect("View menu").center(),
+        );
+        render(
+            &context,
+            &mut values,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!render(&context, &mut values, Vec::new()).view_open);
     }
 }

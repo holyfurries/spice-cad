@@ -499,6 +499,17 @@ pub struct State {
 }
 
 impl State {
+    pub fn has_pending(&self, revision: u64) -> bool {
+        if self.revision != revision {
+            return false;
+        }
+        assert_eq!(self.drafts.len(), self.parameters.len());
+        self.drafts
+            .iter()
+            .zip(&self.parameters)
+            .any(|(draft, parameter)| draft != &parameter.literal)
+    }
+
     pub fn ready(&self, revision: u64) -> bool {
         self.revision == revision && !self.parameters.is_empty()
     }
@@ -557,7 +568,7 @@ impl State {
         commit: bool,
         apply_pending: bool,
     ) -> Option<Edit> {
-        crate::interface::section(ui, "PARAMETERS");
+        crate::interface::section(ui, "Parameters");
         if self.revision != revision {
             self.error = None;
         }
@@ -590,17 +601,16 @@ impl State {
             return None;
         }
         let mut edit = None;
-        let label_width = (ui.available_width() * 0.40).max(40.0);
-        let control_width = (ui.available_width() - label_width - 10.0).max(120.0);
+        let control_width = ui.available_width().max(120.0);
         egui::Grid::new("source_parameters")
-            .num_columns(2)
-            .spacing([10.0, 8.0])
+            .num_columns(1)
+            .min_row_height(0.0)
+            .spacing([0.0, 4.0])
             .show(ui, |ui| {
                 for (index, parameter) in parameters.iter().enumerate() {
                     let highlighted = self.highlighted.as_deref() == Some(parameter.name.as_str());
                     let label = ui
-                        .add_sized(
-                            egui::vec2(label_width, crate::interface::CONTROL_HEIGHT),
+                        .add(
                             egui::Label::new(
                                 egui::RichText::new(
                                     parameter.property.label.as_ref().unwrap_or(&parameter.name),
@@ -622,6 +632,7 @@ impl State {
                         label.scroll_to_me(Some(egui::Align::Center));
                         self.reveal_highlight = false;
                     }
+                    ui.end_row();
                     let draft = &mut self.drafts[index];
                     let mut immediate = false;
                     let response = match parameter.property.control {
@@ -648,6 +659,7 @@ impl State {
                             };
                             let response = ui.add(
                                 egui::Slider::new(&mut value, minimum..=maximum)
+                                    .handle_shape(egui::style::HandleShape::Circle)
                                     .step_by(step)
                                     .max_decimals(
                                         if step.fract() == 0.0
@@ -683,11 +695,8 @@ impl State {
                                         .id_salt((&parameter.name, parameter.line))
                                         .char_limit(LITERAL_BYTES_MAX)
                                         .desired_width(76.0)
-                                        .min_size(egui::vec2(
-                                            76.0,
-                                            crate::interface::CONTROL_HEIGHT,
-                                        ))
-                                        .margin(egui::vec2(10.0, 8.0)),
+                                        .min_size(egui::vec2(76.0, ui.spacing().interact_size.y))
+                                        .margin(egui::vec2(8.0, 4.0)),
                                 );
                                 if !parameter.property.unit.is_empty() {
                                     ui.label(&parameter.property.unit);
@@ -957,9 +966,11 @@ mod tests {
         let revision = source.revision;
         let mut state = State::default();
         assert!(controls(&mut state, &source, Some(&parse(text)), true).is_none());
+        assert!(!state.has_pending(revision));
         state.groups[0] = Some(revision);
         for value in ["10", "99", "1000"] {
             state.drafts[0] = value.into();
+            assert!(state.has_pending(revision));
             assert!(controls(&mut state, &source, None, false).is_none());
         }
         assert_eq!(source.to_string(), text);
@@ -967,6 +978,8 @@ mod tests {
         assert_eq!(edit.literal, "1000");
         edit.apply(&mut source, 0).expect("First live sample");
         state.applied(&edit, source.revision);
+        assert!(!state.has_pending(source.revision));
+        assert!(!state.has_pending(revision));
         state.drafts[0] = "12".into();
         state.drafts[1] = "150".into();
         let edit = controls(&mut state, &source, None, true).expect("Second live sample");
@@ -975,6 +988,7 @@ mod tests {
         let edit = controls(&mut state, &source, None, true).expect("Other pending slider");
         edit.apply(&mut source, 0).expect("Rebased later literal");
         state.applied(&edit, source.revision);
+        assert!(!state.has_pending(source.revision));
         assert_eq!(
             source.to_string(),
             text.replacen("(9,", "(12,", 1).replacen("(2,", "(150,", 1)

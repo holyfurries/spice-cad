@@ -168,6 +168,14 @@ overhang angles, joint clearance, and sampled assembly movements for collisions.
 
 ## Native editor
 
+Spice CAD is a [Holy Furries Studio](https://holyfurries.com) tool. The startup
+splash fills the application window with the studio's paper background. Spice
+CAD's geometric spice-jar mark appears in the header and splash, with the fox-and-halo
+studio signature below. **Help → About Spice CAD** reopens the identity card.
+The reusable vector logo is `native/assets/spice-cad.svg`.
+Startup branding disappears when the first valid model is ready; it adds no
+minimum display time, asset downloads, or image-decoder dependencies.
+
 Build and launch the packaged application without a development shell:
 
 ```sh
@@ -275,8 +283,10 @@ undo/redo. **Live preview** is enabled by default: committed source edits
 rebuild after a 250 ms typing pause, using the existing geometry worker. New
 edits replace the pending revision; results and errors from older revisions are
 discarded. Errors keep the last valid geometry visible without retrying
-unchanged code. For expensive models, disable **Model → Live preview**. **Update model**
+unchanged code. For expensive models, disable **Model → Live preview**. **Run**
 (Ctrl/Command+Enter) checks and previews the current buffer without saving.
+Run is enabled only when source or a pending parameter draft needs building;
+it is disabled for a synchronized model and while the worker is busy.
 **Save** (Ctrl/Command+S) saves atomically, then checks and rebuilds; a matching
 validated preview is reused. Export includes the exact validated source,
 including an unsaved draft. Invalid code preserves the last valid geometry and
@@ -334,7 +344,7 @@ the bar. Normal-mode `n` repeats the search direction and `N` reverses it; both
 wrap at the document boundaries. **Replace** (Ctrl+H) offers **Replace match**
 and **Replace all**. Replace All runs on a worker and applies as one undo
 operation only if the searched revision is still current. Replacements
-participate in Live preview; with it disabled, use Update model or Save. Regex and
+participate in Live preview; with it disabled, use Run or Save. Regex and
 substitution commands are not implemented. Details and limits are in
 [native search](evaluation/search.md).
 
@@ -348,7 +358,11 @@ levels; generated and hidden directories and symlinks are skipped. The most
 recent 20 files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
 (default `~/.local/state/spice-cad/`).
 
-The properties pane opens by default; **View → Properties** toggles it.
+The properties pane opens by default; **View → Properties** toggles it. Settings
+menus stay open after toggles; click outside or press Escape to close them.
+The pane groups selectable parts, source parameters with full-width sliders,
+selected-geometry dimensions, and named measurements. Geometry statistics live
+under **Geometry details**.
 Declare the values you want to expose; ordinary locals remain private:
 
 ```lua
@@ -371,8 +385,8 @@ literal, preserving the declaration and comments. With Live preview enabled,
 sliders update the model during a drag, at the geometry worker's pace. Only the
 latest pending values are kept; the final value is retained after release. Each drag
 is one editor undo. Checkboxes commit immediately. Enter or leaving a numeric
-field applies it; Escape cancels the pending field edit. Save and Update model also commit the active field. Parameter edits bypass the typing debounce; code edits still
-wait for a pause. Disable Live preview to edit values and rebuild with Update model or Save. Existing personal example files are preserved; the new startup file is
+field applies it; Escape cancels the pending field edit. Save and Run also commit the active field. Parameter edits bypass the typing debounce; code edits still
+wait for a pause. Disable Live preview to edit values and rebuild with Run or Save. Existing personal example files are preserved; the new startup file is
 `spice-rack-measurements.luau`, leaving older rack copies intact. See
 [navigation and parameter notes](evaluation/navigation.md).
 
@@ -642,7 +656,7 @@ saves keep the previous valid preview. Models run on the geometry worker; camera
 interaction continues during analysis and rebuilding. A background watcher
 checks source every 250 ms and wakes the UI only when the content or read-error
 state changes. Live preview uses a 250 ms debounce for source edits, including
-external changes; the initial load and explicit Update model/Save have no debounce delay.
+external changes; the initial load and explicit Run/Save have no debounce delay.
 Unchanged files do not schedule viewport redraws. Worker completion, input, and
 window events wake the UI independently. Unchanged file metadata avoids repeated
 whole-file reads. The editor uses a Ropey B-tree buffer with structurally shared
@@ -653,7 +667,9 @@ individual lines are horizontally virtualized too. Undo/redo uses Ctrl+Z,
 Ctrl+Shift+Z, or Ctrl+Y. The workspace keeps camera controls over the viewport,
 appearance controls under **View → Appearance**, selection and geometry in the
 optional Properties pane, and open/save/export actions under **File**. Workspace
-layouts and **Update model** occupy the document bar below the menus. Full build
+layouts and **Run** occupy the document bar below the menus. A fixed viewport
+header groups Assembly/Print, Frame, camera views, and display settings. The
+footer keeps diagnostics and build messages left, with editor position right. Full build
 errors are available through **Details**. **View → Performance** opens a separate
 window that separates analysis, script, kernel, and display preparation times;
 its mesh timing includes mesh validation, smooth normals, and CAD edge sampling.
@@ -666,8 +682,8 @@ for scripted models is the kernel's solid volume; curved mesh volume is an
 approximation.
 
 Native interface colors, typography and control sizing live in
-`native/src/interface.rs`. Main controls use a shared 36-point height, six-point
-corners, and subtle borders. Blue marks primary actions, selection, and focus;
+`native/src/interface.rs`. Main controls use a shared 36-point height, four-point
+corners, and subtle borders; viewport and inspector controls use 28-point rows. Blue marks primary actions, selection, and focus;
 secondary labels use muted text. The Properties pane puts selection details
 first, followed by a bounded part list, source parameters, and geometry/check
 summaries. The source starts directly below the document bar. **View → Inline results**
@@ -678,7 +694,7 @@ with larger text and controls for this code-based workspace.
 
 Editing, saving, and execution accept UTF-8 sources up to 16 MiB. Analysis has a
 5-second request deadline. The background language server has a 1 GiB
-address-space limit on Linux and bounded 64 MiB protocol messages. Update model's
+address-space limit on Linux and bounded 64 MiB protocol messages. Run's
 independent analyzer uses one thread, a 512 MiB limit and a 64 KiB output
 budget. The UI retains at most 200 diagnostics. VM memory remains limited to 8
 MiB, script execution to 250 ms, recipes to 256 operations, and geometry

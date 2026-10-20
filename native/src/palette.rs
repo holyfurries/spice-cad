@@ -57,7 +57,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::SaveAs, "File: save model as", "Ctrl+Shift+S"),
     (Command::AutoPreview, "Model: toggle live preview", ""),
     (Command::Open, "File: browse models", "Ctrl+O"),
-    (Command::Run, "Model: update model", "Ctrl+Enter"),
+    (Command::Run, "Model: run source", "Ctrl+Enter"),
     (Command::Save, "File: save model", "Ctrl+S"),
     (Command::Export, "File: export STEP and STL", ""),
     (Command::ExportGame, "File: export game asset GLB", ""),
@@ -113,6 +113,7 @@ pub enum Selection {
 
 pub struct Availability {
     pub source: bool,
+    pub run: bool,
     pub export: bool,
     pub model: bool,
 }
@@ -120,8 +121,8 @@ pub struct Availability {
 impl Availability {
     fn allows(&self, command: Command) -> bool {
         match command {
-            Command::Run
-            | Command::Save
+            Command::Run => self.run,
+            Command::Save
             | Command::SaveAs
             | Command::AutoPreview
             | Command::Find
@@ -761,6 +762,7 @@ mod tests {
                             ui.ctx(),
                             Availability {
                                 source: true,
+                                run: true,
                                 export: false,
                                 model: true,
                             },
@@ -773,7 +775,7 @@ mod tests {
         };
         state.open(Mode::Commands, PathBuf::new(), &context);
         assert!(render(&mut state, Vec::new()).is_none());
-        assert!(render(&mut state, vec![egui::Event::Text("update model".into())]).is_none());
+        assert!(render(&mut state, vec![egui::Event::Text("run source".into())]).is_none());
         assert!(!state.rows.is_empty());
         let key = |key| egui::Event::Key {
             key,

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
+description = "Native code-driven CAD by Holy Furries Studio"
+homepage = "https://holyfurries.com"
 
 [features]
 rack-tools = ["spice-rack/reference"]

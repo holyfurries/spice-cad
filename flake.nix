@@ -92,10 +92,13 @@
                 [Desktop Entry]
                 Type=Application
                 Name=Spice CAD
+                Icon=spice-cad
                 Exec=spice-cad
                 Terminal=false
                 Categories=Graphics;3DGraphics;Engineering;
               ''} $out/share/applications/spice-cad.desktop
+              install -Dm644 native/assets/spice-cad.svg \
+                $out/share/icons/hicolor/scalable/apps/spice-cad.svg
             '';
             meta = {
               description = "Native code-first CAD editor with typed Luau and SMLib";

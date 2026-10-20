@@ -40,6 +40,7 @@ mod raster;
 mod render_views;
 mod save;
 mod search;
+mod studio;
 mod syntax;
 mod text_buffer;
 mod thumbnail;
@@ -729,6 +730,7 @@ struct Editor {
     script: Option<document::Document>,
     show_code: bool,
     show_details: bool,
+    show_about: bool,
     show_diagnostics: bool,
     show_edges: bool,
     show_dimensions: bool,
@@ -821,6 +823,7 @@ impl Editor {
             script,
             show_code: true,
             show_details: false,
+            show_about: false,
             show_diagnostics: false,
             show_edges: true,
             show_dimensions: false,
@@ -905,6 +908,23 @@ impl Editor {
         }
     }
 
+    fn can_run(&self) -> bool {
+        if !matches!(self.work, WorkerState::Idle) {
+            return false;
+        }
+        let Some(script) = &self.script else {
+            return false;
+        };
+        if !script.source_ready() {
+            return false;
+        }
+        self.parameter_state.has_pending(script.buffer.revision)
+            || !self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.editor_revision == Some(script.buffer.revision))
+    }
+
     fn can_export(&self) -> bool {
         matches!(self.work, WorkerState::Idle)
             && !self.preview.pending()
@@ -925,7 +945,7 @@ impl Editor {
 
     fn export(&mut self, target: export::Target) -> Result<(), String> {
         if !self.can_export() {
-            return Err("Update the model successfully before exporting".into());
+            return Err("Run the current source successfully before exporting".into());
         }
         let command = match &self.snapshot.as_ref().expect("Validated export").source {
             #[cfg(feature = "rack-tools")]
@@ -992,7 +1012,7 @@ impl Editor {
         let snapshot = self.snapshot.as_ref().ok_or("No model preview")?;
         let script = self.script.as_ref().ok_or("No source document")?;
         if snapshot.editor_revision != Some(script.buffer.revision) {
-            return Err("Update the model before selecting a measurement".into());
+            return Err("Run the current source before selecting a measurement".into());
         }
         let measurement = snapshot
             .scene
@@ -1386,6 +1406,7 @@ impl eframe::App for Editor {
             ui.ctx(),
             palette::Availability {
                 source: self.script.is_some(),
+                run: self.can_run(),
                 export: self.can_export(),
                 model: self.snapshot.is_some(),
             },
@@ -1533,7 +1554,10 @@ impl eframe::App for Editor {
                             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
                             self.camera.pitch = 0.0;
                         }
-                        Navigation::Top => self.camera.pitch = 1.55,
+                        Navigation::Top => {
+                            self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                            self.camera.pitch = 1.55;
+                        }
                         Navigation::Rack => example_requested = Some(document::Example::Rack),
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
@@ -1588,8 +1612,10 @@ impl eframe::App for Editor {
             self.show_diagnostics = !self.show_diagnostics;
         }
         egui::Panel::top("toolbar").show(ui, |ui| {
-            egui::MenuBar::new().style(interface::menu_style).ui(ui, |ui| {
-                interface::logo(ui);
+            egui::MenuBar::new().style(interface::menu_style).config(interface::menu_config()).ui(ui, |ui| {
+                studio::product_mark(ui, 26.0);
+                ui.label(egui::RichText::new("Spice CAD").size(15.0).strong());
+                ui.separator();
                 ui.menu_button("File", |ui| {
                     if ui.add(egui::Button::new("New model").shortcut_text("Ctrl+N")).clicked() {
                         file_dialog_requested = Some(save::Mode::NewModel);
@@ -1630,7 +1656,7 @@ impl eframe::App for Editor {
                             });
                         })
                         .response
-                        .on_disabled_hover_text("Update the model successfully before exporting");
+                        .on_disabled_hover_text("Run the current source successfully before exporting");
                     } else {
                         export_requested |= ui
                             .add_enabled(can_export, egui::Button::new("Export P1S parts"))
@@ -1715,7 +1741,7 @@ impl eframe::App for Editor {
                 });
                 ui.menu_button("Model", |ui| {
                     ui.add_enabled_ui(self.script.is_some(), |ui| {
-                        if ui.add(egui::Button::new("Update model").shortcut_text("Ctrl+Enter")).clicked() {
+                        if ui.add_enabled(self.can_run(), egui::Button::new("Run").shortcut_text("Ctrl+Enter")).clicked() {
                             run_requested = true;
                             ui.close();
                         }
@@ -1728,6 +1754,12 @@ impl eframe::App for Editor {
                             }
                         }
                     });
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About Spice CAD").clicked() {
+                        self.show_about = true;
+                        ui.close();
+                    }
                 });
             });
             ui.separator();
@@ -1745,11 +1777,23 @@ impl eframe::App for Editor {
                             }
                         },
                     );
-                    run_requested |= ui.add(
-                        egui::Button::new(egui::RichText::new("Update model").color(interface::ON_ACCENT))
-                            .fill(interface::ACCENT)
-                            .min_size(egui::vec2(110.0, interface::CONTROL_HEIGHT)),
-                    ).on_hover_text("Ctrl+Enter · Build the current source without saving").clicked();
+                    let can_run = self.can_run();
+                    run_requested |= ui.add_enabled(
+                        can_run,
+                        egui::Button::new(if matches!(self.work, WorkerState::Busy(_)) { "Running…" } else { "Run" })
+                            .min_size(egui::vec2(80.0, interface::CONTROL_HEIGHT)),
+                    ).on_hover_text("Ctrl+Enter · Run the current source")
+                        .on_disabled_hover_text(if !script.source_ready() {
+                            "Loading source…"
+                        } else if matches!(self.work, WorkerState::Idle) {
+                            if self.preview.automatic() {
+                                "Model is up to date. Live preview runs automatically after edits."
+                            } else {
+                                "Model is up to date. Run becomes available after source edits."
+                            }
+                        } else {
+                            "Waiting for the current operation"
+                        }).clicked();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
@@ -1785,46 +1829,86 @@ impl eframe::App for Editor {
             });
             ui.add_space(3.0);
         });
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.spacing_mut().interact_size.y = 28.0;
-            ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
-            ui.horizontal(|ui| {
-                if let Some(diagnostics) = &self.diagnostics {
-                    let (status, color) = diagnostics.status();
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::NONE
+                    .fill(interface::PANEL)
+                    .inner_margin(egui::Margin::symmetric(12, 3)),
+            )
+            .show(ui, |ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                ui.horizontal(|ui| {
+                    if let Some(diagnostics) = &self.diagnostics {
+                        let (status, color) = diagnostics.status();
+                        if ui
+                            .selectable_label(
+                                self.show_diagnostics,
+                                egui::RichText::new(status).size(12.0).color(color),
+                            )
+                            .on_hover_text("Show or hide diagnostics")
+                            .clicked()
+                        {
+                            self.show_diagnostics = !self.show_diagnostics;
+                        }
+                    }
                     if ui
                         .selectable_label(
-                            self.show_diagnostics,
-                            egui::RichText::new(status).color(color),
+                            self.show_details,
+                            egui::RichText::new("Details").size(12.0),
                         )
-                        .on_hover_text("Show or hide diagnostics")
                         .clicked()
                     {
-                        self.show_diagnostics = !self.show_diagnostics;
+                        self.show_details = !self.show_details;
                     }
-                }
-                if ui.selectable_label(self.show_details, "Details").clicked() {
-                    self.show_details = !self.show_details;
-                }
-                ui.colored_label(interface::ACCENT, self.code_state.modal.label());
-                if let Some(script) = &self.script {
-                    let cursor = self.code_state.cursor().min(script.buffer.rope.len_chars());
-                    let line = script.buffer.rope.char_to_line(cursor);
-                    ui.small(format!(
-                        "Ln {}, Col {} · {} lines",
-                        line + 1,
-                        cursor - script.buffer.rope.line_to_char(line) + 1,
-                        script.buffer.rope.len_lines()
-                    ));
-                }
-                let message = self
-                    .code_state
-                    .error
-                    .or(self.code_state.modal.error)
-                    .unwrap_or(&self.message);
-                ui.add(egui::Label::new(message).truncate())
-                    .on_hover_text(message);
+                    ui.separator();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(script) = &self.script {
+                            let cursor =
+                                self.code_state.cursor().min(script.buffer.rope.len_chars());
+                            let line = script.buffer.rope.char_to_line(cursor);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Ln {}, Col {} · {} lines",
+                                    line + 1,
+                                    cursor - script.buffer.rope.line_to_char(line) + 1,
+                                    script.buffer.rope.len_lines()
+                                ))
+                                .monospace()
+                                .size(12.0),
+                            );
+                            ui.label(
+                                egui::RichText::new(self.code_state.modal.label())
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(interface::ACCENT),
+                            );
+                            ui.separator();
+                        }
+                        let message = self
+                            .code_state
+                            .error
+                            .or(self.code_state.modal.error)
+                            .unwrap_or(&self.message);
+                        ui.allocate_ui_with_layout(
+                            ui.available_size(),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(message)
+                                            .size(12.0)
+                                            .color(interface::MUTED),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(message);
+                            },
+                        );
+                    });
+                });
             });
-        });
         if self.show_diagnostics {
             if let (Some(diagnostics), Some(script)) = (&self.diagnostics, &self.script) {
                 egui::Panel::bottom("diagnostics")
@@ -1838,6 +1922,19 @@ impl eframe::App for Editor {
                         }
                     });
             }
+        }
+        if self.show_about {
+            egui::Window::new("About Spice CAD")
+                .open(&mut self.show_about)
+                .resizable(false)
+                .default_width(430.0)
+                .show(ui.ctx(), |ui| {
+                    studio::identity(ui, "Code-driven modeling · Native SMLib");
+                    ui.horizontal(|ui| {
+                        ui.label(concat!("Version ", env!("CARGO_PKG_VERSION")));
+                        ui.hyperlink_to("Holy Furries Studio", "https://holyfurries.com");
+                    });
+                });
         }
         if self.show_details {
             egui::Window::new("Build details")
@@ -1932,16 +2029,20 @@ impl eframe::App for Editor {
             }
         }
         if self.show_inspector && !self.focus_editor {
-            egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(14.0)).show(ui, |ui| {
+            egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(12.0)).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+            ui.spacing_mut().interact_size.y = 28.0;
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
             egui::ScrollArea::vertical().id_salt("properties_scroll").show(ui, |ui| {
             if self.script.is_some() {
-                interface::section(ui, "MODEL");
-                ui.heading(self.snapshot.as_ref().map_or("Luau model", |snapshot| snapshot.name.as_str()));
-                ui.small("Solid parts · millimetres");
+                ui.label(egui::RichText::new("Properties").size(16.0).strong());
+                if let Some(snapshot) = &self.snapshot {
+                    ui.small(egui::RichText::new(format!("{} {} · millimetres", snapshot.parts.len(), if snapshot.parts.len() == 1 { "part" } else { "parts" })).color(interface::MUTED));
+                }
                 ui.separator();
                 if let Some(snapshot) = &self.snapshot {
                     if let Some(selection) = &self.selected {
-                        interface::section(ui, "SELECTION");
+                        interface::section(ui, "Selected geometry");
                         if let inspection::Selection::Part { index, .. } = selection {
                             ui.label(&snapshot.parts[*index as usize].name);
                             ui.small("Selected part · X/Y/Z bounds");
@@ -1955,9 +2056,13 @@ impl eframe::App for Editor {
                                 ui.small("This curve is neither straight nor circular; no length or radius is reported.");
                             }
                         }
-                        for span in selection.spans().into_iter().flatten() {
-                            ui.label(format!("{} ≈{:.3} mm", span.direction, span.distance_mm));
-                        }
+                        egui::Grid::new("selection_dimensions").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+                            for span in selection.spans().into_iter().flatten() {
+                                ui.label(span.direction.to_string());
+                                ui.monospace(format!("{:.3} mm", span.distance_mm));
+                                ui.end_row();
+                            }
+                        });
                         if let inspection::Selection::Edge(edge) = selection {
                             if ui.button("Copy edge selector").on_hover_text("Straight edges only. Replace part with the source solid variable and choose a unique name. Use parameter expressions for endpoint coordinates that should follow edits.").clicked() {
                                 match source_edge_selector(snapshot, edge) {
@@ -1976,26 +2081,35 @@ impl eframe::App for Editor {
                         }
                         ui.small("Shift-click a parallel face to measure separation. Click empty space to clear.");
                     }
-                    interface::section(ui, "PARTS");
-                    egui::ScrollArea::vertical().id_salt("assembly_parts").max_height(160.0).show(ui, |ui| {
-                    ui.spacing_mut().interact_size.y = 24.0;
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    for (part, canonical) in snapshot.parts.iter().zip(&snapshot.scene.display.parts) {
-                        let faces = &canonical.faces;
-                        let selected = self.selected.as_ref().is_some_and(|selection| match selection {
-                            inspection::Selection::Part { faces: selected, .. } => selected == &[*faces.start(), *faces.end()],
-                            _ => selection.latest().is_some_and(|face| faces.contains(&face.id)),
-                        });
-                        egui::Frame::NONE.fill(if selected { interface::SELECTION } else { egui::Color32::TRANSPARENT }).corner_radius(4.0).inner_margin(egui::vec2(6.0, 2.0)).show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.horizontal(|ui| {
+                    egui::CollapsingHeader::new(format!("Parts ({})", snapshot.parts.len())).id_salt("properties_parts").default_open(true).show(ui, |ui| {
+                        egui::ScrollArea::vertical().id_salt("assembly_parts").max_height(140.0).show(ui, |ui| {
+                            for (index, (part, canonical)) in snapshot.parts.iter().zip(&snapshot.scene.display.parts).enumerate() {
+                                let faces = [*canonical.faces.start(), *canonical.faces.end()];
+                                let selected = self.selected.as_ref().is_some_and(|selection| match selection {
+                                    inspection::Selection::Part { faces: selected, .. } => *selected == faces,
+                                    _ => selection.latest().is_some_and(|face| canonical.faces.contains(&face.id)),
+                                });
                                 let color: egui::Color32 = egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2]).into();
-                                let (swatch, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                                ui.painter().rect_filled(swatch, 3.0, color);
-                                ui.add(egui::Label::new(&part.name).truncate()).on_hover_text(&part.name);
-                            });
+                                let response = egui::Frame::NONE.fill(if selected { interface::SELECTION } else { egui::Color32::TRANSPARENT })
+                                    .corner_radius(4.0).inner_margin(egui::vec2(6.0, 0.0)).show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                                            ui.painter().rect_filled(swatch, 2.0, color);
+                                            ui.add(egui::Label::new(&part.name).truncate());
+                                        });
+                                    }).response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if response.hovered() {
+                                    ui.painter().rect_stroke(response.rect, 4.0, egui::Stroke::new(1.0, interface::MUTED), egui::StrokeKind::Inside);
+                                }
+                                if response.clicked() {
+                                    self.selected = Some(inspection::Selection::Part {
+                                        index: index as u32, faces, bounds: snapshot.scene.part_bounds[index],
+                                    });
+                                    self.selected_measurement = None;
+                                }
+                            }
                         });
-                    }
                     });
                 }
                 if let Some(script) = &self.script {
@@ -2003,26 +2117,35 @@ impl eframe::App for Editor {
                     parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), !matches!(self.work, WorkerState::Busy(_) | WorkerState::Export)).or(parameter_edit.take());
                 }
                 if let Some(snapshot) = &self.snapshot {
-                    interface::section(ui, "GEOMETRY");
-                    ui.label(format!("{} {:.3} mm³", if snapshot.parts.len() > 1 { "Parts volume" } else { "Volume" }, snapshot.volume_mm3));
-                    ui.label(format!("{} faces · {} triangles", snapshot.scene.display.face_count(), snapshot.scene.display.vertex_count() / 3));
-                    interface::section(ui, "MEASUREMENTS");
+                    interface::section(ui, if snapshot.scene.layout == placement::Layout::Assembly { "Measurements" } else { "Assembly measurements" });
                     if self.script.as_ref().is_some_and(|script| snapshot.editor_revision != Some(script.buffer.revision)) {
-                        ui.colored_label(interface::WARNING, "Measurements refer to the previous valid preview");
+                        ui.colored_label(interface::WARNING, "Showing the previous valid model");
                     }
                     let checked = snapshot.checks.measurements.iter().filter(|measurement| measurement.checked).count();
-                    ui.label(if checked == 0 { "No explicit distance checks".into() } else { format!("{checked} distance checks passed") });
-                    ui.small("Code defines shape. Checks validate declared limits; no constraint solver is active.");
+                    if checked > 0 {
+                        ui.small(egui::RichText::new(format!("{checked} checks passed")).color(interface::MUTED));
+                    }
+                    if snapshot.checks.measurements.is_empty() {
+                        ui.small("Select a face or edge to inspect dimensions.");
+                    }
+                    if snapshot.scene.layout == placement::Layout::Print {
+                        ui.small("Switch to Assembly to edit these dimensions.");
+                    }
                     for measurement in &snapshot.checks.measurements {
                         let current = snapshot.scene.layout == placement::Layout::Assembly && self.script.as_ref().is_some_and(|script| snapshot.editor_revision == Some(script.buffer.revision));
                         let selected = self.selected_measurement.as_ref().map_or_else(|| self.selected.as_ref().is_some_and(|selection| measurement.matches_selection(selection)), |name| *name == measurement.name);
-                        let linked = measurement.parameter.as_ref().map_or(String::new(), |parameter| format!(" · {}", parameter.name));
-                        if ui.add_enabled(current, egui::Button::new(format!("{} ≈{:.3} mm · {}{}", measurement.name, measurement.distance_mm, if measurement.checked { "checked" } else { "reference" }, linked)).selected(selected))
-                            .on_hover_text("Open linked parameter editor or reveal measurement source").clicked() {
+                        if ui.add_enabled(current, egui::Button::new("").left_text(&measurement.name).shortcut_text(format!("{:.2} mm", measurement.distance_mm)).min_size(egui::vec2(ui.available_width(), 28.0)).selected(selected).frame_when_inactive(false))
+                            .on_hover_text(measurement.parameter.as_ref().map_or_else(|| "Reference dimension · reveal source".into(), |parameter| format!("Edit linked parameter: {}", parameter.name))).clicked() {
                             measurement_requested = Some(measurement.name.clone());
                         }
                     }
+                    ui.add_space(8.0);
+                    egui::CollapsingHeader::new("Geometry details").id_salt("properties_geometry").show(ui, |ui| {
+                        ui.label(format!("Volume: {:.3} mm³", snapshot.volume_mm3));
+                        ui.label(format!("{} faces · {} triangles", snapshot.scene.display.face_count(), snapshot.scene.display.vertex_count() / 3));
+                    });
                 }
+
                 return;
             }
             ui.heading("Rack dimensions"); ui.label("Millimetres"); ui.separator();
@@ -2104,7 +2227,7 @@ impl eframe::App for Editor {
                         self.message = if self.preview.automatic() {
                             "Parameter changed · Live preview pending"
                         } else {
-                            "Parameter changed in source · Update model to refresh preview"
+                            "Parameter changed in source · Run to refresh preview"
                         }
                         .into();
                     }
@@ -2160,7 +2283,7 @@ impl eframe::App for Editor {
                         self.message = if self.preview.automatic() {
                             "Source changed · Live preview pending"
                         } else {
-                            "Source changed · Update model to preview without saving"
+                            "Source changed · Run to preview without saving"
                         }
                         .into();
                     }
@@ -2277,7 +2400,11 @@ impl eframe::App for Editor {
                     Err(error) => self.message = error,
                 }
             }
-            if run_requested {
+            if run_requested
+                && !self.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.editor_revision == Some(script.buffer.revision)
+                })
+            {
                 if let Some(diagnostics) = &mut self.diagnostics {
                     diagnostics.run_started();
                 }
@@ -2301,18 +2428,112 @@ impl eframe::App for Editor {
                 if self.focus_editor {
                     return;
                 }
+                egui::Frame::NONE
+                    .fill(interface::PANEL)
+                    .inner_margin(egui::Margin::symmetric(8, 3))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        interface::menu_style(ui.style_mut());
+                        ui.spacing_mut().interact_size.y = 28.0;
+                        ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if let Some(snapshot) = &self.snapshot {
+                                if snapshot.alternate.is_some() {
+                                    ui.menu_button(
+                                        if snapshot.scene.layout == placement::Layout::Assembly {
+                                            "Assembly"
+                                        } else {
+                                            "Print layout"
+                                        },
+                                        |ui| {
+                                            for (layout, label) in [
+                                                (placement::Layout::Assembly, "Assembly"),
+                                                (placement::Layout::Print, "Print layout"),
+                                            ] {
+                                                if ui
+                                                    .selectable_label(
+                                                        snapshot.scene.layout == layout,
+                                                        label,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    layout_requested = Some(layout);
+                                                    ui.close();
+                                                }
+                                            }
+                                        },
+                                    );
+                                }
+                            }
+                            if ui
+                                .button("Frame")
+                                .on_hover_text("F · Fit the model in the viewport")
+                                .clicked()
+                            {
+                                frame_layout = true;
+                            }
+                            ui.menu_button("View", |ui| {
+                                for (label, yaw, pitch) in [
+                                    ("Isometric", -std::f32::consts::FRAC_PI_4, (1.0_f32 / 3.0_f32.sqrt()).asin()),
+                                    ("Front", -std::f32::consts::FRAC_PI_2, 0.0),
+                                    ("Right", 0.0, 0.0),
+                                    ("Top", -std::f32::consts::FRAC_PI_2, 1.55),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        self.camera.yaw = yaw;
+                                        self.camera.pitch = pitch;
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            egui::containers::menu::MenuButton::new("Display")
+                                .config(interface::menu_config())
+                                .ui(ui, |ui| {
+                                    ui.checkbox(
+                                        &mut self.show_dimensions,
+                                        "Measurements & face names",
+                                    );
+                                    ui.separator();
+                                    interface::display_settings(
+                                        ui,
+                                        &mut self.show_edges,
+                                        &mut self.edge_width_px,
+                                    );
+                                });
+                        });
+                    });
                 let (rect, response) =
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-                if rect.width() <= 0.0 || rect.height() <= 0.0 { return; }
+                if rect.width() <= 0.0 || rect.height() <= 0.0 {
+                    return;
+                }
                 self.viewport_aspect = rect.width().max(1.0) / rect.height().max(1.0);
+                if self.snapshot.is_none() {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        ui.centered_and_justified(|ui| {
+                            ui.label("Open a model to begin · See Diagnostics if the model could not be built");
+                        });
+                    });
+                    return;
+                }
                 if frame_layout {
-                    if let Some(snapshot) = &self.snapshot { self.camera = snapshot_camera(snapshot, self.viewport_aspect); }
+                    if let Some(snapshot) = &self.snapshot {
+                        self.camera = snapshot_camera(snapshot, self.viewport_aspect);
+                    }
                 }
                 if rect.width() >= 100.0 {
                     if let Some(request) = self.code_state.outputs.take_focus() {
                         if let (Some(snapshot), Some(script)) = (&self.snapshot, &self.script) {
-                            if let Some((selection, camera)) = focus_part(snapshot, &request, script.buffer.revision, self.viewport_aspect, &self.camera) {
-                                self.selected = Some(selection); self.selected_measurement = None;
+                            if let Some((selection, camera)) = focus_part(
+                                snapshot,
+                                &request,
+                                script.buffer.revision,
+                                self.viewport_aspect,
+                                &self.camera,
+                            ) {
+                                self.selected = Some(selection);
+                                self.selected_measurement = None;
                                 self.camera = camera;
                                 self.message = format!("Selected part · {}", request.name);
                             }
@@ -2342,24 +2563,55 @@ impl eframe::App for Editor {
                         if let Some(position) = response.interact_pointer_pos() {
                             let extend = ui.input(|input| input.modifiers.shift);
                             let edge = if self.show_edges && !extend {
-                                snapshot.scene.picking().pick_edge(matrix, [rect.width(), rect.height()], [position.x - rect.left(), position.y - rect.top()])
-                            } else { None };
+                                snapshot.scene.picking().pick_edge(
+                                    matrix,
+                                    [rect.width(), rect.height()],
+                                    [position.x - rect.left(), position.y - rect.top()],
+                                )
+                            } else {
+                                None
+                            };
                             if let Some(edge) = edge {
-                                self.selected = Some(inspection::Selection::Edge(edge)); self.selected_measurement = None;
+                                self.selected = Some(inspection::Selection::Edge(edge));
+                                self.selected_measurement = None;
                                 self.message = "Edge dimensions · reference measurements".into();
-                            } else if let Some(hit) = snapshot.scene.picking().pick(matrix, [
-                                (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
-                                1.0 - (position.y - rect.top()) / rect.height() * 2.0,
-                            ]) {
-                                let face = *snapshot.scene.faces.get(&hit.face_id).expect("Mesh face inspection cache");
-                                match inspection::Selection::select(self.selected.as_ref(), face, extend) {
+                            } else if let Some(hit) = snapshot.scene.picking().pick(
+                                matrix,
+                                [
+                                    (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
+                                    1.0 - (position.y - rect.top()) / rect.height() * 2.0,
+                                ],
+                            ) {
+                                let face = *snapshot
+                                    .scene
+                                    .faces
+                                    .get(&hit.face_id)
+                                    .expect("Mesh face inspection cache");
+                                match inspection::Selection::select(
+                                    self.selected.as_ref(),
+                                    face,
+                                    extend,
+                                ) {
                                     Ok(selection) => {
-                                        self.message = if matches!(selection, inspection::Selection::Pair { .. }) { "Parallel-face separation · reference measurement".into() } else { "Face dimensions · reference measurements".into() };
-                                        self.selected = Some(selection); self.selected_measurement = None;
+                                        self.message = if matches!(
+                                            selection,
+                                            inspection::Selection::Pair { .. }
+                                        ) {
+                                            "Parallel-face separation · reference measurement"
+                                                .into()
+                                        } else {
+                                            "Face dimensions · reference measurements".into()
+                                        };
+                                        self.selected = Some(selection);
+                                        self.selected_measurement = None;
                                     }
                                     Err(error) => self.message = error,
                                 }
-                            } else { self.selected = None; self.selected_measurement = None; self.message = "Selection cleared".into(); }
+                            } else {
+                                self.selected = None;
+                                self.selected_measurement = None;
+                                self.message = "Selection cleared".into();
+                            }
                         }
                     }
                     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -2377,13 +2629,29 @@ impl eframe::App for Editor {
                             geometry: Arc::clone(&snapshot.scene.display),
                             instances: Arc::clone(&snapshot.scene.instances),
                             matrix,
-                            selected: self.selected.as_ref().map_or([0; 2], inspection::Selection::ids),
-                            selected_part: match &self.selected { Some(inspection::Selection::Part { faces, .. }) => *faces, _ => [0; 2] },
-                            selected_edge: match &self.selected { Some(inspection::Selection::Edge(edge)) => Some(edge.segments), _ => None },
+                            selected: self
+                                .selected
+                                .as_ref()
+                                .map_or([0; 2], inspection::Selection::ids),
+                            selected_part: match &self.selected {
+                                Some(inspection::Selection::Part { faces, .. }) => *faces,
+                                _ => [0; 2],
+                            },
+                            selected_edge: match &self.selected {
+                                Some(inspection::Selection::Edge(edge)) => Some(edge.segments),
+                                _ => None,
+                            },
                         },
                     ));
                     if self.show_dimensions || self.selected.is_some() {
-                        if let Some(name) = dimensions::draw(ui, rect, matrix, snapshot.scene.bounds, &snapshot.scene.annotations, self.selected.as_ref()) {
+                        if let Some(name) = dimensions::draw(
+                            ui,
+                            rect,
+                            matrix,
+                            snapshot.scene.bounds,
+                            &snapshot.scene.annotations,
+                            self.selected.as_ref(),
+                        ) {
                             measurement_requested = Some(name);
                         }
                     }
@@ -2396,112 +2664,6 @@ impl eframe::App for Editor {
                     interface::MUTED,
                 );
                 interface::axes(ui.painter(), rect, self.camera.eye() - self.camera.target);
-                let toolbar = egui::Rect::from_min_size(
-                    rect.left_top() + egui::vec2(16.0, 10.0),
-                    egui::vec2((rect.width() - 32.0).max(0.0), 112.0),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(toolbar), |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        let (label, color) =
-                            if matches!(self.work, WorkerState::Busy(_) | WorkerState::Export) {
-                                ("Processing model", interface::MUTED)
-                            } else if self.snapshot.is_none() {
-                                ("No preview yet", interface::MUTED)
-                            } else if self.script.as_ref().is_some_and(|script| {
-                                self.snapshot.as_ref().is_some_and(|snapshot| {
-                                    snapshot.editor_revision != Some(script.buffer.revision)
-                                })
-                            }) {
-                                (
-                                    if self.preview.automatic() {
-                                        if self.preview.pending() {
-                                            "Waiting for typing pause"
-                                        } else {
-                                            "Preview needs attention"
-                                        }
-                                    } else {
-                                        "Code changed · Update model to refresh preview"
-                                    },
-                                    interface::WARNING,
-                                )
-                            } else if self.script.is_none()
-                                && self.snapshot.as_ref().is_some_and(|snapshot| {
-                                    snapshot.source != ModelSource::Rack(self.parameters)
-                                })
-                            {
-                                ("Preview needs update", interface::WARNING)
-                            } else {
-                                ("Preview up to date", interface::ACCENT)
-                            };
-                        interface::panel_title(ui, "MODEL");
-                        ui.label(egui::RichText::new(label).size(12.0).color(color));
-                    });
-                    egui::Frame::NONE
-                        .fill(interface::PANEL)
-                        .stroke(egui::Stroke::new(1.0, interface::BORDER))
-                        .corner_radius(8.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                if let Some(snapshot) = &self.snapshot {
-                                    if snapshot.alternate.is_some() {
-                                        ui.menu_button(
-                                            if snapshot.scene.layout == placement::Layout::Assembly {
-                                                "Assembly"
-                                            } else {
-                                                "Print layout"
-                                            },
-                                            |ui| {
-                                                for (layout, label) in [
-                                                    (placement::Layout::Assembly, "Assembly"),
-                                                    (placement::Layout::Print, "Print"),
-                                                ] {
-                                                    if ui.selectable_label(snapshot.scene.layout == layout, label).clicked() {
-                                                        layout_requested = Some(layout);
-                                                        ui.close();
-                                                    }
-                                                }
-                                            },
-                                        ).response.on_hover_text(
-                                            "Switch cached placements without changing source or rebuilding solids",
-                                        );
-                                    }
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new("Frame · F")
-                                            .min_size(egui::vec2(88.0, interface::CONTROL_HEIGHT)),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Some(snapshot) = &self.snapshot {
-                                        self.camera =
-                                            snapshot_camera(snapshot, self.viewport_aspect);
-                                    }
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new("Front")
-                                            .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
-                                    )
-                                    .clicked()
-                                {
-                                    self.camera.yaw = -std::f32::consts::FRAC_PI_2;
-                                    self.camera.pitch = 0.0;
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new("Top")
-                                            .min_size(egui::vec2(64.0, interface::CONTROL_HEIGHT)),
-                                    )
-                                    .clicked()
-                                {
-                                    self.camera.pitch = 1.55;
-                                }
-                                ui.toggle_value(&mut self.show_dimensions, "Measures").on_hover_text("Show overall dimensions and declared checks. Selecting a face always shows local dimensions; Shift-click a parallel face for separation.");
-                            });
-                        });
-                });
             });
         if let Some(layout) = layout_requested {
             if self.change_layout(layout) {
@@ -2906,6 +3068,11 @@ impl eframe::App for Editor {
                         ui.ctx().request_repaint_after(delay);
                     }
                 }
+            }
+        }
+        if self.snapshot.is_none() {
+            if matches!(self.work, WorkerState::Busy(_)) || self.preview.pending() {
+                studio::loading(ui.ctx());
             }
         }
         self.ui_ms = started.elapsed().as_secs_f64() * 1000.0;
