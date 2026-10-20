@@ -269,6 +269,9 @@ for recorded checks. Run native and reference tests with
 `cargo test --workspace --locked`, and lint with
 `cargo clippy --workspace --all-targets --locked -- -D warnings` inside
 `nix develop`.
+Tests default to one test thread through `.cargo/config.toml` because native
+fixtures share SMLib's global context; this avoids unrelated fixture contention
+consuming worker-response timeouts.
 
 ### Code-defined models with Luau
 
@@ -849,6 +852,17 @@ avoids intermediate tessellation; the cylindrical cutter and boolean result
 remain analytic B-rep geometry.
 See `models/mounting-bracket.luau` for a four-hole example with two face normals.
 
+Hole options also accept `counterbore = { radius = 4, depth = 2 }` or
+`countersink = { radius = 4, angle = 90 }`. The recess radius must exceed the
+hole radius; countersink angles are included angles in degrees.
+See [recessed holes](evaluation/face-holes.md) for limits and depth behavior.
+
+`cad.pocket` and `cad.boss` cut inward or add outward from a named face. Supply
+`width`/`height` for a rectangle, or a reusable `cad.polygon` as `profile`, plus
+`depth` and optional `u`/`v` offsets. Profile coordinates follow the same local
+axes as holes. See [face features](evaluation/face-features.md) and open
+`models/manufacturing-panel.luau` for polygon features and both screw-seat types.
+
 `cad.measure` reports perpendicular separation between parallel face planes.
 Without `min`/`max` it is a reference dimension; with either limit it becomes an
 explicit design check. Failed checks preserve the last valid preview and block
@@ -908,9 +922,15 @@ allocations, retained capacity, and uniform uploads, including placement upload
 counts and bytes. Moving or rotating finished parts updates small transform/color
 records; shape changes upload new geometry and reuse buffer capacity when it fits.
 Translations also reuse cached thumbnails, bounds, and face measurements.
-During parameter dragging, changed thumbnails wait until the pointer is released
-and no parameter has changed for 150 ms. Bounds, face measurements and constraints
-still update with every preview; matching images remain cached.
+During geometry-changing parameter drags, display meshes use a coarser tolerance
+while retaining exact-volume validation. After pointer release and 150 ms without
+a parameter edit, the worker refines the mesh and finishes thumbnails using the
+cached B-rep and volume. Bounds, face measurements and constraints update with
+every preview. Final meshes remain cached for movement-only edits; exports
+always request final preparation. See [interactive refinement](evaluation/interactive-preview.md).
+Obsolete source builds stop at checkpoints between CAD operations and meshing;
+see [preview cancellation](evaluation/preview-cancellation.md). Individual native
+calls already in progress finish before cancellation takes effect.
 Picking shares canonical CPU geometry and transforms queries through part poses,
 avoiding world mesh and sampled-edge copies. With `--profile`, normal exit prints
 slider latency median, p95, p99 and maximum over the latest 512 accepted revisions.
