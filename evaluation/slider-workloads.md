@@ -43,3 +43,41 @@ record adapter identity and framebuffer size with results.
 Regression tests cover pending-input replacement and timestamps, final-revision
 completion, timeout behavior, geometry parameter bounds, rebuilding changed
 holes, and reuse of an unchanged final revision.
+
+## Integrated comparison
+
+2026-10-20: release builds of `15ad279` (benchmark changes only) and `f69fe8d`
+(intermediate cache, volume memo, face features and game validation correction).
+Three sequential baseline/integrated pairs ran on NVIDIA RTX 3070 Vulkan with
+1200×650 application framebuffers in a private 1600×1000 Xvfb display. No builds
+or other benchmarks from this task ran concurrently; other host activity and OS
+caches were not controlled. Startup is excluded from slider timing.
+
+| Pair | Build | Accepted revisions | Control → prepare p50 ms | p95 ms | Worker p50 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | Baseline | 16 | 449.108 | 981.598 | 438.655 |
+| 1 | Integrated | 21 | 291.558 | 397.949 | 289.404 |
+| 2 | Baseline | 21 | 285.200 | 391.617 | 275.197 |
+| 2 | Integrated | 26 | 227.615 | 387.014 | 212.542 |
+| 3 | Baseline | 15 | 437.817 | 906.645 | 418.881 |
+| 3 | Integrated | 26 | 238.564 | 356.346 | 229.954 |
+
+The median of per-run medians falls from 437.817 to 238.564 ms, approximately
+45%. Baseline variation is substantial; these diagnostic samples do not establish
+a general desktop speedup. Every run completed its final revision with zero
+stale results. Geometry-changing feedback remains a few revisions per second;
+exact integration, remaining booleans and tessellation still run for changed
+solids. Volume memoization helps repeated queries and export, rather than
+eliminating the first integration of a changed solid.
+
+Separate integrated translation and rotation sweeps completed 135 and 108
+accepted revisions. Each retained one geometry upload and two geometry buffer
+allocations for the whole sweep; only placements changed. Their control-to-prepare
+medians were 42.440 and 52.209 ms on this headless display. These are not desktop
+presentation measurements.
+
+Combined verification passed 201 workspace tests (one additional manual profiler
+ignored), all-target/all-feature Clippy with warnings denied, formatting and the
+release build. Enclosure STEP/STL and GLB, four-part rack print exports, bracket
+GLB and enclosure rendered views also passed. Raw diagnostic logs and artifacts
+are under the ignored `output/parallel-priorities/` directory.

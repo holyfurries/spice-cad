@@ -122,9 +122,10 @@ Second follow-up implemented: a worker-owned cache retains at most the current
 32 final part subtrees, including canonical native bodies, display meshes,
 sampled edges and volume. It compares full operation dependencies, numeric
 inputs, profiles and edge targets without hashes; names, colors, placements and
-comments are excluded. Removed parts are evicted. It deliberately does not retain
-every intermediate Boolean result. Native geometry is opaque, so the 32-entry
-limit is not a precise byte limit on kernel memory.
+comments are excluded. Removed parts are evicted. This final-part cache does not
+retain every intermediate Boolean result; the separately bounded intermediate
+cache above now handles dependency reuse. The 32-entry final-part limit remains
+separate from that cache's native byte limit.
 
 The worker keeps its serialized SMLib context for its lifetime. Preview bounds
 and exports use independent native body copies; canonical cache entries never
@@ -266,8 +267,8 @@ before attributing headless delivery delays to the application's command queue.
 
 1. Profile interactive heap allocation counts and p95 editing latency on large
    ASCII/Unicode files, plus retained native geometry memory during repeated edits.
-2. Consider intermediate-operation caching if changed-part rebuilds remain costly.
-   Rotation-dependent inspection and thumbnails refresh when orientation changes.
+2. Measure the bounded intermediate cache on larger changed-part workloads,
+   separating cold-build copying from warm dependency reuse and tessellation.
 3. Send LSP document deltas when negotiated and update special-character indexes
    for changed lines. Add stale-work checks between CAD operations and before
    scene generation. An individual native call may remain non-interruptible.
