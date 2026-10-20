@@ -1,0 +1,13 @@
+--!strict
+local width = cad.number(80, { label = "Width", unit = "mm", min = 60, max = 120 })
+local depth = cad.number(50, { label = "Depth", unit = "mm", min = 40, max = 80 })
+local height = cad.number(20, { label = "Height", unit = "mm", min = 10, max = 40 })
+local wall = cad.number(3, { label = "Wall", unit = "mm", min = 2, max = 5 })
+local body = cad.box({ width = width, depth = depth, height = height })
+local top = cad.face(body, { name = "enclosure top", normal = "z+" })
+body = cad.pocket(body, { face = top, width = width - 2 * wall, height = depth - 2 * wall, depth = height - wall })
+local floor = cad.face(body, { name = "inside floor", normal = "z+", at = wall })
+body = cad.boss(body, { face = floor, width = 10, height = 10, depth = 5 })
+local support = cad.face(body, { name = "support top", normal = "z+", at = wall + 5 })
+body = cad.hole(body, { face = support, radius = 1.5, depth = 5 })
+cad.show("enclosure", body)

@@ -19,6 +19,7 @@ mod dimensions;
 mod document;
 mod edge_reference;
 mod export;
+mod face_feature;
 mod files;
 mod game_asset;
 mod hole;

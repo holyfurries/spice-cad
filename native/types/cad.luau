@@ -13,6 +13,7 @@ type BoxOptions = {
 	y: number?,
 	z: number?,
 }
+type FaceFeatureOptions = { face: Face, width: number, height: number, depth: number, u: number?, v: number? }
 local cad: {
 	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
 	toggle: (boolean, { label: string? }) -> boolean,
@@ -26,6 +27,8 @@ local cad: {
 	chamfer: (Solid, { width: number, edges: { Edge }? }) -> Solid,
 	edge: (Solid, { name: string, from: Point, to: Point }) -> Edge,
 	hole: (Solid, { face: Face, radius: number, u: number?, v: number?, depth: number? }) -> Solid,
+	pocket: (Solid, FaceFeatureOptions) -> Solid,
+	boss: (Solid, FaceFeatureOptions) -> Solid,
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,

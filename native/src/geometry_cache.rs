@@ -446,6 +446,18 @@ fn cache_matches(
                 },
             ) => {
                 match (b, d) {
+                    (Modification::FaceFeature(a), Modification::FaceFeature(b)) => {
+                        let a = &first.face_features[a];
+                        let b = &second.face_features[b];
+                        if !a.face.geometry_matches(&b.face)
+                            || a.offset != b.offset
+                            || a.size != b.size
+                            || a.depth != b.depth
+                            || a.kind != b.kind
+                        {
+                            return false;
+                        }
+                    }
                     (Modification::Hole(a), Modification::Hole(b)) => {
                         let a = &first.holes[a];
                         let b = &second.holes[b];

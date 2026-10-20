@@ -839,7 +839,7 @@ impl Body<'_> {
         }
     }
 
-    pub fn hole_origin(
+    pub fn planar_feature_origin(
         &mut self,
         selector: &crate::dimensions::Selector,
         offset: [f64; 2],
@@ -941,7 +941,8 @@ impl Body<'_> {
         }
         if distance > 1e-7 {
             return Err(
-                "Hole center lies outside the selected face or inside an existing opening".into(),
+                "Feature center lies outside the selected face or inside an existing opening"
+                    .into(),
             );
         }
         Ok(center)

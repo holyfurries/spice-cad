@@ -338,7 +338,7 @@ impl Definitions {
         let face = &self.faces[index];
         if face.solid != solid {
             return Err(mlua::Error::runtime(format!(
-                "Face '{}' belongs to a different source solid; select it on the solid passed to cad.hole",
+                "Face '{}' belongs to a different source solid; select it on the solid passed to the modeling operation",
                 face.name
             )));
         }
@@ -852,7 +852,7 @@ mod tests {
             (10.005, false),
         ] {
             let offset = [radius * angle.cos(), radius * angle.sin()];
-            let origin = body.hole_origin(&selector, offset);
+            let origin = body.planar_feature_origin(&selector, offset);
             if valid {
                 let point = origin?;
                 assert!((point - glam::DVec3::new(offset[0], offset[1], 8.0)).length() < 1e-6);
@@ -879,7 +879,7 @@ mod tests {
         for radius in [5.0, 100.0] {
             let mut body = kernel.cylinder([0.0; 3], radius, 8.0)?;
             let (origin, counts) =
-                crate::allocations::measure(|| body.hole_origin(&selector, [0.0; 2]));
+                crate::allocations::measure(|| body.planar_feature_origin(&selector, [0.0; 2]));
             assert!((origin? - glam::DVec3::Z * 8.0).length() < 1e-6);
             assert!(counts.bytes < 4096, "{counts:?}");
             if let Some(previous) = previous {
@@ -908,7 +908,9 @@ mod tests {
                 };
                 let mut expected = glam::DVec3::splat(10.0);
                 expected[axis] = coordinate;
-                assert!((body.hole_origin(&selector, [0.0; 2])? - expected).length() < 1e-6);
+                assert!(
+                    (body.planar_feature_origin(&selector, [0.0; 2])? - expected).length() < 1e-6
+                );
             }
         }
         let mut precise = kernel.box_shape(
@@ -924,7 +926,7 @@ mod tests {
             near: None,
         };
         let expected = glam::dvec3(17.123456789, 21.876543219, 21.123456789);
-        assert!((precise.hole_origin(&selector, [0.0; 2])? - expected).length() < 1e-8);
+        assert!((precise.planar_feature_origin(&selector, [0.0; 2])? - expected).length() < 1e-8);
         Ok(())
     }
 
@@ -943,19 +945,22 @@ mod tests {
             near: None,
         };
         assert!(
-            body.hole_origin(&selector, [0.0; 2])
+            body.planar_feature_origin(&selector, [0.0; 2])
                 .err()
                 .is_some_and(|error| error.contains("ambiguous"))
         );
         selector.near = Some(glam::vec3(5.0, 5.0, 16.0));
         assert!(
-            (body.hole_origin(&selector, [0.0; 2])? - glam::dvec3(5.0, 5.0, 16.0)).length() < 1e-6
+            (body.planar_feature_origin(&selector, [0.0; 2])? - glam::dvec3(5.0, 5.0, 16.0))
+                .length()
+                < 1e-6
         );
         selector.near = None;
         selector.at = Some(8.0);
-        assert!(body.hole_origin(&selector, [-5.0, -5.0]).is_err());
+        assert!(body.planar_feature_origin(&selector, [-5.0, -5.0]).is_err());
         assert!(
-            (body.hole_origin(&selector, [5.0, 5.0])? - glam::dvec3(15.0, 15.0, 8.0)).length()
+            (body.planar_feature_origin(&selector, [5.0, 5.0])? - glam::dvec3(15.0, 15.0, 8.0))
+                .length()
                 < 1e-6
         );
         let mut tilted = kernel.box_shape([0.0; 3], [20.0, 20.0, 8.0])?;
@@ -963,7 +968,7 @@ mod tests {
         selector.at = None;
         assert!(
             tilted
-                .hole_origin(&selector, [0.0; 2])
+                .planar_feature_origin(&selector, [0.0; 2])
                 .err()
                 .is_some_and(|error| error.contains("no matching"))
         );

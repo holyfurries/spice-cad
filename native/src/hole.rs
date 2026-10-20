@@ -27,7 +27,7 @@ impl Recipe {
     ) -> Result<(), String> {
         assert!(self.radius.is_finite());
         assert!(self.radius > 0.0);
-        let mut center = body.hole_origin(&self.face, self.offset)?;
+        let mut center = body.planar_feature_origin(&self.face, self.offset)?;
         let axis = self.face.axis;
         let body_bounds = body.bounds(false)?;
         let sign = if self.face.positive { 1.0 } else { -1.0 };

@@ -67,6 +67,7 @@ enum Modification {
     Rotate { axis: [f64; 3], angle: f64 },
     EdgeTreatment(usize),
     Hole(usize),
+    FaceFeature(usize),
 }
 
 enum EdgeTargets {
@@ -90,6 +91,7 @@ impl UserData for Edge {}
 
 #[derive(Default)]
 struct Recipe {
+    face_features: Vec<crate::face_feature::Recipe>,
     holes: Vec<crate::hole::Recipe>,
     edges: Vec<crate::edge_reference::Reference>,
     edge_treatments: Vec<EdgeTreatmentRecipe>,
@@ -493,6 +495,66 @@ pub fn compile_cached(
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    for (name, kind) in [
+        ("pocket", crate::face_feature::Kind::Pocket),
+        ("boss", crate::face_feature::Kind::Boss),
+    ] {
+        let state = Rc::clone(&recipe);
+        let faces = Rc::clone(&definitions);
+        cad.set(
+            name,
+            lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
+                options_fields(&options, &["face", "width", "height", "depth", "u", "v"])?;
+                let source = solid.borrow::<Solid>()?.0;
+                let face_index = options
+                    .get::<AnyUserData>("face")?
+                    .borrow::<crate::dimensions::Face>()?
+                    .0;
+                let size = [
+                    dimension(&options, "width")?,
+                    dimension(&options, "height")?,
+                ];
+                let depth = dimension(&options, "depth")?;
+                let offset = [
+                    options.get::<Option<f64>>("u")?.unwrap_or(0.0),
+                    options.get::<Option<f64>>("v")?.unwrap_or(0.0),
+                ];
+                if offset
+                    .iter()
+                    .any(|value| !value.is_finite() || value.abs() > 2000.0)
+                {
+                    return Err(mlua::Error::runtime(
+                        "Feature offsets must be finite and within ±2000 mm",
+                    ));
+                }
+                let face = faces.borrow_mut().modeling_face(face_index, source)?;
+                let index = {
+                    let mut recipe = state.borrow_mut();
+                    if recipe.face_features.len() >= OPERATION_COUNT_MAX {
+                        return Err(mlua::Error::runtime("Model exceeds 256 face features"));
+                    }
+                    let index = recipe.face_features.len();
+                    recipe.face_features.push(crate::face_feature::Recipe {
+                        face,
+                        offset,
+                        size,
+                        depth,
+                        kind,
+                    });
+                    index
+                };
+                push_operation(
+                    &state,
+                    Operation::Modify {
+                        source,
+                        modification: Modification::FaceFeature(index),
+                    },
+                )
+            })
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
     cad.set_readonly(true);
     lua.globals()
         .set("cad", cad)
@@ -740,6 +802,9 @@ impl Model {
                             Modification::Rotate { axis, angle } => body.rotate(axis, angle)?,
                             Modification::Hole(index) => {
                                 self.recipe.holes[index].apply(kernel, &mut body)?
+                            }
+                            Modification::FaceFeature(index) => {
+                                self.recipe.face_features[index].apply(kernel, &mut body)?
                             }
                             Modification::EdgeTreatment(index) => {
                                 let operation = &self.recipe.edge_treatments[index];
