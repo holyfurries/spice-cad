@@ -13,6 +13,7 @@ use std::{
 #[cfg(test)]
 mod allocations;
 mod analysis;
+mod cancellation;
 mod code_editor;
 mod diagnostics;
 mod dimensions;
@@ -189,6 +190,7 @@ enum Command {
 enum Outcome {
     Model(Box<Snapshot>),
     Exported(String),
+    Cancelled,
 }
 enum WorkerState {
     Idle,
@@ -371,7 +373,8 @@ enum ModelSource {
     Script(String),
 }
 struct Worker {
-    commands: Option<mpsc::SyncSender<Command>>,
+    commands: Option<mpsc::SyncSender<(Command, cancellation::Token)>>,
+    generation: cancellation::Generation,
     results: Option<mpsc::Receiver<Result<Outcome, String>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -381,7 +384,17 @@ impl Worker {
         self.commands
             .as_ref()
             .expect("Live geometry worker")
-            .try_send(command)
+            .try_send((command, self.generation.token()))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full((command, _)) => mpsc::TrySendError::Full(command),
+                mpsc::TrySendError::Disconnected((command, _)) => {
+                    mpsc::TrySendError::Disconnected(command)
+                }
+            })
+    }
+
+    fn invalidate_preview(&self) {
+        self.generation.advance();
     }
 
     fn try_recv(&self) -> Result<Result<Outcome, String>, mpsc::TryRecvError> {
@@ -410,13 +423,14 @@ impl Worker {
             .spawn(move || {
                 let kernel = kernel::Kernel::new();
                 let mut cache = kernel.as_ref().map(model::Cache::new);
-                while let Ok(command) = requests.recv() {
+                while let Ok((command, token)) = requests.recv() {
                     let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
                         Command::ExportScript { source, folder, target } => export::model_files_cached(&source, &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
                         Command::Script { source, editor_revision, revision, saved_at, mut input, thumbnails } => {
                             if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
                             let source = source.to_string();
-                            build_script_snapshot_with_thumbnails(source, revision, cache, thumbnails).map(|mut snapshot| {
+                            cache.with_preview(token, |cache| build_script_snapshot_with_thumbnails(source, revision, cache, thumbnails)).map(|snapshot| {
+                                let Some(mut snapshot) = snapshot else { return Outcome::Cancelled; };
                                 if let Some(input) = &mut input { input.worker_finished_ms = input.elapsed_ms(Instant::now()); }
                                 snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot))
                             })
@@ -448,6 +462,7 @@ impl Worker {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             commands: Some(commands),
+            generation: cancellation::Generation::default(),
             results: Some(results),
             thread: Some(thread),
         })
@@ -456,6 +471,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.invalidate_preview();
         self.commands.take();
         self.results.take();
         if let Some(thread) = self.thread.take() {
@@ -550,6 +566,7 @@ fn build_script_snapshot_with_thumbnails(
     assert!(revision > 0);
     let total = Instant::now();
     let model = cache.compile(&source)?;
+    cache.checkpoint()?;
     let prepared = cache.prepare(&model)?;
     let geometry = prepared.geometry;
     let display = cache.display(&geometry)?;
@@ -582,6 +599,7 @@ fn build_script_snapshot_with_thumbnails(
         None
     };
     let tessellation_ms = prepared.tessellation_ms + start.elapsed().as_secs_f64() * 1000.0;
+    cache.checkpoint()?;
     Ok(Snapshot {
         thumbnails_pending,
         thumbnail_renders: cache.thumbnail_renders,
@@ -938,6 +956,7 @@ impl Editor {
                 .jump_to(location.range(&document.buffer.rope));
         }
         self.script = Some(document);
+        self.worker.invalidate_preview();
         self.snapshot = None;
         self.outliner = outliner::State::default();
         self.preview_input = None;
@@ -967,6 +986,9 @@ impl Editor {
                 } else {
                     self.preview.observe(revision, Instant::now())
                 };
+                if changed {
+                    self.worker.invalidate_preview();
+                }
                 if self
                     .snapshot
                     .as_ref()
@@ -1337,6 +1359,7 @@ impl Editor {
                             self.snapshot = Some(*snapshot);
                         }
                         Ok(Outcome::Exported(message)) => self.message = message,
+                        Ok(Outcome::Cancelled) => {}
                         Err(error) => {
                             if self.sweep.is_some() {
                                 eprintln!("Profile: preview_sweep build_error={error}");
@@ -2307,6 +2330,7 @@ impl eframe::App for Editor {
             if let Some(script) = &mut self.script {
                 match self.code_state.replace_parameter(&mut script.buffer, &edit) {
                     Ok(()) => {
+                        self.worker.invalidate_preview();
                         self.parameter_state.applied(&edit, script.buffer.revision);
                         if let (Some(sweep), Some(index)) = (&mut self.sweep, sweep_index) {
                             sweep.applied(index, script.buffer.revision);
@@ -4515,6 +4539,51 @@ mod tests {
     }
 
     #[test]
+    fn worker_discards_superseded_requests_and_builds_latest_without_error() -> Result<(), String> {
+        let worker = Worker::new(egui::Context::default())?;
+        let obsolete = worker.generation.token();
+        worker.invalidate_preview();
+        let command = |source: &str, revision| Command::Script {
+            source: source.into(),
+            thumbnails: model::ThumbnailMode::Deferred,
+            input: None,
+            editor_revision: revision,
+            revision,
+            saved_at: None,
+        };
+        worker
+            .commands
+            .as_ref()
+            .expect("Live worker")
+            .try_send((
+                command("error('This obsolete error must never be reported')", 1),
+                obsolete,
+            ))
+            .map_err(|error| error.to_string())?;
+        let obsolete = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??;
+        let cancelled = matches!(obsolete, Outcome::Cancelled);
+        worker
+            .try_send(command(
+                "cad.show('latest',cad.box({width=2,depth=3,height=4}))",
+                2,
+            ))
+            .map_err(|error| error.to_string())?;
+        let latest = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??;
+        let latest_revision = match latest {
+            Outcome::Model(snapshot) => Some(snapshot.revision),
+            _ => None,
+        };
+        drop(worker);
+        assert!(cancelled);
+        assert_eq!(latest_revision, Some(2));
+        Ok(())
+    }
+
+    #[test]
     fn worker_completion_wakes_ui_immediately_and_preserves_input_timestamps() -> Result<(), String>
     {
         let context = egui::Context::default();
@@ -4618,6 +4687,7 @@ mod tests {
         });
         let worker = Worker {
             commands: Some(commands),
+            generation: cancellation::Generation::default(),
             results: Some(results),
             thread: Some(thread),
         };
@@ -4732,7 +4802,9 @@ mod tests {
                         assert_eq!(snapshot.revision, 4);
                         assert_eq!(snapshot.name, "bracket");
                     }
-                    Outcome::Exported(_) => return Err("Expected script model".into()),
+                    Outcome::Exported(_) | Outcome::Cancelled => {
+                        return Err("Expected script model".into());
+                    }
                 }
             }
         }
@@ -4819,7 +4891,9 @@ mod tests {
                 assert_eq!(snapshot.revision, 2);
                 assert!(snapshot.volume_mm3 > 0.0);
             }
-            Outcome::Exported(_) => return Err("Expected rebuilt geometry".into()),
+            Outcome::Exported(_) | Outcome::Cancelled => {
+                return Err("Expected rebuilt geometry".into());
+            }
         }
         Ok(())
     }

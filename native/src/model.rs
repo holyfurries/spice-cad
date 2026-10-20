@@ -742,7 +742,7 @@ impl Model {
         output: usize,
         count: &mut usize,
     ) -> Result<Body<'kernel>, String> {
-        self.build_solid_cached(kernel, output, count, None)
+        self.build_solid_cached(kernel, output, count, None, None)
     }
 
     fn build_solid_cached<'kernel>(
@@ -751,11 +751,15 @@ impl Model {
         output: usize,
         count: &mut usize,
         mut cache: Option<&mut cache::Operations<'kernel>>,
+        preview: Option<&crate::cancellation::Token>,
     ) -> Result<Body<'kernel>, String> {
         assert!(output < self.recipe.operations.len());
         let mut pending = vec![(output, false, *count)];
         let mut bodies = Vec::<Body<'kernel>>::new();
         while let Some((index, visited, started)) = pending.pop() {
+            if let Some(token) = preview {
+                token.checkpoint()?;
+            }
             let started = if visited { started } else { *count };
             if !visited {
                 if let Some(cache) = cache.as_deref_mut() {

@@ -153,6 +153,7 @@ pub struct Prepared<'kernel> {
 
 pub struct Cache<'kernel> {
     kernel: &'kernel Kernel,
+    preview: Option<crate::cancellation::Token>,
     pub thumbnail_renders: u64,
     entries: Vec<Entry<'kernel>>,
     operations: Operations<'kernel>,
@@ -165,6 +166,7 @@ impl<'kernel> Cache<'kernel> {
     pub fn new(kernel: &'kernel Kernel) -> Self {
         Self {
             kernel,
+            preview: None,
             thumbnail_renders: 0,
             entries: Vec::new(),
             operations: Operations::new(),
@@ -175,13 +177,37 @@ impl<'kernel> Cache<'kernel> {
     }
 
     pub fn compile(&mut self, source: &str) -> Result<Model, String> {
+        self.checkpoint()?;
         super::compile_cached(source, &mut self.analysis)
+    }
+
+    pub fn with_preview<T>(
+        &mut self,
+        token: crate::cancellation::Token,
+        build: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
+        assert!(self.preview.is_none());
+        self.preview = Some(token);
+        let result = build(self);
+        let token = self.preview.take().expect("Active preview token");
+        if token.cancelled() {
+            return Ok(None);
+        }
+        result.map(Some)
+    }
+
+    pub fn checkpoint(&self) -> Result<(), String> {
+        if let Some(token) = &self.preview {
+            token.checkpoint()?;
+        }
+        Ok(())
     }
 
     pub fn display(
         &mut self,
         geometry: &[Arc<Geometry>],
     ) -> Result<Arc<crate::viewport::Geometry>, String> {
+        self.checkpoint()?;
         if let Some(display) = &self.display {
             if display.parts.len() == geometry.len()
                 && display
@@ -199,6 +225,7 @@ impl<'kernel> Cache<'kernel> {
     }
 
     pub fn annotations(&mut self, model: &Model) -> Result<crate::dimensions::Annotations, String> {
+        self.checkpoint()?;
         assert_eq!(self.entries.len(), model.parts.len());
         if !model.has_annotations() {
             return Ok(Default::default());
@@ -235,6 +262,9 @@ impl<'kernel> Cache<'kernel> {
         let mut remaining = crate::thumbnail::PIXEL_VISITS_MAX;
         let mut result = Vec::with_capacity(model.parts.len());
         for (entry, part) in self.entries.iter_mut().zip(&model.parts) {
+            if let Some(token) = &self.preview {
+                token.checkpoint()?;
+            }
             let orientation = part.placement(layout).orientation();
             let cached = &mut entry.presentations[slot];
             if cached.as_ref().is_none_or(|previous| {
@@ -293,6 +323,7 @@ impl<'kernel> Cache<'kernel> {
         let mut vertices = 0;
         let mut segments = 0;
         for part in &model.parts {
+            self.checkpoint()?;
             let found = self.entries.iter().chain(next.iter()).find(|entry| {
                 cache_matches(
                     &model.recipe,
@@ -328,14 +359,17 @@ impl<'kernel> Cache<'kernel> {
                         part.solid,
                         &mut steps,
                         Some(&mut self.operations),
+                        self.preview.as_ref(),
                     )
                     .map_err(|error| format!("Part '{}': {error}", part.name))?;
                 prepared.build_ms += started.elapsed().as_secs_f64() * 1000.0;
+                self.checkpoint()?;
                 let started = std::time::Instant::now();
                 let crate::kernel::Tessellation {
                     mut mesh,
                     volume_mm3,
                 } = body.mesh()?;
+                self.checkpoint()?;
                 mesh.smooth_normals();
                 let geometry = Arc::new(Geometry {
                     mesh,
@@ -511,6 +545,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_keeps_completed_predecessors_and_clears_preview_scope() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let source = "local p=cad.box({width=20,depth=20,height=10});local q=cad.translate(p,{x=2});cad.show('part',cad.translate(q,{y=2}))";
+        let model = super::super::compile(source)?;
+        let generation = crate::cancellation::Generation::default();
+        let token = generation.token().after_checkpoints(4);
+        let cancelled = cache
+            .with_preview(token, |cache| cache.prepare(&model))?
+            .is_none();
+        let retained = cache.operations.entries.len();
+        let hits_before = cache.operations.hits;
+        let recovered = cache.with_preview(generation.token(), |cache| cache.prepare(&model))?;
+        let recovery_hits = cache.operations.hits - hits_before;
+        let recovered = recovered.is_some();
+        generation.advance();
+        let export_model = cache.compile(source)?;
+        let exported_bodies = cache.prepare(&export_model)?.bodies.len();
+        let scope_cleared = cache.preview.is_none();
+        drop(cache);
+        drop(kernel);
+        assert!(cancelled);
+        assert_eq!(retained, 1);
+        assert!(recovered);
+        assert_eq!(recovery_hits, 1);
+        assert!(scope_cleared);
+        assert_eq!(exported_bodies, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_before_meshing_preserves_all_completed_predecessors() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = super::super::compile(
+            "local p=cad.box({width=20,depth=20,height=10});local q=cad.translate(p,{x=2});cad.show('part',cad.translate(q,{y=2}))",
+        )?;
+        let generation = crate::cancellation::Generation::default();
+        let cancelled = cache
+            .with_preview(generation.token().after_checkpoints(6), |cache| {
+                cache.prepare(&model)
+            })?
+            .is_none();
+        let retained = cache.operations.entries.len();
+        let completed_parts = cache.entries.len();
+        drop(cache);
+        drop(kernel);
+        assert!(cancelled);
+        assert_eq!(retained, 2);
+        assert_eq!(completed_parts, 0);
+        Ok(())
+    }
+
+    #[test]
     fn later_hole_edits_reuse_the_filleted_body_without_mutating_it() -> Result<(), String> {
         let kernel = Kernel::new()?;
         let mut cache = Cache::new(&kernel);
@@ -559,12 +647,24 @@ mod tests {
         let model = super::super::compile(source)?;
         let solid = model.parts[0].solid;
         let mut first_steps = 0;
-        model.build_solid_cached(&kernel, solid, &mut first_steps, Some(&mut operations))?;
+        model.build_solid_cached(
+            &kernel,
+            solid,
+            &mut first_steps,
+            Some(&mut operations),
+            None,
+        )?;
         let mut cached_steps = 0;
-        model.build_solid_cached(&kernel, solid, &mut cached_steps, Some(&mut operations))?;
+        model.build_solid_cached(
+            &kernel,
+            solid,
+            &mut cached_steps,
+            Some(&mut operations),
+            None,
+        )?;
         let mut near_limit = EVALUATION_COUNT_MAX - first_steps + 1;
         let exhausted = model
-            .build_solid_cached(&kernel, solid, &mut near_limit, Some(&mut operations))
+            .build_solid_cached(&kernel, solid, &mut near_limit, Some(&mut operations), None)
             .is_err();
         for width in 1..=40 {
             let model = super::super::compile(&format!(
@@ -575,6 +675,7 @@ mod tests {
                 model.parts[0].solid,
                 &mut 0,
                 Some(&mut operations),
+                None,
             )?;
         }
         let count = operations.entries.len();
