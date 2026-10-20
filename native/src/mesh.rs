@@ -120,37 +120,70 @@ impl Mesh {
         if !self.vertices.len().is_multiple_of(3) {
             return Err("Incomplete triangle".into());
         }
-        let mut edges = std::collections::BTreeMap::new();
-        for triangle in self.vertices.as_chunks::<3>().0.iter() {
-            for index in 0..3 {
-                let point = |vertex: &Vertex| {
-                    vertex
-                        .position
-                        .map(|value| (f64::from(value) * 1000.0).round() as i64)
-                };
-                if triangle[index]
-                    .position
-                    .iter()
-                    .any(|value| !value.is_finite())
-                {
+        const REVERSED_EDGE: u64 = 1 << 63;
+        assert!(self.vertices.len() < (1usize << 31));
+        let capacity = self.vertices.len() / 6 + 2;
+        let mut point_indices = std::collections::HashMap::with_capacity(capacity);
+        let mut edges = Vec::with_capacity(self.vertices.len());
+        for triangle in self.vertices.as_chunks::<3>().0 {
+            let mut indices = [0u32; 3];
+            for (index, vertex) in triangle.iter().enumerate() {
+                if vertex.position.iter().any(|value| !value.is_finite()) {
                     return Err("Non-finite mesh".into());
                 }
-                let a = point(&triangle[index]);
-                let b = point(&triangle[(index + 1) % 3]);
-                let (key, direction) = if a < b {
-                    ((a, b), 1_i32)
+                let point = vertex
+                    .position
+                    .map(|value| (f64::from(value) * 1000.0).round() as i64);
+                let next_index = point_indices.len() as u32;
+                indices[index] = *point_indices.entry(point).or_insert(next_index);
+            }
+            for index in 0..3 {
+                let a = indices[index];
+                let b = indices[(index + 1) % 3];
+                let edge = if a < b {
+                    (u64::from(a) << 32) | u64::from(b)
                 } else {
-                    ((b, a), -1_i32)
+                    (u64::from(b) << 32) | u64::from(a) | REVERSED_EDGE
                 };
-                let entry = edges.entry(key).or_insert((0_u32, 0_i32));
-                entry.0 += 1;
-                entry.1 += direction;
+                edges.push(edge);
             }
         }
-        if let Some((edge, (count, direction))) = edges
-            .iter()
-            .find(|(_, (count, direction))| *count != 2 || *direction != 0)
-        {
+        let key_mask = !REVERSED_EDGE;
+        edges.sort_unstable_by_key(|edge| *edge & key_mask);
+        let mut invalid_edge = None;
+        let mut diagnostic_points = None;
+        for group in edges.chunk_by(|first, second| *first & key_mask == *second & key_mask) {
+            let count = group.len() as u32;
+            let mut direction: i32 = group
+                .iter()
+                .map(|edge| if *edge & REVERSED_EDGE == 0 { 1 } else { -1 })
+                .sum();
+            if count == 2 && direction == 0 {
+                continue;
+            }
+            let points = diagnostic_points.get_or_insert_with(|| {
+                let mut points = vec![[0i64; 3]; point_indices.len()];
+                for (point, index) in &point_indices {
+                    points[*index as usize] = *point;
+                }
+                points
+            });
+            let key = group[0] & key_mask;
+            let mut a = points[(key >> 32) as usize];
+            let mut b = points[key as u32 as usize];
+            if b < a {
+                std::mem::swap(&mut a, &mut b);
+                direction = -direction;
+            }
+            let edge = (a, b);
+            if invalid_edge
+                .as_ref()
+                .is_none_or(|(previous, _, _)| edge < *previous)
+            {
+                invalid_edge = Some((edge, count, direction));
+            }
+        }
+        if let Some((edge, count, direction)) = invalid_edge {
             return Err(format!(
                 "Mesh is not closed and oriented at {edge:?} (0.001 mm units): {count} uses, orientation sum {direction}"
             ));
@@ -225,6 +258,87 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tetrahedron() -> Mesh {
+        let origin = [0.0; 3];
+        let x = [1.0, 0.0, 0.0];
+        let y = [0.0, 1.0, 0.0];
+        let z = [0.0, 0.0, 1.0];
+        Mesh {
+            face_count: 4,
+            vertices: [[origin, y, x], [origin, x, z], [origin, z, y], [x, y, z]]
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, points)| triangle(points, index as u32 + 1, [0.0; 3]))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn validation_preserves_first_edge_diagnostics_and_signed_volume_checks() -> Result<(), String>
+    {
+        let mut mesh = tetrahedron();
+        mesh.validate()?;
+        mesh.vertices.truncate(9);
+        assert_eq!(
+            mesh.validate().unwrap_err(),
+            "Mesh is not closed and oriented at ([0, 0, 1000], [0, 1000, 0]) (0.001 mm units): 1 uses, orientation sum 1"
+        );
+        let mut mesh = tetrahedron();
+        mesh.vertices.swap(1, 2);
+        assert_eq!(
+            mesh.validate().unwrap_err(),
+            "Mesh is not closed and oriented at ([0, 0, 0], [0, 1000, 0]) (0.001 mm units): 2 uses, orientation sum -2"
+        );
+        let mut mesh = tetrahedron();
+        mesh.vertices.extend(mesh.vertices.clone());
+        assert_eq!(
+            mesh.validate().unwrap_err(),
+            "Mesh is not closed and oriented at ([0, 0, 0], [0, 0, 1000]) (0.001 mm units): 4 uses, orientation sum 0"
+        );
+        let mut mesh = tetrahedron();
+        for triangle in mesh.vertices.as_chunks_mut::<3>().0 {
+            triangle.swap(1, 2);
+        }
+        assert_eq!(mesh.validate().unwrap_err(), "Mesh volume must be positive");
+        Ok(())
+    }
+
+    #[test]
+    fn validation_preserves_quantized_seams_and_rejects_bad_input() -> Result<(), String> {
+        let mut disconnected = tetrahedron();
+        let mut translated = tetrahedron();
+        for vertex in &mut translated.vertices {
+            vertex.position[0] -= 5.0;
+            vertex.position[2] -= 3.0;
+        }
+        translated.validate()?;
+        disconnected.vertices.extend(translated.vertices);
+        disconnected.validate()?;
+        let mut mesh = tetrahedron();
+        mesh.vertices[0].position[0] = 0.00049;
+        mesh.validate()?;
+        mesh.vertices[0].position[0] = 0.00051;
+        assert!(
+            mesh.validate()
+                .unwrap_err()
+                .contains("not closed and oriented")
+        );
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut mesh = tetrahedron();
+            mesh.vertices[11].position[2] = value;
+            assert_eq!(mesh.validate().unwrap_err(), "Non-finite mesh");
+        }
+        let mut mesh = tetrahedron();
+        mesh.vertices.pop();
+        assert_eq!(mesh.validate().unwrap_err(), "Incomplete triangle");
+        mesh.vertices.clear();
+        assert_eq!(
+            mesh.validate().unwrap_err(),
+            "Mesh exceeds its triangle budget"
+        );
+        Ok(())
+    }
 
     fn triangle(points: [[f32; 3]; 3], face_id: u32, normal: [f32; 3]) -> [Vertex; 3] {
         points.map(|position| Vertex {

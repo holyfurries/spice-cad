@@ -428,6 +428,7 @@ mod tests {
                         mut mesh,
                         volume_mm3,
                     } = stage("mesh and exact volume", || body.mesh())?;
+                    stage("mesh validation audit", || mesh.validate())?;
                     stage("normals", || mesh.smooth_normals());
                     let edges = stage("edges", || body.edges())?;
                     let bounds = stage("bounds", || body.bounds(true))?;
@@ -463,6 +464,24 @@ mod tests {
             "{allocations:?}"
         );
         assert!((tessellation.volume_mm3 - 49560.026).abs() < 0.001);
+        Ok(())
+    }
+
+    #[test]
+    fn closed_mesh_validation_keeps_compact_allocation_and_memory_budgets() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let model = super::super::compile(include_str!("../../models/mounting-bracket.luau"))?;
+        let mut bodies = model.build(&kernel)?;
+        let mesh = bodies[0].mesh()?.mesh;
+        drop(bodies);
+        drop(kernel);
+        let (result, allocations) = crate::allocations::measure(|| mesh.validate());
+        result?;
+        assert!(allocations.calls <= 2, "{allocations:?}");
+        assert!(
+            allocations.bytes < mesh.vertices.len() as u64 * 20,
+            "{allocations:?}"
+        );
         Ok(())
     }
 

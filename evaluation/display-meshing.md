@@ -96,3 +96,49 @@ GLB export were byte-identical to the previous implementation. STEP/STL export
 also succeeded; artifacts are under `output/normals-*`.
 All 187 workspace tests, the manual profiler, Clippy, rustfmt, and the native
 build passed after this change.
+
+## Closed-mesh validation
+
+Validation interns the existing 0.001 mm quantized positions, then stores each
+directed edge use in one 64-bit integer. Sorting those compact records replaces
+the tree of coordinate-pair keys. Each edge still requires exactly two uses
+with opposite directions, and the mesh must retain positive signed volume.
+The 300,000-vertex bound keeps point IDs safely below the reserved direction
+bit; no position precision or coordinate range was changed.
+
+Valid meshes use only the point-index table and packed edge vector. Coordinate
+lookup storage for diagnostics is allocated only after finding an invalid
+edge. Error reporting still chooses the lexicographically first bad coordinate
+pair and preserves its use count and orientation sum, independent of input
+traversal order. Disconnected components can grow the point table within the
+existing vertex budget.
+
+Regression checks cover open edges, reversed winding, duplicate/non-manifold
+surfaces, negative volume, disconnected translated components, quantized seam
+tolerance, non-finite coordinates, and incomplete/empty input. A bracket
+allocation check bounds valid-mesh scratch storage and allocation count.
+
+The manual stage profiler now includes a separate **mesh validation audit**.
+It repeats validation only to isolate its cost; the production mesh stage
+already contains its validation pass. Do not add the audit time to total
+display preparation.
+
+Three-sample debug audit medians for the bracket compared with `0116693`:
+
+| Validation metric | Coordinate-pair tree | Compact edge uses |
+| --- | ---: | ---: |
+| Time | 8.517 ms | 6.233 ms |
+| Rust allocation requests | 536 | 2 |
+| Requested bytes | 344,608 | 129,136 |
+
+Valid-mesh allocation requests fall by over 99%, with approximately 63% fewer
+requested scratch bytes. Complete `Body::mesh` preparation drops from roughly
+557 Rust allocation requests / 677,792 bytes to 23 requests / 462,320 bytes.
+Kernel-internal C++ allocations are not included. Timings varied with concurrent
+host activity; the table uses comparable-load runs and does not establish an
+application-wide speedup. Allocation figures remained stable across runs.
+
+All 190 workspace tests, Clippy, rustfmt, the manual profiler, and the native
+build passed. The bracket contact sheet and STL, and the rocket GLB, were
+byte-identical to the previous implementation. STEP export also succeeded;
+artifacts are under `output/validation-*`.
