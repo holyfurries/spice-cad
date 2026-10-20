@@ -1085,7 +1085,9 @@ impl Body<'_> {
                     / 2.0
             })
             .sum();
-        if (mesh.volume_mm3() - exact).abs() > area.mul_add(0.04, exact.abs().mul_add(1e-6, 0.01)) {
+        if (mesh.volume_mm3() - exact).abs()
+            > area.mul_add(2.0 * chord_mm, exact.abs().mul_add(1e-6, 0.01))
+        {
             return Err(format!(
                 "Tessellation volume {} differs from exact solid {exact} ({} triangles)",
                 mesh.volume_mm3(),
@@ -1141,6 +1143,22 @@ unsafe fn topology_list(first: *mut ffi::SmTopology) -> Result<Vec<*mut ffi::SmT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_cylinders_validate_at_their_requested_chord_tolerance() -> Result<(), String> {
+        let (preview, game) = {
+            let kernel = Kernel::new()?;
+            let mut body = kernel.cylinder([0.0; 3], 5.0, 10.0)?;
+            (body.mesh()?, body.game_mesh()?)
+        };
+        preview.mesh.validate()?;
+        game.mesh.validate()?;
+        assert_eq!(preview.volume_mm3, game.volume_mm3);
+        assert!((game.volume_mm3 - std::f64::consts::PI * 250.0).abs() < 1e-5);
+        assert!(game.mesh.vertices.len() < preview.mesh.vertices.len());
+        assert!((game.mesh.volume_mm3() - game.volume_mm3).abs() > 20.0);
+        Ok(())
+    }
 
     #[test]
     fn exact_volume_reuses_queries_meshes_and_rigid_copies() -> Result<(), String> {

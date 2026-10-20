@@ -42,13 +42,15 @@ nix develop -c cargo test --locked -p spice-cad --all-features exact_volume_
 This improves repeated work only. A newly changed filleted body still requires
 its original high-accuracy integration; no lower first-build latency is claimed.
 
-## Existing game-tessellation limitation
+## Game-tessellation validation correction
 
-The game chord tolerance is `0.25 mm`, but volume validation currently uses
+The investigation found that the `0.25 mm` game tessellation used
 the same area-based `0.04 mm` error envelope as the `0.02 mm` preview mesh.
-A radius-5 mm, height-10 mm cylinder therefore fails game validation: its
+A radius-5 mm, height-10 mm cylinder therefore failed game validation: its
 60-triangle mesh encloses about `765.272 mm³`, versus exact `785.398 mm³`.
-This occurs without memoization as well. The memo regression uses a height-2 mm
-cylinder, which passes both existing validation settings. Correcting the
-game-specific geometric error envelope is separate from exact-volume reuse;
-neither integration precision nor the validation gate was relaxed here.
+This occurred without memoization as well. A separate correction now derives the
+envelope from twice the requested chord tolerance, preserving the previous
+preview envelope and matching the game's intentionally coarser geometry.
+Independent exact integration remains at `1e-8`; closedness, orientation,
+positive volume and the mesh-versus-solid comparison remain mandatory.
+A regression covers this cylinder at both tessellation qualities.
