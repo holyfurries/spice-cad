@@ -536,7 +536,7 @@ fn cache_matches(
                         let b = &second.face_features[b];
                         if !a.face.geometry_matches(&b.face)
                             || a.offset != b.offset
-                            || a.size != b.size
+                            || a.shape != b.shape
                             || a.depth != b.depth
                             || a.kind != b.kind
                         {
@@ -550,6 +550,7 @@ fn cache_matches(
                             || a.offset != b.offset
                             || a.radius != b.radius
                             || a.depth != b.depth
+                            || a.recess != b.recess
                         {
                             return false;
                         }

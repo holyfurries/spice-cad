@@ -12,6 +12,18 @@ passes through to the far bound of the entire solid; explicit depth creates a
 blind cut, or breaks through when it exceeds the available material. A 0.01 mm
 external overlap avoids coincident cutter caps without extending blind depth.
 
+Add `counterbore={radius=4,depth=2}` for a cylindrical screw-head seat, or
+`countersink={radius=4,angle=90}` for a conical seat. These options are mutually
+exclusive. The outer radius must exceed the main hole radius and remain within
+the normal 0.01–1000 mm dimension limit. Counterbore depth uses that same limit.
+Countersink angle is the included angle in degrees, defaults to 90°, and must
+be finite within 1–179°. Its axial depth is `(outer_radius-radius)/tan(angle/2)`
+and must not exceed 1000 mm. An explicit blind-hole depth must accommodate the
+entire seat; omitted depth preserves the through-hole behavior. A seat may
+break through thin material or cross a face boundary. Both remain analytic
+cylinder/cone booleans, with the requested outer radius measured at the face.
+See `models/manufacturing-panel.luau` for both screw-head styles.
+
 Selection shares the measurement selector's normal, `at`, and nearest-center
 `near` rules, with 0.001 mm selector tolerance. Modeling queries the B-rep's
 surface planarity and tight trimmed-face bounds without intermediate meshes.
@@ -31,7 +43,7 @@ Measurements still require final output faces; a fixed 64-entry index map
 preserves measurement references when intermediate handles are skipped.
 
 Cache comparison includes the input geometry, normal/at/near selector, offsets,
-radius, and depth. Renaming a reference or changing output placement preserves
+radius, depth, and screw-seat type/dimensions/angle. Renaming a reference or changing output placement preserves
 the cached geometry. Movement-only cache hits bypass face resolution.
 
 Three local debug runs of `spice-cad --check-model models/mounting-bracket.luau`

@@ -3,6 +3,7 @@ use mlua::Table;
 
 pub const POINT_COUNT_MAX: usize = 128;
 
+#[derive(Clone, PartialEq)]
 pub struct Polygon {
     pub points: Vec<[f64; 2]>,
 }

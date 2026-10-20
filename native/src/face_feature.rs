@@ -9,10 +9,16 @@ pub enum Kind {
     Boss,
 }
 
+#[derive(PartialEq)]
+pub enum Shape {
+    Rectangle([f64; 2]),
+    Profile(crate::profile::Polygon),
+}
+
 pub struct Recipe {
     pub face: Selector,
     pub offset: [f64; 2],
-    pub size: [f64; 2],
+    pub shape: Shape,
     pub depth: f64,
     pub kind: Kind,
 }
@@ -36,6 +42,57 @@ impl Recipe {
         assert!(self.depth > 0.0);
         let center = body.planar_feature_origin(&self.face, self.offset)?;
         let axis = self.face.axis;
+        let outward = if self.face.positive { 1.0 } else { -1.0 };
+        let direction = match self.kind {
+            Kind::Pocket => -outward,
+            Kind::Boss => outward,
+        };
+        if let Shape::Profile(polygon) = &self.shape {
+            let mut points: Vec<_> = polygon
+                .points
+                .iter()
+                .map(|&[u, v]| match (axis, direction > 0.0) {
+                    (0, true) => [-v, u],
+                    (0, false) => [v, u],
+                    (1, true) => [u, -v],
+                    (1, false) => [u, v],
+                    (2, true) => [u, v],
+                    (2, false) => [u, -v],
+                    _ => unreachable!(),
+                })
+                .collect();
+            if matches!((axis, direction > 0.0), (0, false) | (1, true) | (2, false)) {
+                points.reverse();
+            }
+            let polygon = crate::profile::Polygon { points };
+            let mut feature = kernel.sweep_profile(
+                &polygon,
+                crate::kernel::ProfileSweep::Extrude {
+                    height_mm: self.depth + 0.01,
+                },
+            )?;
+            match (axis, direction > 0.0) {
+                (0, positive) => {
+                    feature.rotate([0.0, 1.0, 0.0], if positive { 90.0 } else { -90.0 })?
+                }
+                (1, positive) => {
+                    feature.rotate([1.0, 0.0, 0.0], if positive { -90.0 } else { 90.0 })?
+                }
+                (2, false) => feature.rotate([1.0, 0.0, 0.0], 180.0)?,
+                (2, true) => {}
+                _ => unreachable!(),
+            }
+            let mut origin = center;
+            origin[axis] -= direction * 0.01;
+            feature.translate(origin.to_array())?;
+            return match self.kind {
+                Kind::Pocket => body.subtract(feature),
+                Kind::Boss => body.union(feature),
+            };
+        }
+        let Shape::Rectangle(size) = &self.shape else {
+            unreachable!()
+        };
         let axes = match axis {
             0 => [1, 2],
             1 => [0, 2],
@@ -45,14 +102,9 @@ impl Recipe {
         let mut minimum = center;
         let mut maximum = center;
         for (index, local_axis) in axes.into_iter().enumerate() {
-            minimum[local_axis] -= self.size[index] * 0.5;
-            maximum[local_axis] += self.size[index] * 0.5;
+            minimum[local_axis] -= size[index] * 0.5;
+            maximum[local_axis] += size[index] * 0.5;
         }
-        let outward = if self.face.positive { 1.0 } else { -1.0 };
-        let direction = match self.kind {
-            Kind::Pocket => -outward,
-            Kind::Boss => outward,
-        };
         let end = center[axis] + direction * self.depth;
         let overlap = center[axis] - direction * 0.01;
         minimum[axis] = end.min(overlap);
@@ -69,6 +121,118 @@ impl Recipe {
 mod tests {
     use crate::{kernel::Kernel, model::Cache};
     use std::sync::Arc;
+
+    #[test]
+    fn manufacturing_example_combines_profile_features_and_screw_seats() -> Result<(), String> {
+        let snapshot =
+            crate::build_script_snapshot(include_str!("../../models/manufacturing-panel.luau"), 1)?;
+        let expected = 80.0 * 60.0 * 8.0 - 292.0 * 3.0 + 84.5 * 4.0
+            - std::f64::consts::PI * (56.0 + 128.0 / 3.0);
+        assert!((snapshot.volume_mm3 - expected).abs() < 0.001);
+        snapshot.scene.world_mesh().validate()?;
+        assert_eq!(snapshot.scene.parts.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn concave_profile_features_keep_world_uv_axes_on_all_six_normals() -> Result<(), String> {
+        for normal in ["x+", "x-", "y+", "y-", "z+", "z-"] {
+            for operation in ["pocket", "boss"] {
+                let source = format!(
+                    "local p=cad.box({{width=20,depth=20,height=20,x=-10,y=-10,z=-10}});local profile=cad.polygon({{{{x=0,y=0}},{{x=4,y=0}},{{x=4,y=1}},{{x=1,y=1}},{{x=1,y=3}},{{x=0,y=3}}}});local f=cad.face(p,{{name='support',normal='{normal}'}});cad.show('part',cad.{operation}(p,{{face=f,profile=profile,depth=4,u=2,v=-1}}))"
+                );
+                let snapshot = crate::build_script_snapshot(&source, 1)?;
+                let expected = if operation == "boss" { 8024.0 } else { 7976.0 };
+                assert!(
+                    (snapshot.volume_mm3 - expected).abs() < 0.001,
+                    "{normal} {operation}: {}",
+                    snapshot.volume_mm3
+                );
+                let axis = match normal.as_bytes()[0] {
+                    b'x' => 0,
+                    b'y' => 1,
+                    _ => 2,
+                };
+                let [u, v] = match axis {
+                    0 => [1, 2],
+                    1 => [0, 2],
+                    _ => [0, 1],
+                };
+                let distance = if operation == "boss" { 14.0 } else { 6.0 };
+                let tip = if normal.ends_with('+') {
+                    distance
+                } else {
+                    -distance
+                };
+                let mesh = snapshot.scene.world_mesh();
+                mesh.validate()?;
+                let points: Vec<_> = mesh
+                    .vertices
+                    .iter()
+                    .filter(|vertex| (vertex.position[axis] - tip).abs() < 0.001)
+                    .map(|vertex| vertex.position)
+                    .collect();
+                assert!(!points.is_empty());
+                for [expected_u, expected_v] in [
+                    [2.0, -1.0],
+                    [6.0, -1.0],
+                    [6.0, 0.0],
+                    [3.0, 0.0],
+                    [3.0, 2.0],
+                    [2.0, 2.0],
+                ] {
+                    assert!(
+                        points
+                            .iter()
+                            .any(|point| (point[u] - expected_u).abs() < 0.001
+                                && (point[v] - expected_v).abs() < 0.001),
+                        "{normal} {operation}: missing {expected_u},{expected_v}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn profile_features_validate_options_and_cache_profile_coordinates() -> Result<(), String> {
+        let base = "local p=cad.box({width=20,depth=20,height=8});local profile=cad.polygon({{x=-2,y=-1},{x=3,y=-1},{x=0,y=2}});local f=cad.face(p,{name='top',normal='z+'});";
+        for operation in ["pocket", "boss"] {
+            for options in [
+                "{face=f,profile=profile,width=2,height=2,depth=3}",
+                "{face=f,profile=p,depth=3}",
+                "{face=f,profile=profile,depth=0}",
+                "{face=f,profile=profile,depth=3,u=math.huge}",
+            ] {
+                assert!(
+                    crate::model::compile(&format!(
+                        "{base}cad.show('bad',cad.{operation}(p,{options}))"
+                    ))
+                    .is_err()
+                );
+            }
+        }
+        let source =
+            format!("{base}cad.show('part',cad.pocket(p,{{face=f,profile=profile,depth=3}}))");
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = cache.compile(&source)?;
+        let prepared = cache.prepare(&model)?;
+        let original = Arc::clone(&prepared.geometry[0]);
+        let model = cache.compile(&source.replace("'top'", "'renamed'"))?;
+        let prepared = cache.prepare(&model)?;
+        assert!(Arc::ptr_eq(&original, &prepared.geometry[0]));
+        for edited in [
+            source.replace("x=3,y=-1", "x=4,y=-1"),
+            source.replace("pocket", "boss"),
+        ] {
+            let model = cache.compile(&edited)?;
+            let prepared = cache.prepare(&model)?;
+            assert_eq!(prepared.hits, 0);
+            assert!(!Arc::ptr_eq(&original, &prepared.geometry[0]));
+        }
+        Ok(())
+    }
 
     #[test]
     fn face_features_preserve_depth_and_local_axes_on_all_six_normals() -> Result<(), String> {

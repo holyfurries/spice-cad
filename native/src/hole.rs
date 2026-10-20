@@ -3,11 +3,35 @@ use crate::{
     kernel::{Body, Kernel},
 };
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Recess {
+    Counterbore { radius: f64, depth: f64 },
+    Countersink { radius: f64, angle: f64 },
+}
+
+impl Recess {
+    pub fn depth(self, hole_radius: f64) -> f64 {
+        assert!(hole_radius.is_finite());
+        assert!(hole_radius > 0.0);
+        match self {
+            Self::Counterbore { depth, .. } => depth,
+            Self::Countersink {
+                radius,
+                angle: 90.0,
+            } => radius - hole_radius,
+            Self::Countersink { radius, angle } => {
+                (radius - hole_radius) / (angle.to_radians() * 0.5).tan()
+            }
+        }
+    }
+}
+
 pub struct Recipe {
     pub face: Selector,
     pub offset: [f64; 2],
     pub radius: f64,
     pub depth: Option<f64>,
+    pub recess: Option<Recess>,
 }
 
 impl Recipe {
@@ -49,6 +73,30 @@ impl Recipe {
                 2.0 * margin_mm
             };
         let mut cutter = kernel.cylinder([0.0; 3], self.radius, height)?;
+        if let Some(recess) = self.recess {
+            let recess = match recess {
+                Recess::Counterbore { radius, depth } => {
+                    kernel.cylinder([0.0; 3], radius, depth + margin_mm)?
+                }
+                Recess::Countersink { radius, .. } => {
+                    let depth = recess.depth(self.radius);
+                    let polygon = crate::profile::Polygon {
+                        points: vec![
+                            [0.0, 0.0],
+                            [radius, 0.0],
+                            [radius, margin_mm],
+                            [self.radius, depth + margin_mm],
+                            [0.0, depth + margin_mm],
+                        ],
+                    };
+                    kernel.sweep_profile(
+                        &polygon,
+                        crate::kernel::ProfileSweep::Revolve { angle_deg: 360.0 },
+                    )?
+                }
+            };
+            cutter.union(recess)?;
+        }
         match (axis, self.face.positive) {
             (0, true) => cutter.rotate([0.0, 1.0, 0.0], -90.0)?,
             (0, false) => cutter.rotate([0.0, 1.0, 0.0], 90.0)?,
@@ -68,6 +116,108 @@ impl Recipe {
 mod tests {
     use crate::{kernel::Kernel, model::Cache};
     use std::sync::Arc;
+
+    #[test]
+    fn recessed_holes_preserve_analytic_volumes_and_blind_floors_on_six_normals()
+    -> Result<(), String> {
+        for normal in ["x+", "x-", "y+", "y-", "z+", "z-"] {
+            for (recess, extra_over_pi) in [
+                ("counterbore={radius=4,depth=2}", 24.0),
+                ("countersink={radius=4}", 32.0 / 3.0),
+                (
+                    "countersink={radius=4,angle=120}",
+                    (32.0 / 3.0) / 3.0_f64.sqrt(),
+                ),
+            ] {
+                for depth in [None, Some(6.0)] {
+                    let depth_option =
+                        depth.map_or(String::new(), |depth| format!(",depth={depth}"));
+                    let source = format!(
+                        "local p=cad.box({{width=20,depth=20,height=20,x=-10,y=-10,z=-10}});local f=cad.face(p,{{name='mount',normal='{normal}'}});cad.show('part',cad.hole(p,{{face=f,radius=2,u=2,v=-1,{recess}{depth_option}}}))"
+                    );
+                    let snapshot = crate::build_script_snapshot(&source, 1)?;
+                    let expected = 8000.0
+                        - std::f64::consts::PI * (4.0 * depth.unwrap_or(20.0) + extra_over_pi);
+                    assert!(
+                        (snapshot.volume_mm3 - expected).abs() < 0.001,
+                        "{normal} {recess} {depth:?}: {} vs {expected}",
+                        snapshot.volume_mm3
+                    );
+                    snapshot.scene.world_mesh().validate()?;
+                    if depth.is_some() {
+                        let axis = match normal.as_bytes()[0] {
+                            b'x' => 0,
+                            b'y' => 1,
+                            _ => 2,
+                        };
+                        let floor = if normal.ends_with('+') { 4.0 } else { -4.0 };
+                        assert!(
+                            snapshot
+                                .scene
+                                .world_mesh()
+                                .vertices
+                                .iter()
+                                .any(|vertex| (vertex.position[axis] - floor).abs() < 0.001)
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn recessed_holes_reject_invalid_geometry_and_cache_all_recess_inputs() -> Result<(), String> {
+        let base = "local p=cad.box({width=20,depth=20,height=8});local f=cad.face(p,{name='mount',normal='z+'});";
+        for options in [
+            "counterbore={radius=4,depth=2},countersink={radius=4}",
+            "counterbore={radius=2,depth=2}",
+            "counterbore={radius=4,depth=0}",
+            "counterbore={radius=4,depth=7},depth=6",
+            "counterbore={radius=4,depth=2,angle=90}",
+            "countersink={radius=1}",
+            "countersink={radius=4,angle=0}",
+            "countersink={radius=4,angle=180}",
+            "countersink={radius=4,angle=0/0}",
+            "countersink={radius=4,angle=10},depth=2",
+            "countersink={radius=1000,angle=1}",
+            "countersink={radius=4,depth=2}",
+        ] {
+            assert!(
+                crate::model::compile(&format!(
+                    "{base}cad.show('bad',cad.hole(p,{{face=f,radius=2,{options}}}))"
+                ))
+                .is_err(),
+                "{options}"
+            );
+        }
+        let source = format!(
+            "{base}cad.show('part',cad.hole(p,{{face=f,radius=2,depth=6,countersink={{radius=4,angle=90}}}}))"
+        );
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = cache.compile(&source)?;
+        let prepared = cache.prepare(&model)?;
+        let original = Arc::clone(&prepared.geometry[0]);
+        let model = cache.compile(&source.replace("'mount'", "'renamed'"))?;
+        let prepared = cache.prepare(&model)?;
+        assert!(Arc::ptr_eq(&original, &prepared.geometry[0]));
+        for (from, to) in [
+            ("radius=4", "radius=5"),
+            ("angle=90", "angle=120"),
+            (
+                "countersink={radius=4,angle=90}",
+                "counterbore={radius=4,depth=2}",
+            ),
+            (",countersink={radius=4,angle=90}", ""),
+        ] {
+            let model = cache.compile(&source.replace(from, to))?;
+            let prepared = cache.prepare(&model)?;
+            assert_eq!(prepared.hits, 0, "{from}");
+            assert!(!Arc::ptr_eq(&original, &prepared.geometry[0]));
+        }
+        Ok(())
+    }
 
     #[test]
     fn face_holes_cut_inward_on_all_six_sides_with_exact_blind_depth() -> Result<(), String> {

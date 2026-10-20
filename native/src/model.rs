@@ -450,7 +450,18 @@ pub fn compile_cached(
     cad.set(
         "hole",
         lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
-            options_fields(&options, &["face", "u", "v", "radius", "depth"])?;
+            options_fields(
+                &options,
+                &[
+                    "face",
+                    "u",
+                    "v",
+                    "radius",
+                    "depth",
+                    "counterbore",
+                    "countersink",
+                ],
+            )?;
             let source = solid.borrow::<Solid>()?.0;
             let face_index = options
                 .get::<AnyUserData>("face")?
@@ -462,6 +473,56 @@ pub fn compile_cached(
             } else {
                 None
             };
+            let counterbore = options.get::<Option<Table>>("counterbore")?;
+            let countersink = options.get::<Option<Table>>("countersink")?;
+            if counterbore.is_some() && countersink.is_some() {
+                return Err(mlua::Error::runtime(
+                    "Use counterbore or countersink, not both",
+                ));
+            }
+            let recess = if let Some(options) = counterbore {
+                options_fields(&options, &["radius", "depth"])?;
+                Some(crate::hole::Recess::Counterbore {
+                    radius: dimension(&options, "radius")?,
+                    depth: dimension(&options, "depth")?,
+                })
+            } else if let Some(options) = countersink {
+                options_fields(&options, &["radius", "angle"])?;
+                let angle = options.get::<Option<f64>>("angle")?.unwrap_or(90.0);
+                if !angle.is_finite() || !(1.0..=179.0).contains(&angle) {
+                    return Err(mlua::Error::runtime(
+                        "Countersink included angle must be between 1 and 179 degrees",
+                    ));
+                }
+                Some(crate::hole::Recess::Countersink {
+                    radius: dimension(&options, "radius")?,
+                    angle,
+                })
+            } else {
+                None
+            };
+            if let Some(recess) = recess {
+                let outer_radius = match recess {
+                    crate::hole::Recess::Counterbore { radius, .. }
+                    | crate::hole::Recess::Countersink { radius, .. } => radius,
+                };
+                if outer_radius <= radius {
+                    return Err(mlua::Error::runtime(
+                        "Recess radius must exceed hole radius",
+                    ));
+                }
+                let recess_depth = recess.depth(radius);
+                if !recess_depth.is_finite() || recess_depth > 1000.0 {
+                    return Err(mlua::Error::runtime("Recess depth must not exceed 1000 mm"));
+                }
+                if let Some(depth) = depth {
+                    if recess_depth > depth {
+                        return Err(mlua::Error::runtime(
+                            "Recess depth must not exceed blind hole depth",
+                        ));
+                    }
+                }
+            }
             let u = options.get::<Option<f64>>("u")?.unwrap_or(0.0);
             let v = options.get::<Option<f64>>("v")?.unwrap_or(0.0);
             if !u.is_finite() || !v.is_finite() || u.abs() > 2000.0 || v.abs() > 2000.0 {
@@ -481,6 +542,7 @@ pub fn compile_cached(
                     offset: [u, v],
                     radius,
                     depth,
+                    recess,
                 });
                 index
             };
@@ -504,16 +566,32 @@ pub fn compile_cached(
         cad.set(
             name,
             lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
-                options_fields(&options, &["face", "width", "height", "depth", "u", "v"])?;
+                options_fields(
+                    &options,
+                    &["face", "width", "height", "profile", "depth", "u", "v"],
+                )?;
                 let source = solid.borrow::<Solid>()?.0;
                 let face_index = options
                     .get::<AnyUserData>("face")?
                     .borrow::<crate::dimensions::Face>()?
                     .0;
-                let size = [
-                    dimension(&options, "width")?,
-                    dimension(&options, "height")?,
-                ];
+                let shape = if options.contains_key("profile")? {
+                    if options.contains_key("width")? || options.contains_key("height")? {
+                        return Err(mlua::Error::runtime(
+                            "Use profile or width/height, not both",
+                        ));
+                    }
+                    let index = options
+                        .get::<AnyUserData>("profile")?
+                        .borrow::<Profile>()?
+                        .0;
+                    crate::face_feature::Shape::Profile(state.borrow().profiles[index].clone())
+                } else {
+                    crate::face_feature::Shape::Rectangle([
+                        dimension(&options, "width")?,
+                        dimension(&options, "height")?,
+                    ])
+                };
                 let depth = dimension(&options, "depth")?;
                 let offset = [
                     options.get::<Option<f64>>("u")?.unwrap_or(0.0),
@@ -537,7 +615,7 @@ pub fn compile_cached(
                     recipe.face_features.push(crate::face_feature::Recipe {
                         face,
                         offset,
-                        size,
+                        shape,
                         depth,
                         kind,
                     });
