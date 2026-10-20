@@ -6,6 +6,7 @@ use std::ops::Range;
 
 const PARAMETER_COUNT_MAX: usize = 64;
 const LITERAL_BYTES_MAX: usize = 128;
+const PARSE_PROGRESS_COUNT_MAX: u32 = 262_144;
 
 #[derive(Clone)]
 enum Control {
@@ -145,7 +146,7 @@ pub struct Parameter {
     property: Property,
 }
 
-fn parse_source(source: &str) -> Option<(Rope, tree_sitter::Tree)> {
+fn parse_source(source: &str, progress_count_max: u32) -> Option<(Rope, tree_sitter::Tree)> {
     if source.len() > crate::text_buffer::SIZE_BYTES_MAX {
         return None;
     }
@@ -153,8 +154,14 @@ fn parse_source(source: &str) -> Option<(Rope, tree_sitter::Tree)> {
     parser
         .set_language(&tree_sitter_luau::LANGUAGE.into())
         .ok()?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-    let mut cancelled = |_: &tree_sitter::ParseState| std::time::Instant::now() >= deadline;
+    let mut remaining = progress_count_max;
+    let mut cancelled = |_: &tree_sitter::ParseState| {
+        if remaining == 0 {
+            return true;
+        }
+        remaining -= 1;
+        false
+    };
     let tree = parser.parse_with_options(
         &mut |offset, _| source.as_bytes().get(offset..).unwrap_or_default(),
         None,
@@ -182,7 +189,7 @@ impl Parameter {
 }
 
 pub fn analyze_source(source: &str) -> Option<(String, Vec<Parameter>)> {
-    let (rope, tree) = parse_source(source)?;
+    let (rope, tree) = parse_source(source, PARSE_PROGRESS_COUNT_MAX)?;
     let mut key = String::with_capacity(source.len());
     let mut previous = 0;
     let parameters = extract(&rope, &tree);
@@ -778,6 +785,29 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_valid_source_keeps_parameter_declarations_without_a_wall_clock_deadline() {
+        let mut source = String::from("local width = cad.number(20, {min=1,max=100})\n");
+        source.push_str(&"local value = 1\n".repeat(100_000));
+        let (_, parameters) = analyze_source(&source).expect("Large valid source parses");
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(parameters[0].name, "width");
+        assert_eq!(parameters[0].literal, "20");
+        assert_eq!(parameters[0].line, 1);
+    }
+
+    #[test]
+    fn parameter_parser_enforces_work_and_input_budgets() {
+        let source = "local value = 1\n".repeat(1_000);
+        assert!(parse_source(&source, 0).is_none());
+        assert!(parse_source(&source, 1).is_none());
+        let (_, tree) = parse_source(&source, PARSE_PROGRESS_COUNT_MAX)
+            .expect("The same source succeeds with the production work budget");
+        assert!(!tree.root_node().has_error());
+        let oversized = " ".repeat(crate::text_buffer::SIZE_BYTES_MAX + 1);
+        assert!(parse_source(&oversized, PARSE_PROGRESS_COUNT_MAX).is_none());
+    }
 
     fn controls(
         state: &mut State,
