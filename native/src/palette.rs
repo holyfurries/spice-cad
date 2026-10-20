@@ -53,16 +53,16 @@ pub enum Command {
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
-    (Command::NewModel, "File: new model", "Ctrl+N"),
+    (Command::NewModel, "File: new model", "Ctrl+Shift+N"),
     (Command::SaveAs, "File: save model as", "Ctrl+Shift+S"),
     (Command::AutoPreview, "Model: toggle live preview", ""),
-    (Command::Open, "File: browse models", "Ctrl+O"),
+    (Command::Open, "File: browse models", "Ctrl+Shift+O"),
     (Command::Run, "Model: run source", "Ctrl+Enter"),
     (Command::Save, "File: save model", "Ctrl+S"),
     (Command::Export, "File: export STEP and STL", ""),
     (Command::ExportGame, "File: export game asset GLB", ""),
-    (Command::Find, "Edit: find", "Ctrl+F"),
-    (Command::Replace, "Edit: replace", "Ctrl+H"),
+    (Command::Find, "Edit: find", "Ctrl+Shift+F"),
+    (Command::Replace, "Edit: replace", "Ctrl+Shift+H"),
     (Command::Code, "View: focus code", "Ctrl+1"),
     (Command::Split, "View: split code and model", "Ctrl+2"),
     (Command::Model, "View: focus model", "Ctrl+3"),

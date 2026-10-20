@@ -7,7 +7,7 @@
 - Ctrl+Shift+P: command palette. Search actions, inspect their shortcuts, and use
   the same Run, Save, export, view and example-loading paths as the toolbar.
 - Up/Down selects a result; Enter accepts; Escape or clicking outside cancels.
-- The File menu exposes both palettes and the existing Ctrl+O path browser.
+- The File menu exposes both palettes and the Ctrl+Shift+O path browser.
 - Parameters opens source-derived numeric fields. Enter or blur commits, Escape
   cancels, and Save/Run commit the focused draft before acting on the source.
   Undo in the source editor reverses one complete parameter edit.

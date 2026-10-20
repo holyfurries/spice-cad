@@ -48,6 +48,41 @@ pub struct State {
 }
 
 impl State {
+    pub fn route_vim_clipboard(&self, context: &egui::Context, input: &mut egui::RawInput) {
+        if !self.vim_owns_shortcuts(context) {
+            return;
+        }
+        let mut modifiers = context.input(|input| input.modifiers);
+        for event in &mut input.events {
+            if let egui::Event::ModifiersChanged(changed) = event {
+                modifiers = *changed;
+                continue;
+            }
+            if !modifiers.ctrl || modifiers.shift || modifiers.alt || modifiers.mac_cmd {
+                continue;
+            }
+            let key = match event {
+                egui::Event::Cut => egui::Key::X,
+                egui::Event::Copy => egui::Key::C,
+                egui::Event::Paste(_) => egui::Key::V,
+                _ => continue,
+            };
+            *event = egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+        }
+    }
+
+    pub fn vim_owns_shortcuts(&self, context: &egui::Context) -> bool {
+        self.modal.enabled
+            && context.memory(|memory| memory.has_focus(egui::Id::unique("luau_source")))
+            && !egui::Popup::is_any_open(context)
+    }
+
     fn invalidate_source(&mut self, source: &Buffer) {
         let Some(change) = source
             .change
@@ -200,6 +235,7 @@ impl State {
 
 pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
     let before = source.revision;
+    let mut scroll_lines = 0_i32;
     let search_was_open = state.search.is_open();
     let mut search_handoff = false;
     state.cursor = state.cursor.min(source.rope.len_chars());
@@ -331,14 +367,6 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                     state.reveal = true;
                 }
                 egui::Event::Text(text) | egui::Event::Paste(text) => state.insert(source, &text),
-                egui::Event::Copy
-                    if state.modal.enabled && state.modal.mode == crate::modal::Mode::Insert =>
-                {
-                    state
-                        .modal
-                        .escape(source, &mut state.cursor, &mut state.anchor);
-                    state.reveal = true;
-                }
                 egui::Event::Copy | egui::Event::Cut => {
                     let selection = state.selection(source);
                     if !selection.is_empty() {
@@ -377,31 +405,163 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                             state.reveal = true;
                             continue;
                         }
-                        if state.modal.mode == crate::modal::Mode::Normal && modifiers.ctrl {
-                            if matches!(key, egui::Key::D | egui::Key::U) {
-                                let line = source.rope.char_to_line(state.cursor);
-                                let column = state.cursor - source.rope.line_to_char(line);
-                                let distance =
-                                    (available.height() / row_height / 2.0).max(1.0) as usize;
-                                let target = if key == egui::Key::U {
-                                    line.saturating_sub(distance)
-                                } else {
-                                    (line + distance).min(source.rope.len_lines() - 1)
-                                };
-                                state.cursor = source.rope.line_to_char(target)
-                                    + column.min(line_length(source.rope.line(target)));
-                                state.anchor = state.cursor;
+                        if modifiers.ctrl
+                            && !modifiers.alt
+                            && !modifiers.shift
+                            && !modifiers.mac_cmd
+                        {
+                            state.modal.error = None;
+                            let mode = state.modal.mode;
+                            if key == egui::Key::OpenBracket || key == egui::Key::C {
+                                state
+                                    .modal
+                                    .escape(source, &mut state.cursor, &mut state.anchor);
                                 state.reveal = true;
-                                state.center_cursor = true;
                                 continue;
                             }
-                            if matches!(key, egui::Key::J | egui::Key::K) {
-                                state.action = Some(match key {
-                                    egui::Key::J => crate::modal::Action::PreviousDiagnostic,
-                                    _ => crate::modal::Action::NextDiagnostic,
-                                });
-                                continue;
+                            if matches!(
+                                mode,
+                                crate::modal::Mode::Normal
+                                    | crate::modal::Mode::Visual
+                                    | crate::modal::Mode::VisualLine
+                            ) {
+                                if key == egui::Key::N || key == egui::Key::P {
+                                    state.action = state.modal.text(
+                                        if key == egui::Key::N { "j" } else { "k" },
+                                        source,
+                                        &mut state.cursor,
+                                        &mut state.anchor,
+                                    );
+                                    state.reveal = true;
+                                    continue;
+                                }
+                                if matches!(key, egui::Key::A | egui::Key::X) {
+                                    state.modal.change_number(
+                                        source,
+                                        &mut state.cursor,
+                                        &mut state.anchor,
+                                        key == egui::Key::X,
+                                    );
+                                    state.reveal = true;
+                                    continue;
+                                }
+                                if matches!(key, egui::Key::E | egui::Key::Y) {
+                                    let count = state.modal.take_count(1) as i32;
+                                    scroll_lines +=
+                                        if key == egui::Key::E { count } else { -count };
+                                    state.reveal = false;
+                                    continue;
+                                }
                             }
+                            if mode == crate::modal::Mode::Normal {
+                                if matches!(
+                                    key,
+                                    egui::Key::D | egui::Key::U | egui::Key::B | egui::Key::F
+                                ) {
+                                    let line = source.rope.char_to_line(state.cursor);
+                                    let column = state.cursor - source.rope.line_to_char(line);
+                                    let divisor = if matches!(key, egui::Key::D | egui::Key::U) {
+                                        2.0
+                                    } else {
+                                        1.0
+                                    };
+                                    let page = (available.height() / row_height / divisor).max(1.0)
+                                        as usize;
+                                    let half = divisor == 2.0;
+                                    let distance = if half {
+                                        state.modal.take_count(page)
+                                    } else {
+                                        page.saturating_sub(2).max(1) * state.modal.take_count(1)
+                                    };
+                                    let target = if matches!(key, egui::Key::U | egui::Key::B) {
+                                        line.saturating_sub(distance)
+                                    } else {
+                                        (line + distance).min(source.rope.len_lines() - 1)
+                                    };
+                                    state.cursor = source.rope.line_to_char(target)
+                                        + column.min(line_length(source.rope.line(target)));
+                                    state.anchor = state.cursor;
+                                    state.reveal = half;
+                                    state.center_cursor = half;
+                                    if !half {
+                                        scroll_lines += if matches!(key, egui::Key::F) {
+                                            distance as i32
+                                        } else {
+                                            -(distance as i32)
+                                        };
+                                    }
+                                    continue;
+                                }
+                                if matches!(key, egui::Key::J | egui::Key::K) {
+                                    state.action = Some(match key {
+                                        egui::Key::J => crate::modal::Action::PreviousDiagnostic,
+                                        _ => crate::modal::Action::NextDiagnostic,
+                                    });
+                                    continue;
+                                }
+                                if key == egui::Key::R {
+                                    if let Some(cursor) = source.undo(true) {
+                                        state.cursor = cursor;
+                                        state.anchor = cursor;
+                                        state.reveal = true;
+                                    }
+                                    continue;
+                                }
+                                if key == egui::Key::H {
+                                    state.action = state.modal.text(
+                                        "h",
+                                        source,
+                                        &mut state.cursor,
+                                        &mut state.anchor,
+                                    );
+                                    state.reveal = true;
+                                    continue;
+                                }
+                            }
+                            if mode == crate::modal::Mode::Insert {
+                                if matches!(key, egui::Key::N | egui::Key::P) {
+                                    state.action = Some(crate::modal::Action::Complete);
+                                    continue;
+                                }
+                                let start = source
+                                    .rope
+                                    .line_to_char(source.rope.char_to_line(state.cursor));
+                                if matches!(key, egui::Key::H | egui::Key::W | egui::Key::U) {
+                                    let mut target = state.cursor;
+                                    if key == egui::Key::H {
+                                        target = target.saturating_sub(1);
+                                    } else if key == egui::Key::U {
+                                        target = start;
+                                    } else {
+                                        while target > start
+                                            && source.rope.char(target - 1).is_whitespace()
+                                        {
+                                            target -= 1;
+                                        }
+                                        if target > start {
+                                            let word = |character: char| {
+                                                character.is_alphanumeric() || character == '_'
+                                            };
+                                            let class = word(source.rope.char(target - 1));
+                                            while target > start
+                                                && !source.rope.char(target - 1).is_whitespace()
+                                                && word(source.rope.char(target - 1)) == class
+                                            {
+                                                target -= 1;
+                                            }
+                                        }
+                                    }
+                                    state.anchor = target;
+                                    state.insert(source, "");
+                                    continue;
+                                }
+                                if matches!(key, egui::Key::J | egui::Key::M) {
+                                    state.newline(source);
+                                    continue;
+                                }
+                            }
+                            state.modal.error = Some("This Vim control command is not implemented");
+                            continue;
                         }
                         if state.modal.mode == crate::modal::Mode::Command {
                             if key == egui::Key::Enter {
@@ -410,6 +570,10 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                             if key == egui::Key::Backspace {
                                 state.modal.command.pop();
                             }
+                            continue;
+                        }
+                        if modifiers.ctrl && !modifiers.mac_cmd {
+                            state.modal.error = Some("This Vim control command is not implemented");
                             continue;
                         }
                         if state.modal.mode != crate::modal::Mode::Insert && !modifiers.command {
@@ -430,14 +594,6 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                                 state.reveal = true;
                                 continue;
                             }
-                        }
-                        if modifiers.command && key == egui::Key::R {
-                            if let Some(cursor) = source.undo(true) {
-                                state.cursor = cursor;
-                                state.anchor = cursor;
-                                state.reveal = true;
-                            }
-                            continue;
                         }
                     }
                     if modifiers.command {
@@ -584,6 +740,30 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
     egui::ScrollArea::both()
         .id_salt("luau_source_scroll")
         .show_viewport(ui, |ui, viewport| {
+            if scroll_lines != 0 {
+                let top = (viewport.min.y + scroll_lines as f32 * row_height)
+                    .clamp(0.0, (output_layout.height() - viewport.height()).max(0.0));
+                ui.scroll_with_delta_animation(
+                    egui::vec2(0.0, viewport.min.y - top),
+                    egui::style::ScrollAnimation::none(),
+                );
+                let first = output_layout.line_index(top);
+                let last =
+                    output_layout.line_index((top + viewport.height() - row_height).max(top));
+                let line = source.rope.char_to_line(state.cursor);
+                let target = line.clamp(first, last);
+                if target != line {
+                    let column = state.cursor - source.rope.line_to_char(line);
+                    state.cursor = source.rope.line_to_char(target)
+                        + column.min(line_length(source.rope.line(target)));
+                    if !matches!(
+                        state.modal.mode,
+                        crate::modal::Mode::Visual | crate::modal::Mode::VisualLine
+                    ) {
+                        state.anchor = state.cursor;
+                    }
+                }
+            }
             let (rect, _) = ui.allocate_exact_size(
                 egui::vec2(state.width, output_layout.height()),
                 egui::Sense::hover(),
@@ -940,6 +1120,158 @@ fn line_length(line: ropey::RopeSlice<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn control(key: egui::Key) -> egui::RawInput {
+        let modifiers = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn modal_frame(
+        context: &egui::Context,
+        source: &mut Buffer,
+        state: &mut State,
+        mut input: egui::RawInput,
+    ) {
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(740.0, 600.0),
+        ));
+        context.memory_mut(|memory| memory.request_focus(egui::Id::unique("luau_source")));
+        state.route_vim_clipboard(context, &mut input);
+        context
+            .run_ui(input, |ui| {
+                show(ui, source, state);
+            })
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn vim_control_keys_do_not_fall_through_to_select_all_cut_or_redo() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("local width = 41");
+        let mut state = State::default();
+        state.modal.enable(true);
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::A));
+        assert_eq!(source.to_string(), "local width = 42");
+        assert!(state.selection(&source).is_empty());
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::X));
+        assert_eq!(source.to_string(), "local width = 41");
+        let mut cut = control(egui::Key::X);
+        cut.events = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::CTRL),
+            egui::Event::Cut,
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        ];
+        modal_frame(&context, &mut source, &mut state, cut);
+        assert_eq!(source.to_string(), "local width = 40");
+        let undo = egui::RawInput {
+            events: vec![egui::Event::Text("u".into())],
+            ..Default::default()
+        };
+        modal_frame(&context, &mut source, &mut state, undo);
+        assert_eq!(source.to_string(), "local width = 41");
+        let revision = source.revision;
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::Y));
+        let mut redo = control(egui::Key::Z);
+        for event in &mut redo.events {
+            match event {
+                egui::Event::ModifiersChanged(modifiers) | egui::Event::Key { modifiers, .. } => {
+                    modifiers.shift = true
+                }
+                _ => {}
+            }
+        }
+        modal_frame(&context, &mut source, &mut state, redo);
+        assert_eq!(source.revision, revision);
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::R));
+        assert_eq!(source.to_string(), "local width = 40");
+    }
+
+    #[test]
+    fn insert_control_deletions_and_clipboard_escape_respect_vim_mode() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("local width = 99");
+        let mut state = State::default();
+        state.modal.enable(true);
+        state.modal.mode = crate::modal::Mode::Insert;
+        state.cursor = source.rope.len_chars();
+        state.anchor = state.cursor;
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::H));
+        assert_eq!(source.to_string(), "local width = 9");
+        assert!(state.vim_owns_shortcuts(&context));
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::W));
+        assert_eq!(source.to_string(), "local width = ");
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::U));
+        assert_eq!(source.to_string(), "");
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::A));
+        assert!(state.selection(&source).is_empty());
+        assert_eq!(source.to_string(), "");
+        let mut copy = control(egui::Key::C);
+        copy.events = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::CTRL),
+            egui::Event::Copy,
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        ];
+        modal_frame(&context, &mut source, &mut state, copy);
+        assert!(state.modal.mode == crate::modal::Mode::Normal);
+    }
+
+    #[test]
+    fn vim_page_and_line_scroll_keys_preserve_text_and_take_counts() {
+        let context = egui::Context::default();
+        let text = "line\n".repeat(200);
+        let mut source = Buffer::from(text.as_str());
+        let mut state = State::default();
+        state.modal.enable(true);
+        let count = egui::RawInput {
+            events: vec![egui::Event::Text("2".into())],
+            ..Default::default()
+        };
+        modal_frame(&context, &mut source, &mut state, count);
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::D));
+        assert_eq!(source.rope.char_to_line(state.cursor), 2);
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::F));
+        assert!(source.rope.char_to_line(state.cursor) > 2);
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::B));
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::E));
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::Y));
+        assert_eq!(source.to_string(), text);
+        assert!(state.selection(&source).is_empty());
+    }
+
+    #[test]
+    fn clipboard_routing_leaves_other_fields_and_standard_mode_untouched() {
+        let context = egui::Context::default();
+        let mut state = State::default();
+        state.modal.enable(true);
+        for (enabled, focused) in [(true, "search"), (false, "luau_source")] {
+            state.modal.enable(enabled);
+            context.memory_mut(|memory| memory.request_focus(egui::Id::unique(focused)));
+            let mut input = control(egui::Key::X);
+            input.events = vec![
+                egui::Event::ModifiersChanged(egui::Modifiers::CTRL),
+                egui::Event::Cut,
+            ];
+            state.route_vim_clipboard(&context, &mut input);
+            assert!(matches!(input.events[1], egui::Event::Cut));
+        }
+    }
 
     #[test]
     fn source_edits_preserve_unaffected_rows_rebase_insertions_and_clear_unknown_history() {
@@ -1544,7 +1876,13 @@ fn smart_indent_is_bounded_and_undoable_and_control_c_leaves_insert() {
     context
         .run_ui(
             egui::RawInput {
-                events: vec![egui::Event::Copy],
+                events: vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
                 ..Default::default()
             },
             |ui| {

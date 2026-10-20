@@ -57,6 +57,75 @@ pub struct State {
     pub error: Option<&'static str>,
 }
 impl State {
+    pub fn take_count(&mut self, default: usize) -> usize {
+        assert!(default > 0);
+        self.pending = Pending::None;
+        match std::mem::take(&mut self.count) {
+            0 => default,
+            count => count,
+        }
+    }
+
+    pub fn change_number(
+        &mut self,
+        source: &mut Buffer,
+        cursor: &mut usize,
+        anchor: &mut usize,
+        subtract: bool,
+    ) {
+        self.error = None;
+        if matches!(self.pending, Pending::Go) {
+            self.take_count(1);
+            self.error = Some("Sequential number changes are not implemented");
+            return;
+        }
+        let count = self.take_count(1) as i128;
+        let visual = matches!(self.mode, Mode::Visual | Mode::VisualLine);
+        let selection = if visual {
+            self.selection(source, *cursor, *anchor)
+        } else {
+            let (start, end) = line_bounds(source, *cursor);
+            start..end
+        };
+        let first = source.rope.char_to_line(selection.start);
+        let last = source
+            .rope
+            .char_to_line(selection.end.saturating_sub(1).max(selection.start));
+        if last - first >= 10_000 {
+            self.error = Some("Number changes are limited to 10,000 lines");
+            return;
+        }
+        let revision = source.revision;
+        for line in (first..=last).rev() {
+            let (start, end) = line_bounds(source, source.rope.line_to_char(line));
+            let start = start.max(selection.start);
+            let end = end.min(selection.end);
+            let search = if visual { start } else { *cursor };
+            let Some((range, replacement)) = change_number(
+                source.rope.slice(start..end),
+                start,
+                search,
+                if subtract { -count } else { count },
+            ) else {
+                continue;
+            };
+            let target = range.start + replacement.len() - 1;
+            if source.replace(range, &replacement, *cursor) {
+                source.merge_undo(revision);
+                *cursor = target;
+                *anchor = target;
+            } else {
+                self.error = Some("Number change exceeds the document limit");
+                break;
+            }
+        }
+        if visual {
+            self.mode = Mode::Normal;
+            *cursor = selection.start.min(source.rope.len_chars());
+            *anchor = *cursor;
+        }
+    }
+
     pub fn enable(&mut self, enabled: bool) {
         self.enabled = enabled;
         self.mode = if enabled { Mode::Normal } else { Mode::Insert };
@@ -523,6 +592,88 @@ impl State {
     }
 }
 
+fn change_number(
+    line: ropey::RopeSlice<'_>,
+    start: usize,
+    cursor: usize,
+    delta: i128,
+) -> Option<(Range<usize>, String)> {
+    assert!(cursor >= start);
+    assert!(delta.abs() <= 10_000);
+    let mut characters = line.chars().enumerate().peekable();
+    while let Some((index, character)) = characters.next() {
+        if !character.is_ascii_digit() {
+            continue;
+        }
+        let mut digits_start = index;
+        let mut radix = 10;
+        let mut prefix = String::new();
+        if character == '0' {
+            if let Some(&(_, marker)) = characters.peek() {
+                radix = match marker {
+                    'x' | 'X' => 16,
+                    'b' | 'B' => 2,
+                    _ => 10,
+                };
+                if radix != 10 {
+                    characters.next();
+                    digits_start += 2;
+                    prefix.push('0');
+                    prefix.push(marker);
+                }
+            }
+        }
+        let mut end = if radix == 10 { index + 1 } else { digits_start };
+        while let Some(&(position, digit)) = characters.peek() {
+            if !digit.is_digit(radix) {
+                break;
+            }
+            end = position + 1;
+            characters.next();
+        }
+        if start + end <= cursor || end == digits_start {
+            continue;
+        }
+        if end - digits_start > 64 {
+            return None;
+        }
+        let digits = line.slice(digits_start..end).to_string();
+        let magnitude = u64::from_str_radix(&digits, radix).ok()?;
+        let negative = radix == 10 && index > 0 && line.char(index - 1) == '-';
+        let number_start = index - usize::from(negative);
+        let width = if radix != 10 || digits.starts_with('0') {
+            digits.len()
+        } else {
+            0
+        };
+        let replacement = if radix == 10 {
+            let value = if negative {
+                -(magnitude as i128)
+            } else {
+                magnitude as i128
+            } + delta;
+            let sign = if value < 0 { "-" } else { "" };
+            format!("{sign}{:0width$}", value.unsigned_abs() as u64)
+        } else {
+            let value = magnitude.wrapping_add(delta as u64);
+            if radix == 2 {
+                format!("{prefix}{value:0width$b}")
+            } else if digits
+                .chars()
+                .rev()
+                .find(char::is_ascii_alphabetic)
+                .is_some_and(|character| character.is_ascii_uppercase())
+            {
+                format!("{prefix}{value:0width$X}")
+            } else {
+                format!("{prefix}{value:0width$x}")
+            }
+        };
+        return Some((start + number_start..start + end, replacement));
+    }
+    None
+}
+
 fn line_bounds(source: &Buffer, cursor: usize) -> (usize, usize) {
     let line = source
         .rope
@@ -637,6 +788,49 @@ fn motion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_commands_find_the_current_line_number_and_preserve_its_format() {
+        for (text, position, keys, subtract, expected, target) in [
+            ("local x = -009", 0, "3", false, "local x = -006", 13),
+            ("local x = 0xFF", 12, "", true, "local x = 0xFE", 13),
+            ("0b111", 3, "", false, "0b1000", 5),
+            ("12.5", 3, "", false, "12.6", 3),
+            ("λ = 9", 0, "", false, "λ = 10", 5),
+            ("0xff", 2, "255", true, "0x00", 3),
+            ("0", 0, "", true, "-1", 1),
+            ("no numbers\n42", 0, "", false, "no numbers\n42", 0),
+        ] {
+            let mut source = Buffer::from(text);
+            let mut state = State::default();
+            state.enable(true);
+            let mut cursor = position;
+            let mut anchor = position;
+            state.text(keys, &mut source, &mut cursor, &mut anchor);
+            state.change_number(&mut source, &mut cursor, &mut anchor, subtract);
+            assert_eq!(source.to_string(), expected);
+            assert_eq!(cursor, target);
+            assert_eq!(anchor, cursor);
+        }
+    }
+
+    #[test]
+    fn visual_number_changes_touch_one_number_per_line_in_one_undo_step() {
+        let text = "10 foo20\n21";
+        let mut source = Buffer::from(text);
+        let mut state = State::default();
+        state.enable(true);
+        let mut cursor = 0;
+        let mut anchor = 0;
+        state.text("Vj", &mut source, &mut cursor, &mut anchor);
+        state.change_number(&mut source, &mut cursor, &mut anchor, false);
+        assert_eq!(source.to_string(), "11 foo20\n22");
+        assert!(state.mode == Mode::Normal);
+        assert_eq!(cursor, 0);
+        assert!(source.undo(false).is_some());
+        assert_eq!(source.to_string(), text);
+        assert!(source.undo(false).is_none());
+    }
     #[test]
     fn replace_visual_unicode_lines_digits_and_cancel_without_touching_register() {
         let mut source = Buffer::from("abλ\ncd\r\nef");

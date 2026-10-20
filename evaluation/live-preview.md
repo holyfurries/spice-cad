@@ -20,7 +20,7 @@ UI. No additional preview thread, polling loop or dependency is introduced.
 
 ## New Model and Save As
 
-Ctrl+N chooses a `.luau` or `.lua` path before opening an unsaved starter model.
+Ctrl+Shift+N chooses a `.luau` or `.lua` path before opening an unsaved starter model.
 The draft is dirty even before the first edit. Its missing file is expected, and
 the watcher does not report it as an error. Existing unsaved-change guards apply
 before adopting the draft. Canceling leaves both the old source and destination

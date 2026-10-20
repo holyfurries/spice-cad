@@ -295,7 +295,7 @@ disables export until the current buffer builds successfully.
 External editor saves are detected automatically. If local edits conflict with a
 disk change, **Reload disk** discards the local draft; **Keep editor** keeps it
 and permits a subsequent save over the disk version. Closing or opening another
-model with unsaved edits offers save, discard, or cancel. **File → Open…** (Ctrl+O) browses `.luau` and `.lua` files without restarting the app;
+model with unsaved edits offers save, discard, or cancel. **File → Open…** (Ctrl+Shift+O) browses `.luau` and `.lua` files without restarting the app;
 the path field also accepts an exact file or directory. File loading runs off
 the UI thread. The header separates navigation from document actions. **Code**,
 **Split** and **Model** switch between editor focus, side-by-side editing and
@@ -307,7 +307,7 @@ list. The footer also shows the current Vim mode, cursor position, and total lin
 badge distinguishes a current preview from pending changes or errors. Update
 model previews unsaved edits; Save writes the file and updates the preview.
 
-**File → New model** (Ctrl+N) chooses a filename and opens a small parametric
+**File → New model** (Ctrl+Shift+N) chooses a filename and opens a small parametric
 box as an unsaved draft. No file is created until Save; canceling a model switch
 preserves the previous source. **Save as** (Ctrl+Shift+S) writes a copy in the
 background, switches the active path, and preserves undo history. Existing
@@ -321,6 +321,16 @@ Escape enters Normal mode; `i`/`a` enter Insert, `v`/`V` select, and `h/j/k/l`,
 `w/b/e`, `0/^/$`, `gg/G` move with optional counts. Supported edits include
 `d/c/y` with motions, `dd/cc/yy`, `x`, `p/P`, `r` followed by a replacement
 character (including Visual and Visual Line selections), `u` and Ctrl+R.
+Ctrl+A/X add/subtract a count from the integer under or after the cursor on the
+current line. Decimal signs, hexadecimal/binary prefixes, and leading zeroes
+are preserved; Visual selections change the first selected number on each line
+as one undo step. Ctrl+E/Y scroll by lines and Ctrl+F/B by pages. Ctrl+Y does not
+redo. Insert mode supports Ctrl+H/W/U deletion and Ctrl+J/M newline; Ctrl+N/P
+request or navigate LSP completions. Ctrl+[ exits to Normal mode.
+Unsupported Vim control commands report that they are unsupported instead of
+falling through to desktop select-all, cut, or undo. Insert-mode Ctrl+A replay,
+Visual block mode, sequential `g` number changes, and jump-list navigation are not implemented. Ctrl+Shift+V
+pastes from the system clipboard; `p/P` use the Vim register.
 Commands include `:w`, `:q`, `:wq`, `:e [path]` and `:run`. These are native
 modal keys rather than embedded Neovim; plugins, macros and full Vim command
 compatibility are not provided.
@@ -337,11 +347,12 @@ current CAD source. These are built-in preferences; the app does not execute
 Neovim configuration. See [the Neovim port notes](evaluation/nvim-editor.md) for
 scope and remaining features.
 
-**Find** (Ctrl+F or Normal-mode `/`) searches forward; `?` searches backward.
+**Find** (Ctrl+Shift+F or Normal-mode `/`) searches forward; `?` searches backward.
+Standard editor mode also accepts Ctrl+F. Vim mode keeps Ctrl+F for page movement.
 Search is literal and case-sensitive, with incremental match counts and visible
 highlights. Enter accepts the current result and returns to code; Escape closes
 the bar. Normal-mode `n` repeats the search direction and `N` reverses it; both
-wrap at the document boundaries. **Replace** (Ctrl+H) offers **Replace match**
+wrap at the document boundaries. **Replace** (Ctrl+Shift+H; Ctrl+H in Standard mode) offers **Replace match**
 and **Replace all**. Replace All runs on a worker and applies as one undo
 operation only if the searched revision is still current. Replacements
 participate in Live preview; with it disabled, use Run or Save. Regex and
@@ -352,7 +363,7 @@ substitution commands are not implemented. Details and limits are in
 current model's directory, with recent files first. **Commands** (Ctrl+Shift+P)
 searches available actions and shows their shortcuts. Both support Up/Down,
 Enter and Escape, and are available in the **File** menu. Browse arbitrary paths
-with Ctrl+O. Quick Open uses the same unsaved-change protection as the file
+with Ctrl+Shift+O. Quick Open uses the same unsaved-change protection as the file
 browser. Its background index is bounded to 4,096 files and eight directory
 levels; generated and hidden directories and symlinks are skipped. The most
 recent 20 files are stored under `$XDG_STATE_HOME/spice-cad/recent-models.json`
@@ -663,8 +674,8 @@ whole-file reads. The editor uses a Ropey B-tree buffer with structurally shared
 undo snapshots, bounded to 1,024 edits and 32 MiB of changed text. Dirty state
 and preview eligibility use revision identities rather than per-frame text
 comparisons. Only visible rows and columns are shaped and highlighted; very long
-individual lines are horizontally virtualized too. Undo/redo uses Ctrl+Z,
-Ctrl+Shift+Z, or Ctrl+Y. The workspace keeps camera controls over the viewport,
+individual lines are horizontally virtualized too. Standard-mode undo/redo uses
+Ctrl+Z, Ctrl+Shift+Z, or Ctrl+Y; Vim mode uses `u` and Ctrl+R. The workspace keeps camera controls over the viewport,
 appearance controls under **View → Appearance**, selection and geometry in the
 optional Properties pane, and open/save/export actions under **File**. Workspace
 layouts and **Run** occupy the document bar below the menus. A fixed viewport

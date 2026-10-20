@@ -1350,7 +1350,8 @@ impl eframe::App for Editor {
         }
     }
 
-    fn raw_input_hook(&mut self, _context: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, context: &egui::Context, input: &mut egui::RawInput) {
+        self.code_state.route_vim_clipboard(context, input);
         if self.sweep.is_some() {
             input.events.clear();
         }
@@ -1383,6 +1384,11 @@ impl eframe::App for Editor {
                 ),
                 (egui::Modifiers::COMMAND, palette::Mode::Files),
             ] {
+                if mode == palette::Mode::Files && self.code_state.vim_owns_shortcuts(ui.ctx()) {
+                    if self.code_state.modal.mode != modal::Mode::Normal {
+                        continue;
+                    }
+                }
                 if ui.input_mut(|input| {
                     input.consume_shortcut(&egui::KeyboardShortcut::new(modifiers, egui::Key::P))
                 }) {
@@ -1426,6 +1432,18 @@ impl eframe::App for Editor {
                     completion_navigate = true;
                     self.completion_index = self.completion_index.saturating_sub(1);
                 }
+                if self.code_state.modal.enabled
+                    && self.code_state.modal.mode == modal::Mode::Insert
+                {
+                    if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
+                        completion_navigate = true;
+                        self.completion_index = self.completion_index.saturating_add(1);
+                    }
+                    if input.consume_key(egui::Modifiers::CTRL, egui::Key::P) {
+                        completion_navigate = true;
+                        self.completion_index = self.completion_index.saturating_sub(1);
+                    }
+                }
             });
         }
         if self.language_popup.is_some()
@@ -1436,7 +1454,7 @@ impl eframe::App for Editor {
         let mut open_requested = shortcuts_enabled
             && ui.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
-                    egui::Modifiers::COMMAND,
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                     egui::Key::O,
                 ))
             });
@@ -1454,7 +1472,7 @@ impl eframe::App for Editor {
             }
             if ui.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
-                    egui::Modifiers::COMMAND,
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                     egui::Key::N,
                 ))
             }) {
@@ -1592,7 +1610,16 @@ impl eframe::App for Editor {
         }
         if shortcuts_enabled {
             for (key, replace) in [(egui::Key::F, false), (egui::Key::H, true)] {
-                if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, key)) {
+                let vim = self.code_state.vim_owns_shortcuts(ui.ctx());
+                if ui.input_mut(|input| {
+                    if input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, key) {
+                        return true;
+                    }
+                    if !vim {
+                        return input.consume_key(egui::Modifiers::COMMAND, key);
+                    }
+                    false
+                }) {
                     self.show_code = true;
                     self.code_state.open_search(false, replace);
                     self.language_popup = None;
@@ -1617,11 +1644,11 @@ impl eframe::App for Editor {
                 ui.label(egui::RichText::new("Spice CAD").size(15.0).strong());
                 ui.separator();
                 ui.menu_button("File", |ui| {
-                    if ui.add(egui::Button::new("New model").shortcut_text("Ctrl+N")).clicked() {
+                    if ui.add(egui::Button::new("New model").shortcut_text("Ctrl+Shift+N")).clicked() {
                         file_dialog_requested = Some(save::Mode::NewModel);
                         ui.close();
                     }
-                    if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
+                    if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+Shift+O")).clicked() {
                         open_requested = true;
                         ui.close();
                     }
@@ -1689,14 +1716,14 @@ impl eframe::App for Editor {
                     }
                     for (label, action) in [
                         (
-                            "Find · Ctrl+F / /",
+                            "Find · / or Ctrl+Shift+F in Vim",
                             modal::Action::Find {
                                 backward: false,
                                 replace: false,
                             },
                         ),
                         (
-                            "Replace · Ctrl+H",
+                            "Replace · Ctrl+Shift+H in Vim",
                             modal::Action::Find {
                                 backward: false,
                                 replace: true,

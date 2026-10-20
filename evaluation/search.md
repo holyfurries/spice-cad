@@ -1,6 +1,6 @@
 # Native search and replacement
 
-Ctrl+F opens Find, Ctrl+H opens Replace, and both are available in the Editor
+Ctrl+Shift+F opens Find, Ctrl+Shift+H opens Replace, and both are available in the Editor
 menu. Normal-mode `/` searches forward, `?` backward, `n` repeats that direction,
 and `N` reverses it. Navigation wraps. The bar supports incremental literal,
 case-sensitive search, counts, Previous/Next, Replace match and Replace all.
