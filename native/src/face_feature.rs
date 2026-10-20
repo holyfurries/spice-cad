@@ -130,7 +130,7 @@ mod tests {
             - std::f64::consts::PI * (56.0 + 128.0 / 3.0);
         assert!((snapshot.volume_mm3 - expected).abs() < 0.001);
         snapshot.scene.world_mesh().validate()?;
-        assert_eq!(snapshot.scene.parts.len(), 1);
+        assert_eq!(snapshot.parts.len(), 1);
         Ok(())
     }
 

@@ -597,6 +597,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancelled_refinement_preserves_interactive_geometry_and_recovers() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = super::super::compile("cad.show('part',cad.cylinder({radius=5,height=10}))")?;
+        let interactive = cache.prepare_quality(&model, DisplayQuality::Interactive)?;
+        let geometry = Arc::clone(&interactive.geometry[0]);
+        let body = Rc::clone(&interactive.bodies[0]);
+        drop(interactive);
+        let generation = crate::cancellation::Generation::default();
+        let cancelled = cache
+            .with_preview(generation.token().after_checkpoints(2), |cache| {
+                cache.prepare(&model)
+            })?
+            .is_none();
+        let geometry_preserved = Arc::ptr_eq(&geometry, &cache.entries[0].geometry);
+        let quality_preserved = cache.entries[0].quality == DisplayQuality::Interactive;
+        let scope_cleared = cache.preview.is_none();
+        let refined = cache.prepare(&model)?;
+        let body_reused = Rc::ptr_eq(&body, &refined.bodies[0]);
+        let refined_without_rebuild = refined.build_ms == 0.0 && !refined.refinement_pending;
+        drop(refined);
+        drop(body);
+        drop(cache);
+        drop(kernel);
+        assert!(cancelled);
+        assert!(geometry_preserved);
+        assert!(quality_preserved);
+        assert!(scope_cleared);
+        assert!(body_reused);
+        assert!(refined_without_rebuild);
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_keeps_completed_predecessors_and_clears_preview_scope() -> Result<(), String> {
         let kernel = Kernel::new()?;
         let mut cache = Cache::new(&kernel);
