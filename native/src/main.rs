@@ -36,6 +36,8 @@ mod picking;
 mod placement;
 mod preview;
 mod profile;
+mod raster;
+mod render_views;
 mod save;
 mod search;
 mod syntax;
@@ -92,6 +94,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
+        [flag, path, folder] if flag == "--render-views" => {
+            let source = model::read_source(std::path::Path::new(path))?;
+            render_views::write(&source, std::path::Path::new(folder))?;
+            println!("Rendered top, front, side, isometric, and contact-sheet PNGs to {folder}");
+            return Ok(());
+        }
         [flag, path, folder] if flag == "--export-model" || flag == "--export-game" => {
             let source = model::read_source(std::path::Path::new(path))?;
             let target = if flag == "--export-game" {
@@ -106,9 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 } else {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 })
                     .into(),
             );

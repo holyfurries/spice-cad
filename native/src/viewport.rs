@@ -120,7 +120,6 @@ impl Instance {
         Mat4::from_cols_array(&self.matrix)
     }
 
-    #[cfg(test)]
     pub fn color(&self) -> [f32; 3] {
         [self.color[0], self.color[1], self.color[2]]
     }

@@ -536,6 +536,23 @@ Check a model without opening a window:
 nix develop -c cargo run --release --locked -p spice-cad -- --check-model models/mounting-bracket.luau
 ```
 
+Render inspection images without a display server or GPU:
+
+```sh
+nix develop -c cargo run --release --locked -p spice-cad -- --render-views models/rack-parts.luau output/rack-views
+```
+
+This creates `top.png`, `front.png`, `side.png`, and `isometric.png` at 800 × 600,
+a labeled 1600 × 1200 `contact-sheet.png`, and the exact `model.luau` source.
+Views use the assembly layout, part colors, shaded faces, and visible CAD edges.
+Top looks down −Z with +Y up; front looks along +Y with +Z up; side looks along
+−X with +Z up. Isometric looks from (+X, −Y, +Z). All views are orthographic and
+fit independently, so their image scales can differ. These are visual inspection
+images; use the in-app measurements for dimensions. Source, geometry, and declared
+measurement checks run before writing. Existing directories are preserved, and a
+failed write removes the newly created directory. Rendering uses a bounded CPU
+rasterizer shared with inline thumbnails; it does not initialize a window or GPU.
+
 Choose **Export → 3D print · STEP + STL** to create a new
 `output/native/model-<timestamp>/` directory. Or choose a new directory from the
 command line:

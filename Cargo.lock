@@ -2705,6 +2705,7 @@ dependencies = [
  "libc",
  "mlua",
  "opencascade",
+ "png",
  "ropey",
  "serde_json",
  "spice-rack",

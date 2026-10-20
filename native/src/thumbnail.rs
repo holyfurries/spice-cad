@@ -26,25 +26,6 @@ pub fn render(mesh: &Mesh, bounds: [Vec3; 2], remaining: &mut usize) -> Option<e
                 point.z,
             )
         });
-        if points.iter().any(|point| !point.is_finite()) {
-            return None;
-        }
-        let [a, b, c] = points;
-        let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-        if area.abs() < 1e-6 {
-            continue;
-        }
-        let minimum = a.min(b).min(c);
-        let maximum = a.max(b).max(c);
-        let left = minimum.x.floor().clamp(0.0, WIDTH as f32) as usize;
-        let right = maximum.x.ceil().clamp(0.0, WIDTH as f32) as usize;
-        let top = minimum.y.floor().clamp(0.0, HEIGHT as f32) as usize;
-        let bottom = maximum.y.ceil().clamp(0.0, HEIGHT as f32) as usize;
-        let visits = (right - left) * (bottom - top);
-        if visits > *remaining {
-            return None;
-        }
-        *remaining -= visits;
         let normal = Vec3::from_array(triangle[0].normal);
         let shade = 0.30 + 0.70 * normal.dot(light).max(0.0);
         let [r, g, b_color, _] = triangle[0].color;
@@ -54,25 +35,9 @@ pub fn render(mesh: &Mesh, bounds: [Vec3; 2], remaining: &mut usize) -> Option<e
             b_color as f32 / 255.0 * shade,
         )
         .into();
-        for y in top..bottom {
-            for x in left..right {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-                let first = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
-                let second = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
-                let third = 1.0 - first - second;
-                if first < 0.0 || second < 0.0 || third < 0.0 {
-                    continue;
-                }
-                let z = first * a.z + second * b.z + third * c.z;
-                let index = y * WIDTH + x;
-                if z < depth[index] {
-                    depth[index] = z;
-                    image.pixels[index] = color;
-                }
-            }
-        }
+        crate::raster::triangle(&mut image, &mut depth, points, color, remaining)?;
     }
+
     Some(image)
 }
 
