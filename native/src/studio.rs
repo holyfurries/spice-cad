@@ -5,9 +5,25 @@ const RED: Color32 = Color32::from_rgb(216, 66, 46);
 const INK: Color32 = Color32::from_rgb(36, 39, 31);
 const FOREST: Color32 = Color32::from_rgb(37, 44, 36);
 
-#[derive(Default)]
 pub struct Splash {
-    texture: Option<egui::TextureHandle>,
+    artwork: Artwork,
+    reduced_motion: bool,
+}
+
+enum Artwork {
+    Unstarted,
+    Static(egui::TextureHandle),
+    Animated(crate::splash_frames::Player),
+}
+
+impl Default for Splash {
+    fn default() -> Self {
+        Self {
+            artwork: Artwork::Unstarted,
+            reduced_motion: std::env::var("HOLYFURRIES_REDUCED_MOTION")
+                .is_ok_and(|value| value == "1"),
+        }
+    }
 }
 
 impl Splash {
@@ -20,27 +36,41 @@ impl Splash {
         if skip {
             return Ok(false);
         }
-        let texture = match &self.texture {
-            Some(texture) => texture,
-            None => self.texture.insert(context.load_texture(
-                "holy-furries-splash",
-                splash_image()?,
-                egui::TextureOptions::LINEAR,
-            )),
+        if matches!(self.artwork, Artwork::Unstarted) {
+            self.artwork = if self.reduced_motion {
+                Artwork::Static(context.load_texture(
+                    "holy-furries-splash",
+                    splash_image()?,
+                    egui::TextureOptions::LINEAR,
+                ))
+            } else {
+                Artwork::Animated(crate::splash_frames::Player::new(context)?)
+            };
+        }
+        let (background, image) = match &mut self.artwork {
+            Artwork::Unstarted => unreachable!(),
+            Artwork::Static(texture) => (
+                FOREST,
+                Some((
+                    texture.id(),
+                    egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                )),
+            ),
+            Artwork::Animated(player) => (
+                player.background(),
+                player.frame(context, std::time::Instant::now())?,
+            ),
         };
         let rect = context.content_rect();
         let id = egui::Id::unique("startup");
         let area = egui::Modal::default_area(id).fade_in(false);
         let painter = context.layer_painter(area.layer());
-        painter.rect_filled(rect, 0.0, FOREST);
+        painter.rect_filled(rect, 0.0, background);
         let scale = (rect.width() / 480.0).min(rect.height() / 400.0).min(1.0);
         let artwork = egui::Rect::from_center_size(rect.center(), egui::vec2(480.0, 400.0) * scale);
-        painter.image(
-            texture.id(),
-            artwork,
-            egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        if let Some((texture, uv)) = image {
+            painter.image(texture, artwork, uv, Color32::WHITE);
+        }
         egui::Modal::new(id)
             .area(area)
             .backdrop_color(Color32::TRANSPARENT)
@@ -225,7 +255,10 @@ mod tests {
     #[test]
     fn splash_covers_the_application_after_resizing() {
         let context = egui::Context::default();
-        let mut splash = Splash::default();
+        let mut splash = Splash {
+            reduced_motion: true,
+            ..Splash::default()
+        };
         let mut texture_id = None;
         for size in [
             egui::vec2(1400.0, 900.0),
@@ -244,7 +277,9 @@ mod tests {
                 matches!(&shape.shape, egui::Shape::Rect(background)
                     if background.rect == rect && background.fill == FOREST)
             });
-            let texture = splash.texture.as_ref().unwrap();
+            let Artwork::Static(texture) = &splash.artwork else {
+                panic!("Reduced motion must use the static poster")
+            };
             if let Some(texture_id) = texture_id {
                 assert_eq!(texture.id(), texture_id);
                 assert!(output.textures_delta.set.is_empty());
@@ -309,7 +344,7 @@ mod tests {
                 |ui| assert!(!splash.show(ui.ctx()).unwrap()),
             );
             output.drop_without_applying_deltas();
-            assert!(splash.texture.is_none());
+            assert!(matches!(splash.artwork, Artwork::Unstarted));
             assert!(context.memory(|memory| memory.top_modal_layer().is_none()));
         }
     }

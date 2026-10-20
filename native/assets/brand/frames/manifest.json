@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "source_sha256": "93a9a65d7d5292a47184b1dd75d57e12ff908cc8b43e78f3dc3f66d25c5a0a44",
+  "duration_ms": 1500,
+  "fps": 60,
+  "frame_size": [
+    480,
+    400
+  ],
+  "frame_count": 73,
+  "columns": 4,
+  "rows": 2,
+  "background_rgba": [
+    37,
+    44,
+    36,
+    255
+  ],
+  "pages": [
+    "splash/frames/atlas-000.png",
+    "splash/frames/atlas-001.png",
+    "splash/frames/atlas-002.png",
+    "splash/frames/atlas-003.png",
+    "splash/frames/atlas-004.png",
+    "splash/frames/atlas-005.png",
+    "splash/frames/atlas-006.png",
+    "splash/frames/atlas-007.png",
+    "splash/frames/atlas-008.png",
+    "splash/frames/atlas-009.png"
+  ]
+}

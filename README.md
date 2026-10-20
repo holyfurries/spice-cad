@@ -171,12 +171,15 @@ overhang angles, joint clearance, and sampled assembly movements for collisions.
 Spice CAD is a [Holy Furries Studio](https://holyfurries.com) tool. The startup
 splash uses the approved artwork from [holyfurries/brand-assets](https://github.com/holyfurries/brand-assets),
 centered on the studio's forest background across the entire window. The pinned
-native bundle currently supplies a static PNG fallback; animated SVG playback
-is browser-only. Asset provenance and update instructions are in
+native bundle contains the original animation baked into PNG atlases, played at
+60 fps with decoding off the UI thread and one reused GPU texture. Asset
+provenance and update instructions are in
 `native/assets/brand/README.md`. Escape, Space, or a click skips the splash.
 Startup completion or failure dismisses it immediately and releases its texture;
-there is no minimum display time or runtime download. The existing PNG decoder
-loads the embedded artwork once. Spice CAD's geometric spice-jar mark remains
+there is no minimum display time or runtime download. The animation plays once
+and holds its final frame if loading continues. Set
+`HOLYFURRIES_REDUCED_MOTION=1` to use the approved static poster. The existing
+PNG decoder handles both versions. Spice CAD's geometric spice-jar mark remains
 in the header and `native/assets/spice-cad.svg`. **Help → About Spice CAD** opens
 the product identity card.
 

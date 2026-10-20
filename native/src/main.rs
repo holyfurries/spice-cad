@@ -44,6 +44,7 @@ mod raster;
 mod render_views;
 mod save;
 mod search;
+mod splash_frames;
 mod studio;
 mod syntax;
 mod text_buffer;

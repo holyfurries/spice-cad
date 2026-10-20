@@ -28,8 +28,8 @@ orientations and existing edge/measurement settings.
 ## Holy Furries Studio
 
 The following records the original product-specific design. Startup now uses
-the approved shared native poster from `holyfurries/brand-assets`, pinned at
-`ca733e8c6f2652e8583538b2564bae48334a5585`. Its full-window forest background,
+the shared baked animation from `holyfurries/brand-assets`, pinned at
+`0a6063f464d7c34b8c5f00605ce7f2e4ca4f4103`. Its full-window forest background,
 transparent artwork, skip controls, and asset provenance are documented in
 `native/assets/brand/README.md`. The custom product card remains in About;
 it is no longer the startup splash.
