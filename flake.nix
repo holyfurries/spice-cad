@@ -46,6 +46,11 @@
                 builtins.elem root [
                   "Cargo.toml"
                   "Cargo.lock"
+                  "LICENSE"
+                  "NOTICE"
+                  "ASSETS.md"
+                  "about.toml"
+                  "licenses"
                   "native"
                   "src"
                   "models"
@@ -99,10 +104,16 @@
               ''} $out/share/applications/spice-cad.desktop
               install -Dm644 native/assets/spice-cad.svg \
                 $out/share/icons/hicolor/scalable/apps/spice-cad.svg
+              install -Dm644 LICENSE $out/share/doc/spice-cad/LICENSE
+              install -m644 NOTICE ASSETS.md $out/share/doc/spice-cad/
+              cp -r licenses $out/share/doc/spice-cad/licenses
+              install -Dm644 native/assets/LICENSE \
+                $out/share/doc/spice-cad/native/assets/LICENSE
             '';
             meta = {
               description = "Native code-first CAD editor with typed Luau and SMLib";
               mainProgram = "spice-cad";
+              license = pkgs.lib.licenses.mit;
               platforms = systems;
             };
           };
@@ -163,6 +174,7 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               cargo
+              cargo-about
               rustc
               rustfmt
               clippy

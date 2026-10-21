@@ -1,0 +1,65 @@
+Spice CAD
+Copyright (c) 2026 Holy Furries Studio
+
+Project code, example models, and documentation text are MIT licensed; see
+LICENSE. Artwork and branding use the separate terms in ASSETS.md and
+native/assets/LICENSE. Dependencies retain their own copyright and licenses.
+
+Rust dependencies
+-----------------
+licenses/RUST-DEPENDENCIES.txt lists the Linux dependency graph and license
+texts for Cargo.lock, including optional rack-tools components. Supplemental
+upstream notices are mapped in licenses/README.md. A listed optional component
+is not necessarily linked into the default application.
+
+SMLib / SM_API / smlibpy kernel build
+------------------------------------
+USD BRep: Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES.
+SMLib and SM_API are licensed under Apache-2.0.
+https://github.com/NVIDIA-Omniverse/usd-brep
+Full license: licenses/usd-brep-Apache-2.0.txt
+
+smlibpy: Copyright (c) 2026 AWV Informatik AG. MIT licensed.
+https://github.com/awv-informatik/smlibpy
+Pinned revision: 735403a40b261b71967a59d670cd7970f032d04e
+Full license and original notice: licenses/smlibpy-MIT.txt and
+licenses/smlibpy-NOTICE.txt.
+AWV's kernel fixes are described in licenses/smlibpy-kernel-patches.md.
+The original notice is retained verbatim; its Python and Lato-font entries
+refer to upstream components not included in this kernel-only application.
+
+oneTBB
+------
+The native kernel links oneTBB 2022.3.0, under Apache-2.0.
+https://github.com/uxlfoundation/oneTBB/tree/v2022.3.0
+See licenses/oneTBB-LICENSE.txt and licenses/oneTBB-third-party-programs.txt.
+
+Luau and editor fonts
+---------------------
+The embedded Luau VM is supplied by luau0-src 0.22.0+luau740 under MIT;
+see licenses/luau-vm-MIT.txt. The packaged Luau analyzer uses version 0.740.
+The egui 0.37.0 default fonts have their own licenses and notices, reproduced
+in licenses/fonts/. Tree-sitter's bundled Unicode data notice is reproduced
+in licenses/tree-sitter/unicode-LICENSE.txt.
+
+Optional OpenCascade reference tools
+-----------------------------------
+The normal Spice CAD application uses SMLib. The spice-rack reference CLI
+and the rack-tools feature additionally use opencascade-rs 0.3.0 under
+LGPL-2.1 and Open CASCADE Technology 7.8.1 under LGPL-2.1 with its exception.
+This software makes use of facilities provided by Open CASCADE Technology.
+https://github.com/bschwind/opencascade-rs
+https://github.com/Open-Cascade-SAS/OCCT/tree/V7_8_1
+See licenses/upstream/opencascade.txt, licenses/upstream/opencascade-sys.txt,
+licenses/OCCT-LGPL-2.1.txt, and licenses/OCCT-LGPL-EXCEPTION.txt.
+The complete application source and pinned rebuild inputs are provided by
+this repository, Cargo.lock, and flake.lock; see docs/kernels.md for replacing
+and rebuilding the reference libraries.
+
+Packaging
+---------
+Nix installs this notice, LICENSE, ASSETS.md, brand terms, and licenses/ under
+share/doc/spice-cad. Keep them with redistributed builds. System libraries
+provided by the Nix closure or operating system retain their own licenses;
+redistributors of those libraries must preserve their accompanying notices
+and comply with their source-distribution obligations.

@@ -1,7 +1,7 @@
 # Shared studio splash
 
 Vendored unchanged from [holyfurries/brand-assets](https://github.com/holyfurries/brand-assets),
-commit `0a6063f464d7c34b8c5f00605ce7f2e4ca4f4103`:
+commit `1de8f8f114ac73a0b0cc20e72edd36677c1cf89e`:
 
 - `poster.png` is upstream `splash/poster.png`.
 - `manifest.json` is upstream `splash/manifest.json`.

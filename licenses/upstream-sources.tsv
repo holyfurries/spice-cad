@@ -1,0 +1,15 @@
+spirv	0.4.0+sdk-1.4.341.0	LICENSE	https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE
+opencascade-sys	0.3.0	LICENSE	https://raw.githubusercontent.com/bschwind/opencascade-rs/07e8feb74e81ed371e53a471e988d13f7b63bcb9/LICENSE
+opencascade	0.3.0	LICENSE	https://raw.githubusercontent.com/bschwind/opencascade-rs/ee3a43100210a9e8654592698cb1847312adbb01/LICENSE
+accesskit	0.25.1	LICENSE-MIT	https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE-MIT
+dpi	0.1.2	LICENSE	https://raw.githubusercontent.com/rust-windowing/winit/587ade844dfb0eada3696ba1cb263c66eea80581/LICENSE
+dpi-libm	0.1.2	dpi/LICENSE-LIBM-MIT	https://raw.githubusercontent.com/rust-windowing/winit/587ade844dfb0eada3696ba1cb263c66eea80581/dpi/LICENSE-LIBM-MIT
+egui-family	0.37.0	LICENSE-MIT	https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT
+libm	0.2.16	libm/LICENSE.txt	https://raw.githubusercontent.com/rust-lang/compiler-builtins/dfd2203a4d6110820ad7bb65cafe1bf331a03a3d/libm/LICENSE.txt
+lua-src	551.0.2	LICENSE	https://raw.githubusercontent.com/mlua-rs/lua-src-rs/3c65a4674fd25a89fb924538ce7fe1c89c64a71b/LICENSE
+mlua-sys	0.13.0	LICENSE	https://raw.githubusercontent.com/mlua-rs/mlua/a186d461c7772aed4cb0a9fa1d1899121c6450e7/LICENSE
+profiling	1.0.18	LICENSE-MIT	https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT
+tree-sitter-luau	1.2.0	LICENSE	https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-luau/a8914d6c1fc5131f8e1c13f769fa704c9f5eb02f/LICENSE
+tree-sitter	0.25.10	LICENSE	https://raw.githubusercontent.com/tree-sitter/tree-sitter/da6fe9beb4f7f67beb75914ca8e0d48ae48d6406/LICENSE
+type-map	0.5.1	LICENSE-MIT	https://raw.githubusercontent.com/kardeiz/type-map/d3ab3e642736d87f3fa8b1e6c8f13a93fcfb72e1/LICENSE-MIT
+opencascade-kicad-parser	0.3.0	Cargo.toml SPDX declaration and author	https://crates.io/crates/opencascade-kicad-parser/0.3.0

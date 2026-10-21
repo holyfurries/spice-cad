@@ -1,0 +1,24 @@
+Spice CAD: third-party Rust dependency licenses
+
+Generated from Cargo.lock for the Linux workspace with all project features.
+Optional and platform-specific dependencies may not appear in every build.
+Native kernels, bundled fonts, and their supplemental notices are listed in NOTICE.
+
+{{#each licenses}}
+===============================================================================
+{{name}} ({{id}})
+
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}} — {{crate.repository}}{{/if}}
+{{/each}}
+
+{{#if source_path}}
+{{{text}}}
+{{else}}
+This crate archive does not contain its license text. Its declared license is
+{{id}}. Copyright notices and license texts are provided in licenses/upstream/;
+see licenses/README.md for the component-to-file mapping and source revisions.
+{{/if}}
+
+{{/each}}

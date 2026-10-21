@@ -76,3 +76,8 @@ the Nix package currently targets Linux.
 
 The [typed CAD API](native/types/cad.luau) and [example models](models/) are the
 reference for writing scripts. Detailed implementation notes live in [evaluation/](evaluation/).
+
+## License
+
+Code and examples: [MIT](LICENSE). Artwork and branding: [separate terms](ASSETS.md).
+Dependency attributions: [NOTICE](NOTICE).

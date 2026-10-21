@@ -29,7 +29,7 @@ orientations and existing edge/measurement settings.
 
 The following records the original product-specific design. Startup now uses
 the shared baked animation from `holyfurries/brand-assets`, pinned at
-`0a6063f464d7c34b8c5f00605ce7f2e4ca4f4103`. Its full-window forest background,
+`1de8f8f114ac73a0b0cc20e72edd36677c1cf89e`. Its full-window forest background,
 transparent artwork, skip controls, and asset provenance are documented in
 `native/assets/brand/README.md`. The custom product card remains in About;
 it is no longer the startup splash.

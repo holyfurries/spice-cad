@@ -1,9 +1,28 @@
 Copyright (c) 2026 Holy Furries Studio. All rights reserved.
 
 The artwork, logos, splash screens, previews, and Holy Furries Studio branding
-in this repository are proprietary. Making this repository public does not
-grant permission to use, modify, redistribute, or imply endorsement by the
-studio. Contact Holy Furries Studio for permission to use its brand assets.
+are reserved brand assets, not MIT-licensed software.
+
+Permission is granted, worldwide and without charge, to copy, display, and
+redistribute these assets unchanged as part of Holy Furries software, its source
+forks, and official or unofficial builds of that software. Permission also
+covers accurate screenshots, documentation, reviews, and demonstrations of that
+software. Resizing and file-format conversion are permitted if the appearance
+is preserved. Retain this notice with redistributed assets.
+
+Modified or unofficial distributions must clearly identify themselves as such
+and must not imply endorsement by Holy Furries Studio. You may remove or replace
+the assets in a fork; the software's license continues to govern its code.
+
+This permission does not grant trademark ownership, authorize use in unrelated
+products or merchandise, or permit changes to the artwork beyond the conversions
+described above. Contact Holy Furries Studio for other uses.
+
+THE ASSETS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM THE ASSETS OR THEIR USE.
 
 The Rust utility in tools/ is licensed separately under the MIT license in
 tools/LICENSE. That license does not grant rights to the brand assets.

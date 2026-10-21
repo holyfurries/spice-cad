@@ -5,6 +5,10 @@
 !/.gitattributes
 !/README.md
 !/LICENSE
+!/ASSETS.md
+!/NOTICE
+!/about.toml
+!/licenses/**
 
 !/flake.*
 !/Cargo.*
@@ -17,6 +21,7 @@
 !/native/Cargo.toml
 !/native/build.rs
 !/native/assets/spice-cad.svg
+!/native/assets/LICENSE
 !/native/assets/brand/**
 !/native/src/**/*.rs
 !/native/examples/**/*.rs
