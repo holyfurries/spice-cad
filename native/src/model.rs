@@ -134,16 +134,30 @@ pub fn read_source(path: &Path) -> Result<String, String> {
     Ok(source)
 }
 
+#[cfg(test)]
 pub fn compile(source: &str) -> Result<Model, String> {
     compile_cached(source, &mut crate::analysis::Cache::default())
 }
 
+#[cfg(test)]
 pub fn compile_cached(
     source: &str,
     analysis: &mut crate::analysis::Cache,
 ) -> Result<Model, String> {
+    compile_project_cached(source, None, analysis)
+}
+
+pub fn compile_project_cached(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    analysis: &mut crate::analysis::Cache,
+) -> Result<Model, String> {
     let started = Instant::now();
-    analysis.validate(source)?;
+    if let Some(project) = project {
+        analysis.validate_project(source, project)?;
+    } else {
+        analysis.validate(source)?;
+    }
     let analysis_ms = started.elapsed().as_secs_f64() * 1000.0;
     let started = Instant::now();
     let lua = Lua::new();
@@ -503,7 +517,7 @@ pub fn compile_cached(
             if state.outputs.iter().any(|part| part.solid == solid) {
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
-            let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten().unwrap_or(1).saturating_sub(1);
+            let line = crate::project::source_line(lua);
             state.outputs.push(Part { assembly, print, line, name, color, solid });
             Ok(())
         })
@@ -816,6 +830,9 @@ pub fn compile_cached(
             .map_err(|error| error.to_string())?;
     }
     lua.sandbox(true).map_err(|error| error.to_string())?;
+    if let Some(project) = project {
+        project.install(&lua).map_err(|error| error.to_string())?;
+    }
     lua.load(source)
         .set_name("@model.luau")
         .exec()

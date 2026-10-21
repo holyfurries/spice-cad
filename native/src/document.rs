@@ -22,24 +22,76 @@ pub struct Document {
 pub struct Watcher {
     pub events: mpsc::Receiver<()>,
     stop: mpsc::SyncSender<()>,
+    source: std::sync::Arc<std::sync::Mutex<Option<ropey::Rope>>>,
 }
 
 impl Watcher {
     pub fn new(path: PathBuf, context: eframe::egui::Context) -> Result<Self, String> {
         let (updates, events) = mpsc::sync_channel(1);
         let (stop, cancelled) = mpsc::sync_channel(1);
+        let source = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sources = std::sync::Arc::clone(&source);
         std::thread::Builder::new()
             .name("cad-file-watch".into())
             .spawn(move || {
                 let mut previous = None;
                 let mut previous_metadata = None;
+                let mut dependencies = Vec::<PathBuf>::new();
+                let mut dependency_metadata = Vec::new();
+                let mut retry_project = true;
+                let mut overlay: Option<String> = None;
                 loop {
+                    let updated = sources
+                        .lock()
+                        .expect("Dependency source")
+                        .take()
+                        .map(|source: ropey::Rope| source.to_string());
+                    let overlay_changed = updated
+                        .as_ref()
+                        .is_some_and(|source| overlay.as_ref() != Some(source));
+                    if overlay_changed {
+                        overlay = updated;
+                        retry_project = true;
+                    }
                     let metadata = std::fs::metadata(&path)
                         .and_then(|metadata| Ok((metadata.len(), metadata.modified()?)))
                         .map_err(|error| error.to_string());
-                    if previous_metadata.as_ref() != Some(&metadata) {
+                    let changed_dependencies: Vec<_> = dependencies
+                        .iter()
+                        .map(|path| {
+                            std::fs::metadata(path)
+                                .and_then(|metadata| Ok((metadata.len(), metadata.modified()?)))
+                                .map_err(|error| error.to_string())
+                        })
+                        .collect();
+                    let dependency_changed = dependency_metadata != changed_dependencies;
+                    if previous_metadata.as_ref() != Some(&metadata)
+                        || dependency_changed
+                        || retry_project
+                    {
                         let current = model::read_source(&path);
-                        if previous.as_ref() != Some(&current) {
+                        let was_retrying = retry_project;
+                        if let Some(source) = overlay.as_ref().or(current.as_ref().ok()) {
+                            match crate::project::Project::load_if_imported(&path, source) {
+                                Ok(Some(project)) => {
+                                    dependencies =
+                                        project.dependencies().map(PathBuf::from).collect();
+                                    retry_project = false;
+                                }
+                                Ok(None) => {
+                                    dependencies.clear();
+                                    retry_project = false;
+                                }
+                                Err(_) => retry_project = true,
+                            }
+                        }
+                        if previous.as_ref() != Some(&current)
+                            || dependency_changed
+                            || (was_retrying
+                                && !retry_project
+                                && previous.is_some()
+                                && !overlay_changed)
+                        {
                             match updates.try_send(()) {
                                 Ok(()) => {
                                     previous = Some(current);
@@ -52,6 +104,14 @@ impl Watcher {
                         } else {
                             previous_metadata = Some(metadata);
                         }
+                        dependency_metadata = dependencies
+                            .iter()
+                            .map(|path| {
+                                std::fs::metadata(path)
+                                    .and_then(|metadata| Ok((metadata.len(), metadata.modified()?)))
+                                    .map_err(|error| error.to_string())
+                            })
+                            .collect();
                     }
                     match cancelled.recv_timeout(Duration::from_millis(250)) {
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -60,7 +120,15 @@ impl Watcher {
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok(Self { events, stop })
+        Ok(Self {
+            events,
+            stop,
+            source,
+        })
+    }
+
+    pub fn source(&self, source: ropey::Rope) {
+        *self.source.lock().expect("Dependency source") = Some(source);
     }
 }
 
@@ -74,6 +142,7 @@ impl Drop for Watcher {
 pub enum Example {
     ShapeOperations,
     FitGauge,
+    ModularBracket,
     RackParts,
     RocketEngine,
     RevolvedBushing,
@@ -101,6 +170,23 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             "fit-gauge.luau",
             include_str!("../../models/fit-gauge.luau"),
         ),
+        Example::ModularBracket => {
+            let directory = directory.join("spice-cad/models/modular");
+            for (name, source) in [
+                (
+                    "components/foot.luau",
+                    include_str!("../../models/modular/components/foot.luau"),
+                ),
+                (
+                    "bracket.luau",
+                    include_str!("../../models/modular/bracket.luau"),
+                ),
+                ("main.luau", include_str!("../../models/modular/main.luau")),
+            ] {
+                create_example_model(directory.join(name), source)?;
+            }
+            return Ok(directory.join("main.luau"));
+        }
         Example::RackParts => (
             "spice-rack-measurements.luau",
             include_str!("../../models/rack-parts.luau"),
@@ -165,6 +251,14 @@ fn create_example_model(path: PathBuf, source: &str) -> Result<PathBuf, String> 
 }
 
 impl Document {
+    pub fn invalidate_dependencies(&mut self) {
+        let saved = !self.edited();
+        self.buffer.revision = crate::text_buffer::next_revision();
+        self.buffer.change = None;
+        if saved {
+            self.saved_revision = Some(self.buffer.revision);
+        }
+    }
     pub fn draft(path: PathBuf) -> Self {
         let mut document = Self::new(path);
         document.buffer = "--!strict\nlocal width: number = cad.number(20, {label = \"Width\", unit = \"mm\"})\nlocal depth: number = cad.number(20, {label = \"Depth\", unit = \"mm\"})\nlocal height: number = cad.number(20, {label = \"Height\", unit = \"mm\"})\ncad.show(\"new model\", cad.box({ width = width, depth = depth, height = height }))\n".into();

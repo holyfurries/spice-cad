@@ -193,9 +193,19 @@ impl<'kernel> Cache<'kernel> {
         }
     }
 
+    #[cfg(test)]
     pub fn compile(&mut self, source: &str) -> Result<Model, String> {
         self.checkpoint()?;
         super::compile_cached(source, &mut self.analysis)
+    }
+
+    pub fn compile_project(
+        &mut self,
+        source: &str,
+        project: Option<&crate::project::Project>,
+    ) -> Result<Model, String> {
+        self.checkpoint()?;
+        super::compile_project_cached(source, project, &mut self.analysis)
     }
 
     pub fn with_preview<T>(

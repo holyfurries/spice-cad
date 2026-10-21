@@ -35,7 +35,7 @@ pub struct Buffer {
     history_size_bytes: usize,
 }
 
-fn next_revision() -> u64 {
+pub(crate) fn next_revision() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }

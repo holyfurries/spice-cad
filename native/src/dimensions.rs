@@ -189,11 +189,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Definitions>>
                 ));
             }
             definitions.measurements.push(Requirement {
-                line: lua
-                    .inspect_stack(1, |debug| debug.current_line())
-                    .flatten()
-                    .unwrap_or(1)
-                    .saturating_sub(1),
+                line: crate::project::source_line(lua),
                 name,
                 first,
                 second,

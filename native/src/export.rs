@@ -20,8 +20,19 @@ impl Target {
     }
 }
 
+#[cfg(test)]
 pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), String> {
-    let model = model::compile(source)?;
+    model_files_project(source, None, folder, target)
+}
+
+pub fn model_files_project(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    folder: &Path,
+    target: Target,
+) -> Result<(), String> {
+    let model =
+        model::compile_project_cached(source, project, &mut crate::analysis::Cache::default())?;
     let kernel = Kernel::new()?;
     let mut bodies = model.build(&kernel)?;
     let canonical_meshes = if target == Target::Print || model.has_annotations() {
@@ -30,16 +41,25 @@ pub fn model_files(source: &str, folder: &Path, target: Target) -> Result<(), St
         Vec::new()
     };
     let meshes: Vec<_> = canonical_meshes.iter().collect();
-    write_model(source, folder, target, &model, &mut bodies, &meshes)
+    write_model(
+        source,
+        project,
+        folder,
+        target,
+        &model,
+        &mut bodies,
+        &meshes,
+    )
 }
 
-pub fn model_files_cached(
+pub fn model_files_project_cached(
     source: &str,
+    project: Option<&crate::project::Project>,
     folder: &Path,
     target: Target,
     cache: &mut model::Cache<'_>,
 ) -> Result<(), String> {
-    let model = cache.compile(source)?;
+    let model = cache.compile_project(source, project)?;
     let prepared = cache.prepare(&model)?;
     let mut bodies = prepared
         .bodies
@@ -51,11 +71,20 @@ pub fn model_files_cached(
         .iter()
         .map(|geometry| &geometry.mesh)
         .collect();
-    write_model(source, folder, target, &model, &mut bodies, &meshes)
+    write_model(
+        source,
+        project,
+        folder,
+        target,
+        &model,
+        &mut bodies,
+        &meshes,
+    )
 }
 
 fn write_model(
     source: &str,
+    project: Option<&crate::project::Project>,
     folder: &Path,
     target: Target,
     model: &model::Model,
@@ -171,7 +200,13 @@ fn write_model(
         for (name, data) in files {
             std::fs::write(folder.join(name), data)?;
         }
-        std::fs::write(folder.join("model.luau"), source)?;
+        if let Some(project) = project {
+            for (name, source) in project.sources("model.luau") {
+                std::fs::write(folder.join(name), source)?;
+            }
+        } else {
+            std::fs::write(folder.join("model.luau"), source)?;
+        }
         Ok(())
     })();
     if let Err(error) = result {

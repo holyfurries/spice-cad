@@ -48,6 +48,7 @@ pub enum Command {
     RackParts,
     Bracket,
     ExtrudedBracket,
+    ModularBracket,
     EdgeFillets,
     EdgeChamfers,
     RevolvedBushing,
@@ -93,6 +94,11 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::RackParts, "Examples: spice rack four parts", ""),
     (Command::Bracket, "Examples: mounting bracket", ""),
     (Command::ExtrudedBracket, "Examples: extruded bracket", ""),
+    (
+        Command::ModularBracket,
+        "Examples: reusable typed modules",
+        "",
+    ),
     (Command::EdgeFillets, "Examples: selected edge fillets", ""),
     (
         Command::EdgeChamfers,

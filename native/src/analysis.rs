@@ -13,10 +13,33 @@ const DIAGNOSTIC_COUNT_MAX: usize = 200;
 #[derive(Default)]
 pub struct Cache {
     successful: Option<String>,
+    project_successful: Option<String>,
     parameters: Option<Vec<crate::parameters::Parameter>>,
 }
 
 impl Cache {
+    pub fn validate_project(
+        &mut self,
+        source: &str,
+        project: &crate::project::Project,
+    ) -> Result<(), String> {
+        let analyzed = crate::parameters::analyze_source(source);
+        let key = project.analysis_key(
+            analyzed
+                .as_ref()
+                .map_or(source, |(normalized, _)| normalized.as_str()),
+        );
+        self.parameters = analyzed.map(|(_, parameters)| parameters);
+        if self.project_successful.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        let report = check_files(source, Some(project), || false)?.ok_or("Analysis cancelled")?;
+        if let Some(error) = report.error() {
+            return Err(error);
+        }
+        self.project_successful = Some(key);
+        Ok(())
+    }
     pub fn take_parameters(&mut self) -> Option<Vec<crate::parameters::Parameter>> {
         self.parameters.take()
     }
@@ -120,10 +143,19 @@ impl Diagnostic {
 
     pub fn build_error(message: &str) -> Self {
         let line = message
-            .split("model.luau:")
-            .nth(1)
-            .and_then(|rest| rest.split(':').next())
-            .and_then(|line| line.parse::<usize>().ok())
+            .match_indices("model.luau:")
+            .find_map(|(index, token)| {
+                if index > 0 {
+                    if !message[..index].ends_with(char::is_whitespace) {
+                        return None;
+                    }
+                }
+                message[index + token.len()..]
+                    .split(':')
+                    .next()?
+                    .parse::<usize>()
+                    .ok()
+            })
             .filter(|line| *line > 0);
         Self {
             span: line.map(|line| Span {
@@ -187,6 +219,14 @@ pub fn directive_diagnostic(source: &str) -> Option<Diagnostic> {
 }
 
 pub fn check(source: &str, cancelled: impl Fn() -> bool) -> Result<Option<Report>, String> {
+    check_files(source, None, cancelled)
+}
+
+fn check_files(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<Report>, String> {
     if source.len() > crate::text_buffer::SIZE_BYTES_MAX {
         return Err("Model source exceeds 16 MiB".into());
     }
@@ -214,6 +254,22 @@ pub fn check(source: &str, cancelled: impl Fn() -> bool) -> Result<Option<Report
         std::fs::File::create(files.0.join("input.luau")).map_err(|error| error.to_string())?,
     );
     let prefix = format!("--!strict\n{TYPE_CONTEXT}\n");
+    let sources = project.map(|project| project.sources("input.luau"));
+    if let Some(sources) = &sources {
+        for (name, source) in sources.iter().skip(1) {
+            if let Some(diagnostic) = directive_diagnostic(source) {
+                return Ok(Some(Report {
+                    diagnostics: vec![diagnostic],
+                    truncated: false,
+                }));
+            }
+            let source = format!("{prefix}{source}");
+            std::fs::write(files.0.join(name), source).map_err(|error| error.to_string())?;
+        }
+    }
+    let source = sources
+        .as_ref()
+        .map_or(source, |sources| sources[0].1.as_str());
     input
         .write_all(prefix.as_bytes())
         .map_err(|error| error.to_string())?;
@@ -307,10 +363,14 @@ fn parse(output: &str, offset: usize) -> Report {
             report.truncated = true;
             break;
         }
-        let Some(rest) = line
+        let root = line
             .strip_prefix("./input.luau:")
-            .or_else(|| line.strip_prefix("input.luau:"))
-        else {
+            .or_else(|| line.strip_prefix("input.luau:"));
+        let module = line
+            .trim_start_matches("./")
+            .split_once(':')
+            .filter(|(name, _)| name.starts_with("module-") && name.ends_with(".luau"));
+        let Some(rest) = root.or_else(|| module.map(|(_, rest)| rest)) else {
             if let Some(previous) = report.diagnostics.last_mut() {
                 previous.message.push('\n');
                 previous.message.push_str(line);
@@ -344,7 +404,7 @@ fn parse(output: &str, offset: usize) -> Report {
         if first.line <= offset && severity == Severity::Warning {
             continue;
         }
-        let span = if first.line > offset && last.line > offset {
+        let span = if root.is_some() && first.line > offset && last.line > offset {
             Some(Span {
                 start: Position {
                     line: first.line - offset,
@@ -362,7 +422,16 @@ fn parse(output: &str, offset: usize) -> Report {
             span,
             severity,
             code: code.into(),
-            message: message.trim().into(),
+            message: module.map_or_else(
+                || message.trim().to_owned(),
+                |(name, _)| {
+                    format!(
+                        "{name}:{}: {}",
+                        first.line.saturating_sub(offset),
+                        message.trim()
+                    )
+                },
+            ),
         });
     }
     report
@@ -371,6 +440,25 @@ fn parse(output: &str, offset: usize) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_model_filenames_do_not_create_root_source_spans() {
+        assert!(
+            Diagnostic::build_error("runtime error: /tmp/project/model.luau:100: bad")
+                .span
+                .is_none()
+        );
+        assert_eq!(
+            Diagnostic::build_error(
+                "runtime error: /tmp/project/model.luau:100: bad\n\tmodel.luau:4: caller"
+            )
+            .span
+            .expect("Root caller")
+            .start
+            .line,
+            4
+        );
+    }
 
     #[test]
     fn successful_checks_reuse_only_numeric_property_literals() -> Result<(), String> {

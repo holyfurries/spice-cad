@@ -14,7 +14,16 @@ const VIEWS: [(&str, Vec3, Vec3); 4] = [
     ("isometric", Vec3::new(1.0, -1.0, 1.0), Vec3::Z),
 ];
 
+#[cfg(test)]
 pub fn write(source: &str, folder: &Path) -> Result<(), String> {
+    write_project(source, None, folder)
+}
+
+pub fn write_project(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    folder: &Path,
+) -> Result<(), String> {
     if folder.exists() {
         return Err(format!(
             "{}: choose a new render directory",
@@ -22,11 +31,12 @@ pub fn write(source: &str, folder: &Path) -> Result<(), String> {
         ));
     }
     let kernel = Kernel::new()?;
-    let snapshot = crate::build_script_snapshot_with_thumbnails(
+    let snapshot = crate::build_script_snapshot_project(
         source.into(),
         1,
         &mut model::Cache::new(&kernel),
         model::ThumbnailMode::Deferred,
+        project,
     )?;
     let mut remaining = PIXEL_VISITS_MAX;
     let images = VIEWS

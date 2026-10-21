@@ -49,6 +49,7 @@ impl Worker {
             .name("cad-analysis".into())
             .spawn(move || {
                 let mut client = None;
+                let mut dependencies = None;
                 loop {
                     let job = {
                         let (mutex, wake) = &*shared;
@@ -66,6 +67,18 @@ impl Worker {
                             || desired_sequence.load(Ordering::Acquire) != job.sequence
                     };
                     let result = (|| {
+                        let current_dependencies = crate::project::Project::load_if_imported(
+                            &path,
+                            &job.source.to_string(),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|project| project.dependency_fingerprint());
+                        if dependencies != current_dependencies {
+                            // Luau LSP 1.69 retains stale imported completions after file notifications.
+                            client = None;
+                            dependencies = current_dependencies;
+                        }
                         if client.is_none() {
                             client = Some(lsp::Client::new(&path, &cancelled, Arc::clone(&child))?);
                         }
@@ -368,6 +381,55 @@ fn diagnostic_row(ui: &mut egui::Ui, entry: &analysis::Diagnostic) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_completion_refreshes_after_a_dependency_edit() -> Result<(), String> {
+        let folder =
+            std::env::temp_dir().join(format!("spice-module-completion-{}", std::process::id()));
+        std::fs::create_dir(&folder).map_err(|error| error.to_string())?;
+        let result = (|| {
+            let component = folder.join("component.luau");
+            std::fs::write(
+                &component,
+                "return {build=function(width: number): number return width end}",
+            )
+            .map_err(|error| error.to_string())?;
+            let worker = Worker::new(folder.join("main.luau"), egui::Context::default())?;
+            let complete = || -> Result<Vec<String>, String> {
+                let source = "local component=require('./component')\ncomponent.";
+                let buffer = Buffer::from(source);
+                worker.invalidate(buffer.revision);
+                worker.submit(&buffer, lsp::Query::Complete(source.len()));
+                let deadline = Instant::now() + Duration::from_secs(3);
+                for _ in 0..300 {
+                    if let Some(completion) = worker.take() {
+                        let Some(lsp::Insight::Completions(entries)) = completion.result?.insight
+                        else {
+                            return Err("Missing imported completions".into());
+                        };
+                        return Ok(entries.into_iter().map(|entry| entry.label).collect());
+                    }
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err("Module completion timed out".into())
+            };
+            assert!(complete()?.iter().any(|label| label == "build"));
+            std::fs::write(
+                &component,
+                "return {updated=function(width: number): number return width end}",
+            )
+            .map_err(|error| error.to_string())?;
+            let labels = complete()?;
+            assert!(labels.iter().any(|label| label == "updated"));
+            assert!(!labels.iter().any(|label| label == "build"));
+            Ok(())
+        })();
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        result
+    }
 
     #[test]
     fn diagnostic_navigation_skips_the_current_selection_and_wraps() -> Result<(), String> {

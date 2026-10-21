@@ -41,6 +41,7 @@ mod placement;
 mod preview;
 mod print_preparation;
 mod profile;
+mod project;
 mod raster;
 mod render_views;
 mod save;
@@ -90,7 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [flag, path] if flag == "--model" => Some(std::path::PathBuf::from(path)),
         [flag, path] if flag == "--check-print" => {
             let source = model::read_source(std::path::Path::new(path))?;
-            let model = model::compile(&source)?;
+            let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
+            let model = model::compile_project_cached(&source, project.as_ref(), &mut analysis::Cache::default())?;
             let report = print_preparation::model_report(&model)?;
             println!("{}", serde_json::to_string_pretty(&report.json())?);
             if report.blocked() {
@@ -102,7 +104,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         [flag, path] if flag == "--check-model" => {
             let source = model::read_source(std::path::Path::new(path))?;
-            let snapshot = build_script_snapshot(&source, 1)?;
+            let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
+            let kernel = kernel::Kernel::new()?;
+            let snapshot = build_script_snapshot_project(
+                source,
+                1,
+                &mut model::Cache::new(&kernel),
+                model::ThumbnailMode::Complete,
+                project.as_ref(),
+            )?;
             println!(
                 "{}: {:.3} mm³ · {} triangles · analyze {:.1} ms · script {:.1} ms · kernel {:.1} ms · mesh {:.1} ms · total {:.1} ms",
                 snapshot.name,
@@ -118,7 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         [flag, path, folder] if flag == "--render-views" => {
             let source = model::read_source(std::path::Path::new(path))?;
-            render_views::write(&source, std::path::Path::new(folder))?;
+            let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
+            render_views::write_project(&source, project.as_ref(), std::path::Path::new(folder))?;
             println!("Rendered top, front, side, isometric, and contact-sheet PNGs to {folder}");
             return Ok(());
         }
@@ -129,7 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 export::Target::Print
             };
-            export::model_files(&source, std::path::Path::new(folder), target)?;
+            let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
+            export::model_files_project(
+                &source,
+                project.as_ref(),
+                std::path::Path::new(folder),
+                target,
+            )?;
             println!("Exported {} to {folder}", target.description());
             return Ok(());
         }
@@ -183,11 +200,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 enum Command {
     ExportScript {
+        project: Option<Arc<project::Project>>,
         target: export::Target,
         source: String,
         folder: std::path::PathBuf,
     },
     Script {
+        path: Option<Box<std::path::PathBuf>>,
         thumbnails: model::ThumbnailMode,
         input: Option<performance::Input>,
         source: ropey::Rope,
@@ -305,6 +324,7 @@ struct Snapshot {
     script_ms: f64,
     total_ms: f64,
     source: ModelSource,
+    project: Option<Arc<project::Project>>,
     name: String,
     volume_mm3: f64,
     build_ms: f64,
@@ -445,11 +465,12 @@ impl Worker {
                 let mut cache = kernel.as_ref().map(model::Cache::new);
                 while let Ok((command, token)) = requests.recv() {
                     let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
-                        Command::ExportScript { source, folder, target } => export::model_files_cached(&source, &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
-                        Command::Script { source, editor_revision, revision, saved_at, mut input, thumbnails } => {
+                        Command::ExportScript { source, folder, target, project } => export::model_files_project_cached(&source, project.as_deref(), &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
+                        Command::Script { path, source, editor_revision, revision, saved_at, mut input, thumbnails } => {
                             if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
                             let source = source.to_string();
-                            cache.with_preview(token, |cache| build_script_snapshot_with_thumbnails(source, revision, cache, thumbnails)).map(|snapshot| {
+                            let project = path.as_deref().map(|path| project::Project::load_if_imported(path, &source)).transpose()?.flatten();
+                            cache.with_preview(token, |cache| build_script_snapshot_project(source, revision, cache, thumbnails, project.as_ref())).map(|snapshot| {
                                 let Some(mut snapshot) = snapshot else { return Outcome::Cancelled; };
                                 if let Some(input) = &mut input { input.worker_finished_ms = input.elapsed_ms(Instant::now()); }
                                 snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot))
@@ -557,6 +578,7 @@ fn build_snapshot(
         script_ms: 0.0,
         total_ms: build_ms + tessellation_ms,
         source: ModelSource::Rack(parameters),
+        project: None,
         name: "Spice rack".into(),
         volume_mm3,
         build_ms,
@@ -565,11 +587,13 @@ fn build_snapshot(
     })
 }
 
+#[cfg(test)]
 fn build_script_snapshot(source: &str, revision: u64) -> Result<Snapshot, String> {
     let kernel = kernel::Kernel::new()?;
     build_script_snapshot_cached(source.into(), revision, &mut model::Cache::new(&kernel))
 }
 
+#[cfg(test)]
 fn build_script_snapshot_cached(
     source: String,
     revision: u64,
@@ -578,15 +602,26 @@ fn build_script_snapshot_cached(
     build_script_snapshot_with_thumbnails(source, revision, cache, model::ThumbnailMode::Complete)
 }
 
+#[cfg(test)]
 fn build_script_snapshot_with_thumbnails(
     source: String,
     revision: u64,
     cache: &mut model::Cache<'_>,
     thumbnails: model::ThumbnailMode,
 ) -> Result<Snapshot, String> {
+    build_script_snapshot_project(source, revision, cache, thumbnails, None)
+}
+
+fn build_script_snapshot_project(
+    source: String,
+    revision: u64,
+    cache: &mut model::Cache<'_>,
+    thumbnails: model::ThumbnailMode,
+    project: Option<&project::Project>,
+) -> Result<Snapshot, String> {
     assert!(revision > 0);
     let total = Instant::now();
-    let model = cache.compile(&source)?;
+    let model = cache.compile_project(&source, project)?;
     cache.checkpoint()?;
     let quality = if thumbnails == model::ThumbnailMode::Deferred {
         model::DisplayQuality::Interactive
@@ -642,6 +677,7 @@ fn build_script_snapshot_with_thumbnails(
         script_ms: model.script_ms,
         total_ms: total.elapsed().as_secs_f64() * 1000.0,
         source: ModelSource::Script(source),
+        project: project.cloned().map(Arc::new),
         name: model.name,
         volume_mm3,
         build_ms,
@@ -1085,6 +1121,12 @@ impl Editor {
                     .map_err(|error| error.to_string())?
                     .as_nanos();
                 Command::ExportScript {
+                    project: self
+                        .snapshot
+                        .as_ref()
+                        .expect("Validated export")
+                        .project
+                        .clone(),
                     target,
                     source: source.clone(),
                     folder: format!("output/native/model-{stamp}").into(),
@@ -1252,8 +1294,12 @@ impl Editor {
             return;
         };
         assert_eq!(revision, script.buffer.revision);
+        if let Some(watcher) = &self.watcher {
+            watcher.source(script.buffer.rope.clone());
+        }
         self.revision += 1;
         match self.worker.try_send(Command::Script {
+            path: Some(Box::new(script.path.clone())),
             thumbnails,
             input: self
                 .preview_input
@@ -1307,6 +1353,8 @@ impl Editor {
             if file_changed {
                 if script.poll() {
                     self.message = "Source updated from disk".into();
+                } else {
+                    script.invalidate_dependencies();
                 }
                 if let Some(error) = &script.read_error {
                     self.message.clone_from(error);
@@ -1720,6 +1768,9 @@ impl eframe::App for Editor {
                         Navigation::ExtrudedBracket => {
                             example_requested = Some(document::Example::ExtrudedBracket)
                         }
+                        Navigation::ModularBracket => {
+                            example_requested = Some(document::Example::ModularBracket)
+                        }
                         Navigation::EdgeFillets => {
                             example_requested = Some(document::Example::EdgeFillets)
                         }
@@ -1838,6 +1889,7 @@ impl eframe::App for Editor {
                             ("Measured block", document::Example::MeasuredBlock),
                             ("Extruded bracket", document::Example::ExtrudedBracket),
                             ("Rounded enclosure", document::Example::RoundedEnclosure),
+                            ("Reusable typed modules", document::Example::ModularBracket),
                             ("Selected edge fillets", document::Example::EdgeFillets),
                             ("Selected edge chamfers", document::Example::EdgeChamfers),
                             ("Revolved bushing", document::Example::RevolvedBushing),
@@ -4638,6 +4690,7 @@ mod tests {
         let obsolete = worker.generation.token();
         worker.invalidate_preview();
         let command = |source: &str, revision| Command::Script {
+            path: None,
             source: source.into(),
             thumbnails: model::ThumbnailMode::Deferred,
             input: None,
@@ -4693,6 +4746,7 @@ mod tests {
         let input = performance::Input::new(1, Instant::now());
         worker
             .try_send(Command::Script {
+                path: None,
                 thumbnails: model::ThumbnailMode::Complete,
                 input: Some(input),
                 source: "cad.show('box',cad.box({width=1,depth=1,height=1}))".into(),
@@ -4727,6 +4781,7 @@ mod tests {
         let worker = Worker::new(egui::Context::default())?;
         worker
             .try_send(Command::Script {
+                path: None,
                 thumbnails: model::ThumbnailMode::Complete,
                 input: None,
                 source: "--!strict\nerror(string.rep('λ', 100000))".into(),
@@ -4806,6 +4861,7 @@ mod tests {
             };
             worker
                 .try_send(Command::Script {
+                    path: None,
                     thumbnails: model::ThumbnailMode::Complete,
                     input: None,
                     source: source.into(),
@@ -4838,6 +4894,7 @@ mod tests {
                 ] {
                     worker
                         .try_send(Command::ExportScript {
+                            project: None,
                             source: match &snapshot.source {
                                 ModelSource::Script(source) => source.clone(),
                                 _ => unreachable!(),
@@ -4877,6 +4934,7 @@ mod tests {
         ] {
             worker
                 .try_send(Command::Script {
+                    path: None,
                     thumbnails: model::ThumbnailMode::Complete,
                     input: None,
                     source: source.into(),
