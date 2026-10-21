@@ -53,6 +53,12 @@ identifies its published license declaration and author attribution.
 
 ## Other bundled components
 
+- Experimental AppImages add nix-appimage's MIT-licensed AppRun at revision
+  `7946addbc0d97e358a6d7aefe5e82310f0fe6b18` and the MIT-licensed type2 runtime at
+  `01164bfcbc8dd2bd0d7e3706f97035108d6b91ba`. Their notices are in `packaging/`.
+  The runtime's statically linked compression/FUSE libraries and the bundled
+  system-library closure retain their own terms; review them before publishing
+  a release, as described in [release instructions](../docs/releases.md).
 - SMLib / SM_API and AWV's patches use the source pinned in `flake.lock`:
   `735403a40b261b71967a59d670cd7970f032d04e`. Their Apache-2.0 and MIT materials,
   upstream notice, and patch descriptions are copied here. The unabridged

@@ -9,6 +9,7 @@
 !/NOTICE
 !/about.toml
 !/licenses/**
+!/.github/workflows/*.yml
 
 !/flake.*
 !/Cargo.*

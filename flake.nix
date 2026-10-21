@@ -3,6 +3,10 @@
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.occt-nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
+  inputs.nix-appimage = {
+    url = "github:ralismark/nix-appimage/7946addbc0d97e358a6d7aefe5e82310f0fe6b18";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
   inputs.smlib = {
     url = "git+https://github.com/awv-informatik/smlibpy?submodules=1&rev=735403a40b261b71967a59d670cd7970f032d04e";
     flake = false;
@@ -13,6 +17,7 @@
       self,
       nixpkgs,
       occt-nixpkgs,
+      nix-appimage,
       smlib,
       ...
     }:
@@ -29,12 +34,17 @@
         let
           pkgs = import nixpkgs { inherit system; };
           occt_pkgs = import occt-nixpkgs { inherit system; };
+          version = (builtins.fromTOML (builtins.readFile ./native/Cargo.toml)).package.version;
         in
         {
           default = self.packages.${system}.spice-cad;
+          spice-cad-appimage = nix-appimage.lib.${system}.mkAppImage {
+            program = "${self.packages.${system}.spice-cad}/bin/spice-cad";
+            name = "spice-cad-${version}-${system}.AppImage";
+          };
           spice-cad = pkgs.rustPlatform.buildRustPackage {
             pname = "spice-cad";
-            version = "0.1.0";
+            inherit version;
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
               filter =

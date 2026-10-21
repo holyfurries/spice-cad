@@ -1,0 +1,95 @@
+name: Build and package
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = false
+      - name: Check formatting
+        run: |
+          nix develop -c cargo fmt --all -- --check
+          nix fmt -- --check flake.nix
+      - name: Lint
+        run: nix develop -c cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
+      - name: Test
+        run: nix develop -c cargo test --locked --workspace --all-features
+      - name: Build AppImage
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            test "$RELEASE_TAG" = "v$(nix eval --raw .#spice-cad.version)"
+          fi
+          nix build --out-link appimage .#spice-cad-appimage
+          mkdir -p dist
+          cp -L appimage dist/spice-cad-x86_64-linux.AppImage
+          chmod +x dist/spice-cad-x86_64-linux.AppImage
+      - name: Exercise download without Nix
+        run: |
+          docker run --rm --network none \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            --user 1000:1000 --env HOME=/tmp --env APPIMAGE_EXTRACT_AND_RUN=1 \
+            --mount "type=bind,source=$PWD/dist,target=/download,readonly" \
+            --mount "type=bind,source=$PWD/models,target=/models,readonly" \
+            ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+            /download/spice-cad-x86_64-linux.AppImage --check-model /models/mounting-bracket.luau
+      - name: Assemble download and checksums
+        run: |
+          cp LICENSE NOTICE ASSETS.md dist/
+          cp -r licenses dist/
+          mkdir -p dist/native/assets
+          cp native/assets/LICENSE dist/native/assets/
+          cp docs/releases.md dist/INSTALL.md
+          git archive --format=tar.gz --prefix=spice-cad-source/ HEAD > dist/spice-cad-source.tar.gz
+          cd dist
+          sha256sum spice-cad-x86_64-linux.AppImage spice-cad-source.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spice-cad-x86_64-linux
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: spice-cad-x86_64-linux
+          path: dist
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          tar -czf spice-cad-x86_64-linux.tar.gz -C dist .
+          sha256sum spice-cad-x86_64-linux.tar.gz > spice-cad-x86_64-linux.tar.gz.sha256
+          gh release create "$RELEASE_TAG" --verify-tag --draft \
+            --title "Spice CAD $RELEASE_TAG" --notes-file docs/releases.md \
+            spice-cad-x86_64-linux.tar.gz spice-cad-x86_64-linux.tar.gz.sha256

@@ -58,6 +58,11 @@ and rebuilding the reference libraries.
 
 Packaging
 ---------
+Experimental AppImages use nix-appimage's AppRun and AppImage's type2 runtime
+under MIT; see licenses/packaging/. The exact sources and build recipes are
+pinned by the nix-appimage input in flake.lock. The AppImage additionally
+bundles runtime/system libraries with their respective licenses.
+
 Nix installs this notice, LICENSE, ASSETS.md, brand terms, and licenses/ under
 share/doc/spice-cad. Keep them with redistributed builds. System libraries
 provided by the Nix closure or operating system retain their own licenses;

@@ -18,6 +18,9 @@ The first launch builds the app. It opens a four-part spice rack; choose another
 model under **File → Examples**, or use **File → Open** for your own `.luau` file.
 To install it: `nix profile install .#spice-cad`.
 
+[Experimental Linux downloads and release instructions](docs/releases.md)
+cover running an AppImage without Nix.
+
 ## Model with code
 
 ```lua
