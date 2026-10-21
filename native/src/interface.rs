@@ -174,19 +174,26 @@ pub fn grid(
     matrix: glam::Mat4,
     target: glam::Vec3,
     distance: f32,
+    view_index: usize,
 ) {
     let spacing = 10.0_f32.powf((distance / 12.0).log10().floor());
-    let center = (target / spacing).floor() * spacing;
+    let (horizontal, vertical) = match view_index {
+        2 => (glam::Vec3::X, glam::Vec3::Z),
+        3 => (glam::Vec3::Y, glam::Vec3::Z),
+        _ => (glam::Vec3::X, glam::Vec3::Y),
+    };
+    let center = horizontal * (target.dot(horizontal) / spacing).floor() * spacing
+        + vertical * (target.dot(vertical) / spacing).floor() * spacing;
     for index in -10..=10 {
         let offset = index as f32 * spacing;
         for (first, second) in [
             (
-                glam::vec3(center.x + offset, center.y - 10.0 * spacing, 0.0),
-                glam::vec3(center.x + offset, center.y + 10.0 * spacing, 0.0),
+                center + horizontal * offset - vertical * (10.0 * spacing),
+                center + horizontal * offset + vertical * (10.0 * spacing),
             ),
             (
-                glam::vec3(center.x - 10.0 * spacing, center.y + offset, 0.0),
-                glam::vec3(center.x + 10.0 * spacing, center.y + offset, 0.0),
+                center - horizontal * (10.0 * spacing) + vertical * offset,
+                center + horizontal * (10.0 * spacing) + vertical * offset,
             ),
         ] {
             let first = matrix * first.extend(1.0);
@@ -210,7 +217,12 @@ pub fn grid(
 
 pub fn axes(painter: &egui::Painter, rect: egui::Rect, eye_direction: glam::Vec3) {
     let forward = -eye_direction.normalize();
-    let right = forward.cross(glam::Vec3::Z).normalize_or_zero();
+    let vertical = if forward.z.abs() > 0.9999 {
+        glam::Vec3::Y
+    } else {
+        glam::Vec3::Z
+    };
+    let right = forward.cross(vertical).normalize_or_zero();
     let up = right.cross(forward);
     let origin = rect.right_bottom() - egui::vec2(58.0, 64.0);
     for (axis, label, color) in [

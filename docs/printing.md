@@ -22,8 +22,8 @@ then choose **Run print checks** after the current model finishes building.
 The check runs in the geometry worker using cached final geometry. Editing and
 camera movement stay responsive; opening the window does not run checks.
 
-The window lists P1S envelope/bed blockers, sampled thin walls, and close assembly
-surfaces. Thresholds come from `cad.print_options` in the source. Select a row
+The window lists P1S envelope/bed blockers, sampled thin walls, close assembly
+surfaces, and exact solid overlaps. Thresholds come from `cad.print_options` in the source. Select a row
 to reveal and frame its part or pair of parts. Wall samples use print placement;
 gap samples switch to assembly placement. The viewport highlights the affected
 parts and shows the sampled endpoints with a readable millimetre callout, including
@@ -31,6 +31,20 @@ zero gaps. Envelope and placement blockers show the part's bounding dimensions.
 Use **Clear highlight**, click in the viewport, or close the window to clear the
 finding. Editing the source, parameters, or imported modules marks the report
 out of date and disables its findings until checks are run again.
+
+Assembly collision checks use native B-rep intersections and volume integration,
+after bounding-box filtering. They detect containment as well as partial overlaps.
+Overlap volumes above `0.000001 mm³` produce advisory findings; touching faces,
+edges, and points with no shared volume are allowed. Numerical kernel tolerances
+apply. A failed pair is explicitly marked incomplete. Select an overlap to frame
+and highlight both parts in assembly placement. Intentional interference fits
+remain printable as separate parts; collisions do not block those exports.
+
+Checks cover every pair of the model's maximum 32 parts. Pair results are cached
+by canonical solids and assembly placements. Unchanged pairs reuse their results;
+print placement, color, and label changes do not invalidate collision geometry.
+Checks are on demand and do not run during slider previews or camera movement.
+Setting minimum clearance to zero disables sampled gaps, but keeps collision checks.
 
 For a machine-readable report:
 
@@ -45,6 +59,8 @@ Thin-wall and clearance findings are advisory. Normal print exports also include
 `PRINT_CHECKS.json` and `PRINT_CHECKS.md` with the actual source snapshot.
 JSON sample endpoints identify their coordinate space: walls in print placement,
 gaps in assembly placement.
+`assembly_collisions` records pair counts, executed intersections, cache hits,
+overlap volumes, and incomplete pairs, all in assembly placement.
 
 Wall checks cast inward from at most 128 triangle centroids per part. Clearance
 checks sample centroid-to-triangle surface distances between nearby assembly

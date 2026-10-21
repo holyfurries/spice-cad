@@ -169,6 +169,7 @@ pub struct Prepared<'kernel> {
 }
 
 pub struct Cache<'kernel> {
+    pub assembly_checks: crate::assembly_checks::Cache<'kernel>,
     kernel: &'kernel Kernel,
     preview: Option<crate::cancellation::Token>,
     pub thumbnail_renders: u64,
@@ -182,6 +183,7 @@ pub struct Cache<'kernel> {
 impl<'kernel> Cache<'kernel> {
     pub fn new(kernel: &'kernel Kernel) -> Self {
         Self {
+            assembly_checks: Default::default(),
             kernel,
             preview: None,
             thumbnail_renders: 0,

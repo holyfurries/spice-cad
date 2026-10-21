@@ -73,6 +73,19 @@ supplied by the pinned Nix environment.
 
 ## Viewport controls
 
+Choose **View → Four views**, or **View → Four views** in the viewport toolbar,
+for Top, Front, Left, and Perspective panes. Orthographic views share their
+world-space center and zoom scale; drag to pan and scroll to zoom all three.
+Perspective retains its own orbit camera. Face/edge picking and dimensions work
+in every pane. **Frame** or **F** over a pane frames the selection or visible
+model across the views. Turn Four views off to restore the full viewport;
+choosing an individual camera in the viewport View menu also restores it.
+
+The panes share GPU geometry and part placements, with four small camera buffers.
+Switching layouts, panning, and zooming do not rebuild CAD or upload geometry.
+Four views do draw the model four times, so vertex processing increases; total
+viewport pixel area stays approximately the same. Idle redraws remain event driven.
+
 Drag to orbit, Shift-drag or right-drag to pan, scroll to zoom, and click a face
 to select it. Press F outside the code editor to frame the model. Neutral studio
 shading and dark CAD edge outlines make curved faces and boundaries easier to

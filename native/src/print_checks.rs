@@ -104,7 +104,7 @@ impl State {
         can_run: bool,
     ) -> Option<Action> {
         let mut action = None;
-        egui::Window::new("Print checks").open(open).default_pos(egui::pos2(24.0, 105.0)).default_width(440.0).default_height(460.0).show(context, |ui| {
+        egui::Window::new("Print checks").open(open).default_pos(egui::pos2(24.0, 105.0)).default_width(480.0).default_height(600.0).show(context, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Bambu Lab P1S").strong());
                 ui.label(egui::RichText::new("256 × 256 × 256 mm").color(interface::MUTED));
@@ -115,7 +115,7 @@ impl State {
             });
             ui.separator();
             egui::ScrollArea::vertical().id_salt("print_check_results").max_height((ui.available_height() - 76.0).max(80.0)).auto_shrink([false; 2]).show(ui, |ui| match self {
-                Self::Idle => { ui.label("Run checks to inspect bed placement, part size, sampled walls, and close assembly surfaces."); },
+                Self::Idle => { ui.label("Run checks to inspect bed placement, part size, sampled walls, assembly gaps, and exact solid overlaps."); },
                 Self::Running { revision: checked } => {
                     ui.label("Checking in the background… You can continue editing and moving the camera.");
                     if revision != Some(*checked) { ui.colored_label(interface::WARNING, "The model changed. Run again when this check finishes."); }
@@ -135,6 +135,10 @@ impl State {
                     let options = report.options();
                     ui.small(format!("Wall warning < {:.2} mm · gap warning < {:.2} mm", options.minimum_wall_mm, options.minimum_clearance_mm));
                     ui.small("Thresholds come from cad.print_options in your source.");
+                    let assembly = report.assembly();
+                    ui.small(format!("Assembly: {} pairs · {} overlaps · {} incomplete", assembly.pairs, assembly.overlaps.len(), assembly.failures.len()));
+                    ui.small(format!("{} B-rep intersections · {} cached pairs", assembly.boolean_tests, assembly.cache_hits));
+                    ui.small("Overlap warning > 0.000001 mm³; zero-volume contact is allowed.");
                     if options.minimum_clearance_mm == 0.0 { ui.small("Assembly gap checks are disabled in the source."); }
                     if report.skipped_pairs() > 0 { ui.colored_label(interface::WARNING, format!("{} assembly pairs skipped: sampling budget exhausted.", report.skipped_pairs())); }
                     ui.add_space(8.0);
@@ -148,7 +152,7 @@ impl State {
                 }
             });
             ui.separator();
-            ui.small("Wall and gap values are bounded mesh samples, not exact minima or collision tests. Missing warnings do not prove printability. Each part is checked separately; this does not validate a combined plate arrangement.");
+            ui.small("Collisions use exact B-rep intersections with numerical kernel tolerances; contact without volume is allowed. Walls and gaps use bounded mesh samples. Missing warnings do not prove printability or validate a combined plate arrangement.");
         });
         action
     }

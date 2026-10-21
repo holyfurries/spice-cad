@@ -510,6 +510,7 @@ mod tests {
         let selection = Selection::Edge(edges.items[0]);
         let bounds = cylinder.bounds(true)?.map(|point| point.as_vec3());
         let camera = crate::viewport::Camera {
+            orthographic: false,
             target: (bounds[0] + bounds[1]) * 0.5,
             distance: 40.0,
             yaw: -0.95,

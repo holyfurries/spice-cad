@@ -13,6 +13,7 @@ use std::{
 #[cfg(test)]
 mod allocations;
 mod analysis;
+mod assembly_checks;
 mod cancellation;
 mod code_editor;
 mod diagnostics;
@@ -884,6 +885,7 @@ struct Editor {
     dirty_since: Option<Instant>,
     revision: u64,
     camera: viewport::Camera,
+    views: viewport::Views,
     viewport_aspect: f32,
     selected: Option<inspection::Selection>,
     selected_measurement: Option<String>,
@@ -897,6 +899,240 @@ enum ExitState {
 }
 
 impl Editor {
+    fn viewport_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        view_index: usize,
+    ) -> Option<String> {
+        let mut measurement = None;
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.set_clip_rect(rect);
+            let response = ui.interact(
+                rect,
+                ui.scope_id().with(("cad_view", view_index)),
+                egui::Sense::click_and_drag(),
+            );
+            let mut camera = self.views.camera(view_index, self.camera);
+            let previous_camera = camera;
+            camera.interact(&response, ui);
+            if ui.input(|input| input.key_pressed(egui::Key::F))
+                && response.hovered()
+                && !ui.ctx().egui_wants_keyboard_input()
+            {
+                self.frame_selection();
+                camera = self.views.camera(view_index, self.camera);
+            }
+            if let Some(snapshot) = &self.snapshot {
+                let visible_parts = snapshot.visible_parts(&self.outliner);
+                let picking = picking::View {
+                    visible_parts,
+                    ..snapshot.scene.picking()
+                };
+                let matrix = camera.matrix(rect.width().max(1.0) / rect.height().max(1.0));
+                interface::grid(
+                    ui.painter(),
+                    rect,
+                    matrix,
+                    camera.target,
+                    camera.distance,
+                    view_index,
+                );
+                if response.clicked() {
+                    self.print_checks.clear_selection();
+                    if let Some(position) = response.interact_pointer_pos() {
+                        let extend = ui.input(|input| input.modifiers.shift);
+                        let edge = if self.show_edges && !extend {
+                            picking.pick_edge(
+                                matrix,
+                                [rect.width(), rect.height()],
+                                [position.x - rect.left(), position.y - rect.top()],
+                            )
+                        } else {
+                            None
+                        };
+                        if let Some(edge) = edge {
+                            self.selected = Some(inspection::Selection::Edge(edge));
+                            self.selected_measurement = None;
+                            self.message = "Edge dimensions · reference measurements".into();
+                        } else if let Some(hit) = picking.pick(
+                            matrix,
+                            [
+                                (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
+                                1.0 - (position.y - rect.top()) / rect.height() * 2.0,
+                            ],
+                        ) {
+                            let face = *snapshot
+                                .scene
+                                .faces
+                                .get(&hit.face_id)
+                                .expect("Mesh face inspection cache");
+                            match inspection::Selection::select(
+                                self.selected.as_ref(),
+                                face,
+                                extend,
+                            ) {
+                                Ok(selection) => {
+                                    self.message = if matches!(
+                                        selection,
+                                        inspection::Selection::Pair { .. }
+                                    ) {
+                                        "Parallel-face separation · reference measurement".into()
+                                    } else {
+                                        "Face dimensions · reference measurements".into()
+                                    };
+                                    self.selected = Some(selection);
+                                    self.selected_measurement = None;
+                                }
+                                Err(error) => self.message = error,
+                            }
+                        } else {
+                            self.selected = None;
+                            self.selected_measurement = None;
+                            self.message = "Selection cleared".into();
+                        }
+                    }
+                }
+                ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    viewport::Draw {
+                        view_index,
+                        visible_parts,
+                        input: snapshot.input,
+                        edge_width_px: self.edge_width_px,
+                        edges_enabled: self.show_edges,
+                        eye: camera.eye(),
+                        viewport_size: [
+                            rect.width() * ui.ctx().pixels_per_point(),
+                            rect.height() * ui.ctx().pixels_per_point(),
+                        ],
+                        saved_at: snapshot.saved_at,
+                        geometry: Arc::clone(&snapshot.scene.display),
+                        instances: Arc::clone(&snapshot.scene.instances),
+                        matrix,
+                        selected: self
+                            .selected
+                            .as_ref()
+                            .map_or([0; 2], inspection::Selection::ids),
+                        selected_parts: self
+                            .print_checks
+                            .selection(self.print_check_revision())
+                            .filter(|finding| {
+                                snapshot.scene.layout == finding.layout
+                                    || snapshot.alternate.is_none()
+                            })
+                            .map_or_else(
+                                || match &self.selected {
+                                    Some(inspection::Selection::Part { index, .. }) => 1 << index,
+                                    _ => 0,
+                                },
+                                |finding| (1 << finding.parts[0]) | (1 << finding.parts[1]),
+                            ),
+                        selected_edge: match &self.selected {
+                            Some(inspection::Selection::Edge(edge)) => Some(edge.segments),
+                            _ => None,
+                        },
+                    },
+                ));
+                let print_finding = self
+                    .print_checks
+                    .selection(self.print_check_revision())
+                    .filter(|finding| {
+                        snapshot.scene.layout == finding.layout || snapshot.alternate.is_none()
+                    })
+                    .filter(|finding| {
+                        finding
+                            .parts
+                            .iter()
+                            .all(|index| visible_parts & (1 << index) != 0)
+                    });
+                let check_selection = print_finding.map(|finding| {
+                    let index = finding.parts[0];
+                    inspection::Selection::Part {
+                        index: index as u32,
+                        bounds: snapshot.scene.part_bounds[index],
+                    }
+                });
+                if let Some(sample) = print_finding.and_then(|finding| finding.sample) {
+                    dimensions::draw_sample(
+                        ui,
+                        rect,
+                        matrix,
+                        sample.points,
+                        sample.distance_mm,
+                        if print_finding.expect("Selected finding").layout
+                            == placement::Layout::Print
+                        {
+                            "Sampled wall"
+                        } else {
+                            "Sampled gap"
+                        },
+                    );
+                } else if let Some(bounds) =
+                    snapshot.scene.visible_bounds(visible_parts).filter(|_| {
+                        self.show_dimensions || self.selected.is_some() || check_selection.is_some()
+                    })
+                {
+                    if let Some(name) = dimensions::draw(
+                        ui,
+                        rect,
+                        matrix,
+                        bounds,
+                        &snapshot.scene.annotations,
+                        check_selection.as_ref().or(self.selected.as_ref()),
+                        |id| picking.face_visible(id),
+                    ) {
+                        measurement = Some(name);
+                    }
+                }
+            }
+            ui.painter().text(
+                rect.left_bottom() + egui::vec2(12.0, -12.0),
+                egui::Align2::LEFT_BOTTOM,
+                if view_index == 0 {
+                    "Drag: orbit · Shift-drag: pan · Scroll: zoom"
+                } else {
+                    "Drag: pan · Scroll: linked zoom"
+                },
+                egui::FontId::proportional(12.0),
+                interface::MUTED,
+            );
+            interface::axes(ui.painter(), rect, camera.eye() - camera.target);
+            if self.views.four {
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(
+                        1.0,
+                        if response.hovered() || response.dragged() {
+                            interface::ACCENT
+                        } else {
+                            interface::BORDER
+                        },
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+                let label = ["Perspective", "Top", "Front", "Left"][view_index];
+                ui.painter().text(
+                    rect.left_top() + egui::vec2(12.0, 10.0),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::proportional(13.0),
+                    interface::TEXT,
+                );
+            }
+            if view_index == 0 {
+                self.camera = camera;
+            } else if camera.target != previous_camera.target
+                || camera.distance != previous_camera.distance
+            {
+                self.views.frame(camera);
+                ui.ctx().request_repaint();
+            }
+        });
+        measurement
+    }
+
     fn frame_selection(&mut self) {
         let Some(snapshot) = &self.snapshot else {
             return;
@@ -930,6 +1166,7 @@ impl Editor {
             .or_else(|| snapshot.scene.visible_bounds(mask));
         if let Some(bounds) = bounds {
             self.camera.frame(bounds, self.viewport_aspect);
+            self.views.frame(self.camera);
             self.message = if self.selected.is_some()
                 || self
                     .print_checks
@@ -1030,6 +1267,7 @@ impl Editor {
             dirty_since,
             revision: 0,
             camera: viewport::Camera::rack(layout.dimensions_mm.to_array()),
+            views: viewport::Views::new(viewport::Camera::rack(layout.dimensions_mm.to_array())),
             viewport_aspect: 1.0,
             selected: None,
             selected_measurement: None,
@@ -1205,7 +1443,10 @@ impl Editor {
         self.selected = None;
         self.selected_measurement = None;
         self.camera.frame(bounds, self.viewport_aspect);
-        self.message = "Print finding selected · dimensions are sampled reference values".into();
+        self.views.frame(self.camera);
+        self.message =
+            "Print finding selected · assembly and print checks use their respective placements"
+                .into();
     }
 
     fn export(&mut self, target: export::Target) -> Result<(), String> {
@@ -1370,6 +1611,7 @@ impl Editor {
         self.selected_measurement = None;
         self.focus_editor = false;
         self.camera = snapshot_camera(snapshot, self.viewport_aspect);
+        self.views.frame(self.camera);
         self.message = if layout == placement::Layout::Print {
             "Print layout · export checks each part separately"
         } else {
@@ -1528,6 +1770,7 @@ impl Editor {
                                 })
                             {
                                 self.camera = snapshot_camera(&snapshot, self.viewport_aspect);
+                                self.views.frame(self.camera);
                                 self.frame_next_model = false;
                             }
                             self.message = "Preview ready".into();
@@ -2081,6 +2324,10 @@ impl eframe::App for Editor {
                     ui.checkbox(&mut self.show_details, "Build output");
                     ui.checkbox(&mut self.show_print_checks, "Print checks");
                     ui.checkbox(&mut self.show_dimensions, "Measurements & face names");
+                    if ui.checkbox(&mut self.views.four, "Four views").changed() {
+                        self.views.frame(self.camera);
+                        self.focus_editor = false;
+                    }
                     ui.separator();
                     ui.menu_button("Appearance", |ui| {
                         interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px);
@@ -2819,6 +3066,7 @@ impl eframe::App for Editor {
                         self.message = format!("Selected part · {}", snapshot.parts[index].name);
                         if matches!(action, outliner::Action::Frame(_)) {
                             self.camera.frame(bounds, self.viewport_aspect);
+                            self.views.frame(self.camera);
                             self.focus_editor = false;
                             self.message = format!("Framed part · {}", snapshot.parts[index].name);
                         }
@@ -2899,6 +3147,12 @@ impl eframe::App for Editor {
                                 frame_layout = true;
                             }
                             ui.menu_button("View", |ui| {
+                                if ui.selectable_label(self.views.four, "Four views").clicked() {
+                                    self.views.four = !self.views.four;
+                                    self.views.frame(self.camera);
+                                    ui.close();
+                                }
+                                ui.separator();
                                 for (label, yaw, pitch) in [
                                     ("Isometric", -std::f32::consts::FRAC_PI_4, (1.0_f32 / 3.0_f32.sqrt()).asin()),
                                     ("Front", -std::f32::consts::FRAC_PI_2, 0.0),
@@ -2906,6 +3160,7 @@ impl eframe::App for Editor {
                                     ("Top", -std::f32::consts::FRAC_PI_2, 1.55),
                                 ] {
                                     if ui.button(label).clicked() {
+                                        self.views.four = false;
                                         self.camera.yaw = yaw;
                                         self.camera.pitch = pitch;
                                         ui.close();
@@ -2928,8 +3183,8 @@ impl eframe::App for Editor {
                                 });
                         });
                     });
-                let (rect, response) =
-                    ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+                let (rect, _) =
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
                 if rect.width() <= 0.0 || rect.height() <= 0.0 {
                     return;
                 }
@@ -2960,147 +3215,16 @@ impl eframe::App for Editor {
                                 self.selected = Some(selection);
                                 self.selected_measurement = None;
                                 self.camera = camera;
+                                self.views.frame(self.camera);
                                 self.message = format!("Selected part · {}", request.name);
                             }
                         }
                     }
                 }
-                self.camera.interact(&response, ui);
-                if ui.input(|input| input.key_pressed(egui::Key::F))
-                    && !ui.ctx().egui_wants_keyboard_input()
-                {
-                    self.frame_selection();
+                for (view_index, view_rect) in viewport::Views::rectangles(rect, self.views.four).into_iter().enumerate() {
+                    let Some(rect) = view_rect.filter(|rect| rect.width() > 2.0 && rect.height() > 2.0) else { continue; };
+                    if let Some(name) = self.viewport_pane(ui, rect, view_index) { measurement_requested = Some(name); }
                 }
-                if let Some(snapshot) = &self.snapshot {
-                    let visible_parts = snapshot.visible_parts(&self.outliner);
-                    let picking = picking::View { visible_parts, ..snapshot.scene.picking() };
-                    let matrix = self
-                        .camera
-                        .matrix(rect.width().max(1.0) / rect.height().max(1.0));
-                    interface::grid(
-                        ui.painter(),
-                        rect,
-                        matrix,
-                        self.camera.target,
-                        self.camera.distance,
-                    );
-                    if response.clicked() {
-                        self.print_checks.clear_selection();
-                        if let Some(position) = response.interact_pointer_pos() {
-                            let extend = ui.input(|input| input.modifiers.shift);
-                            let edge = if self.show_edges && !extend {
-                                picking.pick_edge(
-                                    matrix,
-                                    [rect.width(), rect.height()],
-                                    [position.x - rect.left(), position.y - rect.top()],
-                                )
-                            } else {
-                                None
-                            };
-                            if let Some(edge) = edge {
-                                self.selected = Some(inspection::Selection::Edge(edge));
-                                self.selected_measurement = None;
-                                self.message = "Edge dimensions · reference measurements".into();
-                            } else if let Some(hit) = picking.pick(
-                                matrix,
-                                [
-                                    (position.x - rect.left()) / rect.width() * 2.0 - 1.0,
-                                    1.0 - (position.y - rect.top()) / rect.height() * 2.0,
-                                ],
-                            ) {
-                                let face = *snapshot
-                                    .scene
-                                    .faces
-                                    .get(&hit.face_id)
-                                    .expect("Mesh face inspection cache");
-                                match inspection::Selection::select(
-                                    self.selected.as_ref(),
-                                    face,
-                                    extend,
-                                ) {
-                                    Ok(selection) => {
-                                        self.message = if matches!(
-                                            selection,
-                                            inspection::Selection::Pair { .. }
-                                        ) {
-                                            "Parallel-face separation · reference measurement"
-                                                .into()
-                                        } else {
-                                            "Face dimensions · reference measurements".into()
-                                        };
-                                        self.selected = Some(selection);
-                                        self.selected_measurement = None;
-                                    }
-                                    Err(error) => self.message = error,
-                                }
-                            } else {
-                                self.selected = None;
-                                self.selected_measurement = None;
-                                self.message = "Selection cleared".into();
-                            }
-                        }
-                    }
-                    ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-                        rect,
-                        viewport::Draw {
-                            visible_parts,
-                            input: snapshot.input,
-                            edge_width_px: self.edge_width_px,
-                            edges_enabled: self.show_edges,
-                            eye: self.camera.eye(),
-                            viewport_size: [
-                                rect.width() * ui.ctx().pixels_per_point(),
-                                rect.height() * ui.ctx().pixels_per_point(),
-                            ],
-                            saved_at: snapshot.saved_at,
-                            geometry: Arc::clone(&snapshot.scene.display),
-                            instances: Arc::clone(&snapshot.scene.instances),
-                            matrix,
-                            selected: self
-                                .selected
-                                .as_ref()
-                                .map_or([0; 2], inspection::Selection::ids),
-                            selected_parts: self.print_checks.selection(self.print_check_revision())
-                                .filter(|finding| snapshot.scene.layout == finding.layout || snapshot.alternate.is_none())
-                                .map_or_else(|| match &self.selected { Some(inspection::Selection::Part { index, .. }) => 1 << index, _ => 0 }, |finding| (1 << finding.parts[0]) | (1 << finding.parts[1])),
-                            selected_edge: match &self.selected {
-                                Some(inspection::Selection::Edge(edge)) => Some(edge.segments),
-                                _ => None,
-                            },
-                        },
-                    ));
-                    let print_finding = self.print_checks.selection(self.print_check_revision())
-                        .filter(|finding| snapshot.scene.layout == finding.layout || snapshot.alternate.is_none())
-                        .filter(|finding| finding.parts.iter().all(|index| visible_parts & (1 << index) != 0));
-                    let check_selection = print_finding.map(|finding| {
-                        let index = finding.parts[0];
-                        inspection::Selection::Part { index: index as u32, bounds: snapshot.scene.part_bounds[index] }
-                    });
-                    if let Some(sample) = print_finding.and_then(|finding| finding.sample) {
-                        dimensions::draw_sample(ui, rect, matrix, sample.points, sample.distance_mm, if print_finding.expect("Selected finding").layout == placement::Layout::Print { "Sampled wall" } else { "Sampled gap" });
-                    } else if let Some(bounds) = snapshot.scene.visible_bounds(visible_parts)
-                        .filter(|_| self.show_dimensions || self.selected.is_some() || check_selection.is_some()) {
-                        if let Some(name) = dimensions::draw(
-                            ui,
-                            rect,
-                            matrix,
-                            bounds,
-                            &snapshot.scene.annotations,
-                            check_selection.as_ref().or(self.selected.as_ref()),
-                            |id| picking.face_visible(id),
-                        ) {
-                            measurement_requested = Some(name);
-                        }
-                    }
-                }
-                ui.painter().text(
-                    rect.left_bottom() + egui::vec2(12.0, -12.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    "Drag: orbit · Shift-drag / right-drag: pan · Scroll: zoom",
-                    egui::FontId::proportional(12.0),
-                    interface::MUTED,
-                );
-                interface::axes(ui.painter(), rect, self.camera.eye() - self.camera.target);
             });
         if let Some(layout) = layout_requested {
             if self.change_layout(layout) {

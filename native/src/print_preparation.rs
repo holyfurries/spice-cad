@@ -86,6 +86,7 @@ pub struct Finding {
 }
 
 pub struct Report {
+    assembly: crate::assembly_checks::Report,
     options: Options,
     parts: Vec<Part>,
     clearances: Vec<Clearance>,
@@ -102,9 +103,17 @@ impl Report {
     pub fn skipped_pairs(&self) -> usize {
         self.skipped_pairs
     }
+    pub fn assembly(&self) -> &crate::assembly_checks::Report {
+        &self.assembly
+    }
 
     pub fn findings(&self) -> Vec<Finding> {
-        let mut findings = Vec::with_capacity(self.parts.len() * 3 + self.clearances.len());
+        let mut findings = Vec::with_capacity(
+            self.parts.len() * 3
+                + self.clearances.len()
+                + self.assembly.overlaps.len()
+                + self.assembly.failures.len(),
+        );
         for (index, part) in self.parts.iter().enumerate() {
             let size = format!(
                 "{:.2} × {:.2} × {:.2} mm",
@@ -149,6 +158,21 @@ impl Report {
         for clearance in &self.clearances {
             findings.push(Finding { title: format!("{} / {} · sampled gap {:.3} mm", clearance.names[0], clearance.names[1], clearance.sample.distance_mm), detail: format!("{} samples · warning threshold {:.2} mm. Shown in assembly placement; intentional mating contact may be acceptable.", clearance.sample_count, self.options.minimum_clearance_mm), severity: Severity::Warning, parts: clearance.parts, layout: Layout::Assembly, sample: Some(clearance.sample) });
         }
+        for overlap in &self.assembly.overlaps {
+            let names = overlap.parts.map(|index| self.parts[index].name.as_str());
+            findings.push(Finding { title: format!("{} / {} · overlap {:.6} mm³", names[0], names[1], overlap.volume_mm3), detail: "Exact B-rep intersection in assembly placement. Select to highlight both parts. Intentional interference fits may be acceptable; separate part exports remain available.".into(), severity: Severity::Warning, parts: overlap.parts, layout: Layout::Assembly, sample: None });
+        }
+        for failure in &self.assembly.failures {
+            let names = failure.parts.map(|index| self.parts[index].name.as_str());
+            findings.push(Finding {
+                title: format!("{} / {} · collision check incomplete", names[0], names[1]),
+                detail: failure.message.clone(),
+                severity: Severity::Warning,
+                parts: failure.parts,
+                layout: Layout::Assembly,
+                sample: None,
+            });
+        }
         findings.sort_by_key(|finding| match finding.severity {
             Severity::Blocked => 0,
             Severity::Warning => 1,
@@ -170,7 +194,18 @@ impl Report {
             "blocked": self.blocked(),
             "wall_sample_space": "print placement",
             "gap_sample_space": "assembly placement",
-            "method": "Bounded triangle-centroid samples. Wall rays follow inward triangle normals. Assembly surface distances are sampled upper bounds, not exact minimum clearance or collision tests. Missing warnings do not establish printability.",
+            "assembly_collisions": {
+                "space": "assembly placement",
+                "method": "Native B-rep intersection and volume integration after bounding-box filtering; numerical kernel tolerances apply. Zero-volume contact is not an overlap.",
+                "volume_tolerance_mm3": crate::assembly_checks::VOLUME_TOLERANCE_MM3,
+                "pairs": self.assembly.pairs,
+                "boolean_tests": self.assembly.boolean_tests,
+                "cache_hits": self.assembly.cache_hits,
+                "complete": self.assembly.failures.is_empty(),
+                "overlaps": self.assembly.overlaps.iter().map(|overlap| serde_json::json!({"parts": overlap.parts.map(|index| &self.parts[index].name), "volume_mm3": overlap.volume_mm3})).collect::<Vec<_>>(),
+                "failures": self.assembly.failures.iter().map(|failure| serde_json::json!({"parts": failure.parts.map(|index| &self.parts[index].name), "error": failure.message})).collect::<Vec<_>>(),
+            },
+            "method": "Native envelope bounds and separate B-rep collision checks. Walls and gaps use bounded triangle-centroid samples. Wall rays follow inward triangle normals; sampled assembly surface distances are upper bounds, not exact minimum clearance. Missing warnings do not establish printability.",
             "parts": self.parts.iter().map(|part| serde_json::json!({
                 "name": part.name,
                 "print_size": part.size_mm.to_array(),
@@ -226,13 +261,30 @@ impl Report {
         for clearance in &self.clearances {
             text.push_str(&format!("- CLOSE SURFACES: {} / {}: sampled assembly gap {:.3} mm. Intended contact may be acceptable.\n", clearance.names[0], clearance.names[1], clearance.sample.distance_mm));
         }
+        text.push_str(&format!("\nAssembly collision checks: {} pairs; {} B-rep intersections; {} cached results. Reporting overlap above {} mm³; zero-volume contact is allowed.\n", self.assembly.pairs, self.assembly.boolean_tests, self.assembly.cache_hits, crate::assembly_checks::VOLUME_TOLERANCE_MM3));
+        for overlap in &self.assembly.overlaps {
+            text.push_str(&format!(
+                "- OVERLAP: {} / {}: {:.6} mm³ in assembly placement.\n",
+                self.parts[overlap.parts[0]].name,
+                self.parts[overlap.parts[1]].name,
+                overlap.volume_mm3
+            ));
+        }
+        for failure in &self.assembly.failures {
+            text.push_str(&format!(
+                "- INCOMPLETE: {} / {}: {}\n",
+                self.parts[failure.parts[0]].name,
+                self.parts[failure.parts[1]].name,
+                failure.message
+            ));
+        }
         if self.skipped_pairs > 0 {
             text.push_str(&format!(
                 "\n{} assembly pairs were not sampled because the work budget was exhausted.\n",
                 self.skipped_pairs
             ));
         }
-        text.push_str("\nThese are bounded mesh samples, not exact minimum thickness, exact clearance, or collision certification. Features can fall between samples; curved surfaces depend on tessellation. Check the slicer and print a fit gauge with your actual filament and settings. Part checks use print placements; gap samples use assembly placements. Each part is exported separately; this does not validate a combined plate arrangement.\n");
+        text.push_str("\nWall and gap values are bounded mesh samples, not exact minimum thickness or clearance. Collision checks use native B-rep intersections with numerical kernel tolerances; failures are reported as incomplete. Features can fall between mesh samples; curved surfaces depend on tessellation. Check the slicer and print a fit gauge with your actual filament and settings. Part checks use print placements; gaps and collisions use assembly placements. Each part is exported separately; this does not validate a combined plate arrangement.\n");
         text
     }
 }
@@ -241,12 +293,18 @@ pub fn model_report(model: &model::Model) -> Result<Report, String> {
     let kernel = crate::kernel::Kernel::new()?;
     let mut bodies = model.build(&kernel)?;
     let meshes = model.meshes(&mut bodies, false)?;
+    let assembly = crate::assembly_checks::check(model, &bodies)?;
     let mut print_bounds = Vec::with_capacity(bodies.len());
     for (body, part) in bodies.iter_mut().zip(&model.parts) {
         part.placement(Layout::Print).apply(body, false)?;
         print_bounds.push(body.bounds(true)?);
     }
-    report(model, &meshes.iter().collect::<Vec<_>>(), &print_bounds)
+    report(
+        model,
+        &meshes.iter().collect::<Vec<_>>(),
+        &print_bounds,
+        assembly,
+    )
 }
 
 pub fn cached_report(
@@ -256,6 +314,7 @@ pub fn cached_report(
 ) -> Result<Report, String> {
     let model = cache.compile_project(source, project)?;
     let prepared = cache.prepare(&model)?;
+    let assembly = cache.assembly_checks.check(&model, &prepared.bodies)?;
     let print_bounds = prepared
         .bodies
         .iter()
@@ -271,13 +330,14 @@ pub fn cached_report(
         .iter()
         .map(|geometry| &geometry.mesh)
         .collect::<Vec<_>>();
-    report(&model, &meshes, &print_bounds)
+    report(&model, &meshes, &print_bounds, assembly)
 }
 
 pub fn report(
     model: &model::Model,
     meshes: &[&Mesh],
     print_bounds: &[[glam::DVec3; 2]],
+    assembly_checks: crate::assembly_checks::Report,
 ) -> Result<Report, String> {
     if meshes.len() != model.parts.len()
         || meshes.len() != print_bounds.len()
@@ -363,6 +423,7 @@ pub fn report(
         }
     }
     Ok(Report {
+        assembly: assembly_checks,
         options: model.print_options,
         parts,
         clearances,
@@ -519,6 +580,57 @@ fn point_triangle_closest(point: Vec3, triangle: [Vec3; 3]) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_collisions_remain_advisory_when_gap_sampling_is_disabled() -> Result<(), String> {
+        let source = "cad.print_options({minimum_clearance=0});local a=cad.box({width=10,depth=10,height=10});cad.show('first',a,{print={}});cad.show('second',cad.translate(a,{x=0}),{assembly={position={x=5}},print={position={x=40}}})";
+        let report = check(source)?;
+        assert!(!report.blocked());
+        assert!(report.clearances.is_empty());
+        let json = report.json();
+        assert_eq!(json["assembly_collisions"]["complete"], true);
+        assert!(
+            (json["assembly_collisions"]["overlaps"][0]["volume_mm3"]
+                .as_f64()
+                .ok_or("Overlap volume")?
+                - 500.0)
+                .abs()
+                < 1e-6
+        );
+        let overlap = report
+            .findings()
+            .into_iter()
+            .find(|finding| finding.title.contains("overlap"))
+            .ok_or("Overlap finding")?;
+        assert_eq!(overlap.parts, [0, 1]);
+        assert!(overlap.layout == Layout::Assembly);
+        assert!(overlap.sample.is_none());
+        assert!(report.markdown().contains("OVERLAP"));
+        let folder =
+            std::env::temp_dir().join(format!("spice-collision-export-{}", std::process::id()));
+        crate::export::model_files(source, &folder, crate::export::Target::Print)?;
+        let exported =
+            std::fs::read(folder.join("PRINT_CHECKS.json")).map_err(|error| error.to_string());
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        let json: serde_json::Value =
+            serde_json::from_slice(&exported?).map_err(|error| error.to_string())?;
+        assert_eq!(
+            json["assembly_collisions"]["overlaps"]
+                .as_array()
+                .ok_or("Overlaps")?
+                .len(),
+            1
+        );
+        assert!(
+            (json["assembly_collisions"]["overlaps"][0]["volume_mm3"]
+                .as_f64()
+                .ok_or("Exported overlap")?
+                - 500.0)
+                .abs()
+                < 1e-6
+        );
+        Ok(())
+    }
 
     fn check(source: &str) -> Result<Report, String> {
         let model = model::compile(source)?;

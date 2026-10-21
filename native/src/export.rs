@@ -92,6 +92,11 @@ fn write_model(
     canonical_meshes: &[&crate::mesh::Mesh],
 ) -> Result<(), String> {
     model.annotations(canonical_meshes)?;
+    let assembly_checks = if target == Target::Print {
+        Some(crate::assembly_checks::check(model, bodies)?)
+    } else {
+        None
+    };
     let layout = if target == Target::Print {
         crate::placement::Layout::Print
     } else {
@@ -118,7 +123,12 @@ fn write_model(
             .iter()
             .map(|body| body.bounds(true))
             .collect::<Result<Vec<_>, _>>()?;
-        let report = crate::print_preparation::report(model, canonical_meshes, &print_bounds)?;
+        let report = crate::print_preparation::report(
+            model,
+            canonical_meshes,
+            &print_bounds,
+            assembly_checks.expect("Print collision checks"),
+        )?;
         files.push((
             "PRINT_CHECKS.json".into(),
             serde_json::to_vec_pretty(&report.json()).map_err(|error| error.to_string())?,

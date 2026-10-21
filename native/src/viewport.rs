@@ -8,6 +8,7 @@ use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy)]
 pub struct Camera {
+    pub orthographic: bool,
     pub target: Vec3,
     pub distance: f32,
     pub yaw: f32,
@@ -32,6 +33,7 @@ impl Camera {
             dimensions[2] as f32,
         );
         Self {
+            orthographic: false,
             target: size / 2.0,
             distance: size.length() * 1.7,
             yaw: -0.95,
@@ -42,8 +44,25 @@ impl Camera {
     pub fn matrix(&self, aspect: f32) -> Mat4 {
         assert!(aspect.is_finite());
         assert!(aspect > 0.0);
-        Mat4::perspective_rh(40_f32.to_radians(), aspect, 0.1, 10000.0)
-            * Mat4::look_at_rh(self.eye(), self.target, Vec3::Z)
+        let projection = if self.orthographic {
+            let half_height = self.distance * 20_f32.to_radians().tan();
+            Mat4::orthographic_rh(
+                -half_height * aspect,
+                half_height * aspect,
+                -half_height,
+                half_height,
+                0.1,
+                10000.0,
+            )
+        } else {
+            Mat4::perspective_rh(40_f32.to_radians(), aspect, 0.1, 10000.0)
+        };
+        let up = if self.pitch.abs() > 1.56 {
+            Vec3::Y
+        } else {
+            Vec3::Z
+        };
+        projection * Mat4::look_at_rh(self.eye(), self.target, up)
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -56,10 +75,11 @@ impl Camera {
     }
 
     pub fn interact(&mut self, response: &egui::Response, ui: &egui::Ui) {
-        let motion = response.drag_motion();
+        let motion = response.drag_delta();
         if response.dragged() {
             if response.dragged_by(egui::PointerButton::Secondary)
                 || ui.input(|input| input.modifiers.shift)
+                || self.orthographic
             {
                 let right = Vec3::new(-self.yaw.sin(), self.yaw.cos(), 0.0);
                 let direction = Vec3::new(
@@ -83,7 +103,74 @@ impl Camera {
     }
 }
 
+pub struct Views {
+    pub four: bool,
+    target: Vec3,
+    distance: f32,
+}
+
+impl Views {
+    pub fn new(camera: Camera) -> Self {
+        Self {
+            four: false,
+            target: camera.target,
+            distance: camera.distance,
+        }
+    }
+
+    pub fn frame(&mut self, camera: Camera) {
+        self.target = camera.target;
+        self.distance = camera.distance;
+    }
+
+    pub fn camera(&self, index: usize, perspective: Camera) -> Camera {
+        assert!(index < 4);
+        if index == 0 {
+            return perspective;
+        }
+        let (yaw, pitch) = match index {
+            1 => (-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
+            2 => (-std::f32::consts::FRAC_PI_2, 0.0),
+            3 => (std::f32::consts::PI, 0.0),
+            _ => unreachable!(),
+        };
+        Camera {
+            target: self.target,
+            distance: self.distance,
+            yaw,
+            pitch,
+            orthographic: true,
+        }
+    }
+
+    pub fn rectangles(rect: egui::Rect, four: bool) -> [Option<egui::Rect>; 4] {
+        if !four {
+            return [Some(rect), None, None, None];
+        }
+        let center = rect.center();
+        [
+            Some(egui::Rect::from_min_max(
+                center + egui::vec2(1.0, 1.0),
+                rect.max,
+            )),
+            Some(egui::Rect::from_min_max(
+                rect.min,
+                center - egui::vec2(1.0, 1.0),
+            )),
+            Some(egui::Rect::from_min_max(
+                egui::pos2(rect.left(), center.y + 1.0),
+                egui::pos2(center.x - 1.0, rect.bottom()),
+            )),
+            Some(egui::Rect::from_min_max(
+                egui::pos2(center.x + 1.0, rect.top()),
+                egui::pos2(rect.right(), center.y - 1.0),
+            )),
+        ]
+    }
+}
+
 pub struct Draw {
+    pub view_index: usize,
     pub visible_parts: u32,
     pub input: Option<crate::performance::Input>,
     pub edge_width_px: f32,
@@ -217,12 +304,16 @@ struct Gpu {
     scene: GpuScene,
     line_pipeline: wgpu::RenderPipeline,
     pipeline: wgpu::RenderPipeline,
-    group: wgpu::BindGroup,
-    uniform: wgpu::Buffer,
-    uniform_previous: Option<[u32; 32]>,
+    cameras: [CameraGpu; 4],
     instances: wgpu::Buffer,
     instances_previous: Option<Arc<Vec<Instance>>>,
     metrics: Metrics,
+}
+
+struct CameraGpu {
+    group: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+    previous: Option<[u32; 32]>,
 }
 
 #[derive(Default)]
@@ -403,30 +494,37 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         multiview_mask: None,
         cache: None,
     });
-    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Camera"),
-        contents: &[0; 128],
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
     let instances = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("CAD part placements"),
         size: (32 * std::mem::size_of::<Instance>()) as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Camera"),
-        layout: &layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: instances.as_entire_binding(),
-            },
-        ],
+    let cameras = std::array::from_fn(|_| {
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("CAD camera"),
+            contents: &[0; 128],
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Camera"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instances.as_entire_binding(),
+                },
+            ],
+        });
+        CameraGpu {
+            group,
+            uniform,
+            previous: None,
+        }
     });
     let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("CAD edge outlines"),
@@ -474,9 +572,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         scene: Default::default(),
         line_pipeline,
         pipeline,
-        group,
-        uniform,
-        uniform_previous: None,
+        cameras,
         instances,
         instances_previous: None,
         metrics: Metrics::default(),
@@ -496,6 +592,7 @@ impl egui_wgpu::CallbackTrait for Draw {
         let gpu = resources
             .get_mut::<Gpu>()
             .expect("Viewport initialized before drawing");
+        assert!(self.view_index < gpu.cameras.len());
         assert_eq!(self.instances.len(), self.geometry.parts.len());
         assert!(self.instances.len() <= 32);
         let scene = &mut gpu.scene;
@@ -560,9 +657,10 @@ impl egui_wgpu::CallbackTrait for Draw {
         uniform[30] = (self.visible_parts & 0xffff) as f32;
         uniform[31] = (self.visible_parts >> 16) as f32;
         let bits = uniform.map(f32::to_bits);
-        if gpu.uniform_previous != Some(bits) {
-            queue.write_buffer(&gpu.uniform, 0, bytemuck::cast_slice(&uniform));
-            gpu.uniform_previous = Some(bits);
+        let camera = &mut gpu.cameras[self.view_index];
+        if camera.previous != Some(bits) {
+            queue.write_buffer(&camera.uniform, 0, bytemuck::cast_slice(&uniform));
+            camera.previous = Some(bits);
             gpu.metrics.uniform_writes += 1;
         }
         if let Some(input) = self.input {
@@ -594,7 +692,7 @@ impl egui_wgpu::CallbackTrait for Draw {
                 .is_some_and(|geometry| Arc::ptr_eq(geometry, &self.geometry))
         );
         pass.set_pipeline(&gpu.pipeline);
-        pass.set_bind_group(0, &gpu.group, &[]);
+        pass.set_bind_group(0, &gpu.cameras[self.view_index].group, &[]);
         if scene.count > 0 {
             pass.set_vertex_buffer(
                 0,
@@ -654,6 +752,138 @@ pub fn geometry_prepared(frame: &eframe::Frame, geometry: &Arc<Geometry>) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orthographic_pan_follows_screen_delta_instead_of_raw_mouse_units() {
+        let context = egui::Context::default();
+        let mut camera = Camera {
+            orthographic: true,
+            target: Vec3::ZERO,
+            distance: 100.0,
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: std::f32::consts::FRAC_PI_2,
+        };
+        let mut frame = |events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.interact(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                        egui::Id::unique("test_camera_pan"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    camera.interact(&response, ui);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))]);
+        frame(vec![egui::Event::PointerButton {
+            pos: egui::pos2(100.0, 100.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        frame(vec![
+            egui::Event::PointerMoved(egui::pos2(120.0, 110.0)),
+            egui::Event::MouseMoved(egui::vec2(1000.0, 1000.0)),
+        ]);
+        assert!((camera.target.x + 3.5).abs() < 0.001, "{:?}", camera.target);
+        assert!((camera.target.y - 1.75).abs() < 0.001);
+        assert_eq!(camera.distance, 100.0);
+        assert_eq!(camera.pitch, std::f32::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn four_views_have_exact_axes_shared_scale_and_correct_picking() -> Result<(), String> {
+        let snapshot = crate::build_script_snapshot(
+            "cad.show('box',cad.box({width=10,depth=20,height=30}))",
+            1,
+        )?;
+        let mut camera = Camera::rack([10.0, 20.0, 30.0]);
+        camera.frame(snapshot.scene.bounds, 1.0);
+        let mut views = Views::new(camera);
+        let geometry = Arc::clone(&snapshot.scene.display);
+        let instances = Arc::clone(&snapshot.scene.instances);
+        let mut scale: Option<f32> = None;
+        for index in 1..4 {
+            let camera = views.camera(index, camera);
+            let matrix = camera.matrix(1.0);
+            assert!(matrix.is_finite());
+            let hit = snapshot
+                .scene
+                .picking()
+                .pick(matrix, [0.0, 0.0])
+                .ok_or("Orthographic center missed the model")?;
+            let expected = match index {
+                1 => 30.0,
+                2 | 3 => 0.0,
+                _ => unreachable!(),
+            };
+            let axis = match index {
+                1 => 2,
+                2 => 1,
+                3 => 0,
+                _ => unreachable!(),
+            };
+            assert!(
+                (hit.position[axis] - expected).abs() < 0.001,
+                "view {index}: {:?}",
+                hit.position
+            );
+            let horizontal = if index == 3 { Vec3::Y } else { Vec3::X };
+            let center = matrix.project_point3(camera.target);
+            let projected = matrix.project_point3(camera.target + horizontal * 10.0);
+            let width = (projected.x - center.x).abs();
+            if let Some(expected) = scale {
+                assert!((width - expected).abs() < 1e-6);
+            }
+            scale = Some(width);
+            let depth = matrix.project_point3(
+                camera.target
+                    + horizontal * 10.0
+                    + (camera.eye() - camera.target).normalize() * 5.0,
+            );
+            assert!((depth.x - projected.x).abs() < 1e-5);
+        }
+        let mut top = views.camera(1, camera);
+        top.distance *= 0.5;
+        top.target += Vec3::new(2.0, 3.0, 4.0);
+        views.frame(top);
+        for index in 1..4 {
+            let linked = views.camera(index, camera);
+            assert_eq!(linked.target, top.target);
+            assert_eq!(linked.distance, top.distance);
+        }
+        assert_eq!(views.camera(0, camera).target, camera.target);
+        assert!(Arc::ptr_eq(&geometry, &snapshot.scene.display));
+        assert!(Arc::ptr_eq(&instances, &snapshot.scene.instances));
+        Ok(())
+    }
+
+    #[test]
+    fn four_view_rectangles_are_disjoint_and_keep_single_view_full_size() {
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(801.0, 601.0));
+        assert_eq!(
+            Views::rectangles(rect, false),
+            [Some(rect), None, None, None]
+        );
+        let panes = Views::rectangles(rect, true).map(|pane| pane.expect("Four views"));
+        for first in 0..4 {
+            assert!(rect.contains_rect(panes[first]));
+            for second in first + 1..4 {
+                assert!(!panes[first].intersects(panes[second]));
+            }
+            assert!((panes[first].height() - panes[0].height()).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn gpu_instances_match_cpu_positions_normals_edges_and_face_ids_in_both_layouts()

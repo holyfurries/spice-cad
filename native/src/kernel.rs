@@ -285,6 +285,11 @@ mod ffi {
             second: *mut SmBrep,
             result: &mut *mut SmBrep,
         ) -> Result<i64>;
+        unsafe fn SmApiBooleanIntersection(
+            first: *mut SmBrep,
+            second: *mut SmBrep,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
         unsafe fn SmApiBrepComputeVolume(
             body: *const SmBrep,
             accuracy: f64,
@@ -980,6 +985,21 @@ impl Body<'_> {
 
     pub fn subtract(&mut self, other: Body) -> Result<(), String> {
         self.boolean(other, true)
+    }
+
+    pub fn intersection_volume(&self, other: &Body<'_>) -> Result<f64, String> {
+        let first = self.try_clone()?;
+        let second = other.try_clone()?.shape.into_raw();
+        let mut result = std::ptr::null_mut();
+        let operation =
+            unsafe { ffi::SmApiBooleanIntersection(first.shape.as_mut_ptr(), second, &mut result) };
+        if !matches!(operation, Ok(1000)) {
+            drop(unsafe { UniquePtr::from_raw(second) });
+            return Err(format!("SMLib intersection failed: {operation:?}"));
+        }
+        assert_eq!(result, first.shape.as_mut_ptr());
+        first.volume_mm3.set(None);
+        first.volume()
     }
 
     fn boolean(&mut self, other: Body, subtract: bool) -> Result<(), String> {
