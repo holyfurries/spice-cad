@@ -124,15 +124,56 @@ local outline = cad.polygon({
 cad.show("L plate", cad.extrude(outline, { height = 6 }))
 ```
 
-Each profile accepts 3–128 vertices with finite coordinates within ±2000 mm,
+Each polygon accepts 3–128 vertices with finite coordinates within ±2000 mm,
 width/depth at most 1000 mm, and edges at least 0.01 mm long.
 Self-intersections, touching boundaries, repeated closing points, and
 overlapping edges are rejected. Extrusion height is 0.01–1000 mm; models may
-define at most 256 profiles. These profiles use straight segments. Cut holes
-with subtract; curved profiles, nested loops and interactive sketch constraints
-remain future work.
+define at most 256 profiles. Polygon outlines use straight segments; the APIs
+below add curves and nested holes. Interactive sketch constraints remain future
+work.
+
+### Curved profiles and nested loops
+
+`cad.circle({ radius = 10, x = 0, y = 0 })` creates an exact circular profile.
+`cad.path` joins straight segments and exact circular arcs in the XY plane:
+
+```lua
+local outline = cad.path({
+    start = { x = 0, y = -5 },
+    segments = {
+        { to = { x = 20, y = -5 } },
+        { to = { x = 20, y = 5 }, center = { x = 20, y = 0 } },
+        { to = { x = 0, y = 5 } },
+        { to = { x = 0, y = -5 }, center = { x = 0, y = 0 } },
+    },
+})
+local section = cad.profile({ loops = { outline, cad.circle({ radius = 2, x = 10 }) } })
+cad.show("Slotted plate", cad.extrude(section, { height = 4 }))
+```
+
+An entry with `center` is a counterclockwise arc; add `clockwise = true` to
+reverse it. Both endpoints must have the same radius from the center. The last
+endpoint must equal `start`; use `cad.circle` for a full circle. Paths accept
+2–128 segments, and profile regions accept 1–16 simple, non-touching loops.
+Coordinates must be finite and within ±2000 mm, with extents no larger than
+1000 mm. Circle radii are 0.01–500 mm. Profiles snapshot their input tables.
+
+List all outer boundaries, holes, and islands together in `loops`; containment
+determines nesting independent of input order or winding. Even nesting depths
+add material and odd depths remove it. Intersections, overlaps, touching loops,
+and self-intersecting paths are rejected before kernel construction. Arc
+boundaries and intersections use analytic geometry; the displayed mesh is
+tessellated separately. Extrusion and face-based pockets/bosses accept these
+profiles; revolve currently requires a straight-sided polygon.
+
+`models/rounded-enclosure.luau` demonstrates an editable enclosure with exact
+rounded corners, nested wall boundaries, and a floor with four screw holes.
+Export it with `--export-model models/rounded-enclosure.luau output/enclosure`.
+
+### Revolving polygon profiles
 
 **File → Examples → Revolved bushing** demonstrates a flanged part with a through-bore.
+
 `cad.revolve(profile, { angle = 360 })` interprets X as radius and Y as height,
 maps the section into the XZ plane, and turns it around +Z. For example:
 

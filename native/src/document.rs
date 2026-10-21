@@ -78,6 +78,7 @@ pub enum Example {
     EdgeChamfers,
     EdgeFillets,
     ExtrudedBracket,
+    RoundedEnclosure,
     MeasuredBlock,
     Rack,
     MountingBracket,
@@ -113,6 +114,10 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
         Example::ExtrudedBracket => (
             "extruded-bracket.luau",
             include_str!("../../models/extruded-bracket.luau"),
+        ),
+        Example::RoundedEnclosure => (
+            "rounded-enclosure.luau",
+            include_str!("../../models/rounded-enclosure.luau"),
         ),
         Example::MeasuredBlock => (
             "measured-block.luau",

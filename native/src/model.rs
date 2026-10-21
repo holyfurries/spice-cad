@@ -99,7 +99,7 @@ struct Recipe {
     holes: Vec<crate::hole::Recipe>,
     edges: Vec<crate::edge_reference::Reference>,
     edge_treatments: Vec<EdgeTreatmentRecipe>,
-    profiles: Vec<crate::profile::Polygon>,
+    profiles: Vec<crate::profile::Profile>,
     operations: Vec<Operation>,
     outputs: Vec<Part>,
 }
@@ -192,12 +192,55 @@ pub fn compile_cached(
                 ));
             }
             let index = recipe.profiles.len();
-            recipe.profiles.push(polygon);
+            recipe
+                .profiles
+                .push(crate::profile::Profile::Polygon(polygon));
             Ok(Profile(index))
         })
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    for name in ["circle", "path", "profile"] {
+        let state = Rc::clone(&recipe);
+        cad.set(
+            name,
+            lua.create_function(move |_, options: Table| {
+                let profile = match name {
+                    "circle" => crate::profile::Profile::circle(options)?,
+                    "path" => crate::profile::Profile::path(options)?,
+                    "profile" => {
+                        options_fields(&options, &["loops"])?;
+                        let entries: Table = options.get("loops")?;
+                        let count = crate::profile::dense_count(
+                            &entries,
+                            1,
+                            crate::profile::LOOP_COUNT_MAX,
+                        )?;
+                        let mut loops = Vec::with_capacity(count);
+                        for index in 1..=count {
+                            let profile: AnyUserData = entries.raw_get(index)?;
+                            loops.push(
+                                state.borrow().profiles[profile.borrow::<Profile>()?.0].clone(),
+                            );
+                        }
+                        crate::profile::Profile::region(loops).map_err(mlua::Error::RuntimeError)?
+                    }
+                    _ => unreachable!(),
+                };
+                let mut recipe = state.borrow_mut();
+                if recipe.profiles.len() >= OPERATION_COUNT_MAX {
+                    return Err(mlua::Error::RuntimeError(
+                        "Model exceeds 256 profiles".into(),
+                    ));
+                }
+                let index = recipe.profiles.len();
+                recipe.profiles.push(profile);
+                Ok(Profile(index))
+            })
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
     for name in ["extrude", "revolve"] {
         let state = Rc::clone(&recipe);
         cad.set(
@@ -454,7 +497,10 @@ pub fn compile_cached(
         "sweep",
         lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
             options_fields(&options, &["path"])?;
-            let polygon = state.borrow().profiles[profile.borrow::<Profile>()?.0].clone();
+            let polygon = state.borrow().profiles[profile.borrow::<Profile>()?.0]
+                .polygon()
+                .map_err(mlua::Error::runtime)?
+                .clone();
             let path = crate::shape_operation::path(options.get("path")?, &polygon)?;
             let mut recipe = state.borrow_mut();
             let index = recipe.shapes.len();
@@ -481,6 +527,8 @@ pub fn compile_cached(
                     .get::<AnyUserData>("profile")?
                     .borrow::<Profile>()?
                     .0]
+                    .polygon()
+                    .map_err(mlua::Error::runtime)?
                     .clone();
                 if let Some(previous) = values.last() {
                     if position[2] - previous.position[2] < 0.01 {
@@ -972,7 +1020,7 @@ impl Model {
                         .profiles
                         .get(profile)
                         .ok_or("Missing sweep profile")?;
-                    bodies.push(kernel.sweep_profile(polygon, sweep)?);
+                    bodies.push(kernel.sweep_curved_profile(polygon, sweep)?);
                 }
                 Operation::Cylinder {
                     origin,

@@ -506,7 +506,7 @@ fn cache_matches(
                     profile: c,
                     sweep: d,
                 },
-            ) if b == d && first.profiles[a].points == second.profiles[c].points => {}
+            ) if b == d && first.profiles[a] == second.profiles[c] => {}
             (
                 Operation::Boolean {
                     first: a,
@@ -1089,6 +1089,24 @@ mod tests {
                 "cad.show('part',cad.cylinder({radius=2,height=3}))",
                 "radius=2",
                 "radius=3",
+                false,
+            ),
+            (
+                "cad.show('part',cad.extrude(cad.circle({radius=2}),{height=3}))",
+                "radius=2",
+                "radius=3",
+                false,
+            ),
+            (
+                "local p=cad.profile({loops={cad.circle({radius=10}),cad.circle({radius=2})}});cad.show('part',cad.extrude(p,{height=3}))",
+                "radius=2",
+                "radius=3",
+                false,
+            ),
+            (
+                "local p=cad.path({start={x=0,y=-5},segments={{to={x=20,y=-5}},{to={x=20,y=5},center={x=20,y=0}},{to={x=0,y=5}},{to={x=0,y=-5},center={x=0,y=0}}}});cad.show('part',cad.extrude(p,{height=3}))",
+                "20",
+                "25",
                 false,
             ),
             (

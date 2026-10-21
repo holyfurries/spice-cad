@@ -113,6 +113,12 @@ mod ffi {
             caps: i32,
             result: &mut *mut SmBrep,
         ) -> Result<i64>;
+        fn spice_profile_arc(
+            center: &SmVector3d,
+            radius: f64,
+            start_deg: f64,
+            end_deg: f64,
+        ) -> Result<UniquePtr<SmCurve>>;
         fn GetMemoryUsed(self: &SmBrep, allocated: &mut u64) -> u64;
         fn IsManifoldSolid(self: &SmBrep) -> i32;
         unsafe fn spice_treat_edges(
@@ -443,6 +449,141 @@ impl Kernel {
                 ProfileSweep::Revolve { .. } => "revolve",
             };
             return Err(format!("SMLib profile {name} failed: {status}"));
+        }
+        Ok(Body {
+            shape,
+            volume_mm3: Cell::new(None),
+            #[cfg(test)]
+            volume_integrations: Cell::new(0),
+            _kernel: self,
+        })
+    }
+
+    pub fn sweep_curved_profile(
+        &self,
+        profile: &crate::profile::Profile,
+        sweep: ProfileSweep,
+    ) -> Result<Body<'_>, String> {
+        use crate::profile::Profile;
+        if let Profile::Polygon(polygon) = profile {
+            return self.sweep_profile(polygon, sweep);
+        }
+        let ProfileSweep::Extrude { height_mm } = sweep else {
+            return Err("Curved and nested profiles currently support extrusion; revolve requires a polygon".into());
+        };
+        assert!(height_mm.is_finite());
+        assert!(height_mm > 0.0);
+        if let Profile::Region(loops) = profile {
+            let mut ordered: Vec<_> = loops
+                .iter()
+                .map(|boundary| {
+                    let point = boundary.segments()[0].start;
+                    let depth = loops
+                        .iter()
+                        .filter(|other| !std::ptr::eq(*other, boundary) && other.contains(point))
+                        .count();
+                    (depth, boundary)
+                })
+                .collect();
+            ordered.sort_by_key(|(depth, _)| *depth);
+            let mut result: Option<Body<'_>> = None;
+            for (depth, boundary) in ordered {
+                let body = self.sweep_profile_loop(boundary, sweep)?;
+                if let Some(result) = result.as_mut() {
+                    if depth % 2 == 0 {
+                        result.union(body)?;
+                    } else {
+                        result.subtract(body)?;
+                    }
+                } else {
+                    assert_eq!(depth, 0);
+                    result = Some(body);
+                }
+            }
+            return result.ok_or_else(|| "Profile contains no loops".into());
+        }
+        self.sweep_profile_loop(profile, sweep)
+    }
+
+    fn sweep_profile_loop(
+        &self,
+        profile: &crate::profile::Profile,
+        sweep: ProfileSweep,
+    ) -> Result<Body<'_>, String> {
+        if let crate::profile::Profile::Polygon(polygon) = profile {
+            return self.sweep_profile(polygon, sweep);
+        }
+        let ProfileSweep::Extrude { height_mm } = sweep else {
+            return Err("Curved profiles require extrusion".into());
+        };
+        let segments = profile.segments();
+        let mut owners = Vec::with_capacity(segments.len());
+        let mut lines = Vec::with_capacity(segments.len());
+        let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
+        for segment in segments {
+            if let Some(center) = segment.center {
+                let curve = ffi::spice_profile_arc(
+                    &Vector {
+                        x: center.x,
+                        y: center.y,
+                        z: 0.0,
+                    },
+                    segment.radius(),
+                    segment.start_angle().to_degrees(),
+                    (segment.start_angle() + segment.angle).to_degrees(),
+                )
+                .map_err(|error| error.to_string())?;
+                if curve.is_null() {
+                    return Err("SMLib profile arc creation failed".into());
+                }
+                unsafe { curves.pin_mut().Add(curve.as_ptr().cast_mut()) }
+                    .map_err(|error| error.to_string())?;
+                owners.push(curve);
+            } else {
+                let mut raw = std::ptr::null_mut();
+                let status = unsafe {
+                    ffi::SmApiCreateLineSegment(
+                        &Vector {
+                            x: segment.start.x,
+                            y: segment.start.y,
+                            z: 0.0,
+                        },
+                        &Vector {
+                            x: segment.end.x,
+                            y: segment.end.y,
+                            z: 0.0,
+                        },
+                        &mut raw,
+                    )
+                }
+                .map_err(|error| error.to_string())?;
+                let line = unsafe { UniquePtr::from_raw(raw) };
+                if status != 1000 || line.is_null() {
+                    return Err(format!("SMLib profile edge failed: {status}"));
+                }
+                unsafe { curves.pin_mut().Add(line.as_ptr().cast_mut().cast()) }
+                    .map_err(|error| error.to_string())?;
+                lines.push(line);
+            }
+        }
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe {
+            ffi::SmApiCreateLinearSweep(
+                &curves,
+                &Vector {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                height_mm,
+                1,
+                &mut raw,
+            )
+        }
+        .map_err(|error| error.to_string())?;
+        let shape = unsafe { UniquePtr::from_raw(raw) };
+        if status != 1000 || shape.is_null() {
+            return Err(format!("SMLib curved profile extrusion failed: {status}"));
         }
         Ok(Body {
             shape,

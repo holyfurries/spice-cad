@@ -1818,6 +1818,7 @@ impl eframe::App for Editor {
                             ("Mounting bracket", document::Example::MountingBracket),
                             ("Measured block", document::Example::MeasuredBlock),
                             ("Extruded bracket", document::Example::ExtrudedBracket),
+                            ("Rounded enclosure", document::Example::RoundedEnclosure),
                             ("Selected edge fillets", document::Example::EdgeFillets),
                             ("Selected edge chamfers", document::Example::EdgeChamfers),
                             ("Revolved bushing", document::Example::RevolvedBushing),

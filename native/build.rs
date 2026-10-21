@@ -10,6 +10,8 @@ fn main() {
 #include <SmApiPrimitives.h>
 #include <SmVector3d.h>
 #include <SmFilletExecutive.h>
+#include <SmApiCurves.h>
+#include <SmBSplineCurve.h>
 #include <cstddef>
 #include <memory>
 using SmFailureArray = SmTArray<SmTessellationFailure>;
@@ -26,6 +28,21 @@ inline long spice_shell(const SmBrep* body, double thickness, const SmFace* open
     SmTArray<const SmFace*> openings;
     if (opening) { openings.Add(opening); }
     return SmApiShellBrepFull(body, -thickness, TRUE, TRUE, FALSE, openings, result);
+}
+inline std::unique_ptr<SmCurve> spice_profile_arc(const SmVector3d& center, double radius, double start_deg, double end_deg) {
+    const bool reverse = end_deg < start_deg;
+    if (reverse) { std::swap(start_deg, end_deg); }
+    if (end_deg > 360.0) { start_deg -= 360.0; end_deg -= 360.0; }
+    if (start_deg < -360.0) { start_deg += 360.0; end_deg += 360.0; }
+    SmBSplineCurve* curve = nullptr;
+    auto status = SmApiCreateArc(center, radius, start_deg, end_deg, curve);
+    if (status != SM_SUCCESS) { delete curve; return {}; }
+    if (reverse) {
+        SmExtent1d interval;
+        status = curve->ReverseParameterization(curve->GetNaturalInterval(), interval);
+        if (status != SM_SUCCESS) { delete curve; return {}; }
+    }
+    return std::unique_ptr<SmCurve>(curve);
 }
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());

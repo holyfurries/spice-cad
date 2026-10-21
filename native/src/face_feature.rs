@@ -12,7 +12,7 @@ pub enum Kind {
 #[derive(PartialEq)]
 pub enum Shape {
     Rectangle([f64; 2]),
-    Profile(crate::profile::Polygon),
+    Profile(crate::profile::Profile),
 }
 
 pub struct Recipe {
@@ -47,26 +47,10 @@ impl Recipe {
             Kind::Pocket => -outward,
             Kind::Boss => outward,
         };
-        if let Shape::Profile(polygon) = &self.shape {
-            let mut points: Vec<_> = polygon
-                .points
-                .iter()
-                .map(|&[u, v]| match (axis, direction > 0.0) {
-                    (0, true) => [-v, u],
-                    (0, false) => [v, u],
-                    (1, true) => [u, -v],
-                    (1, false) => [u, v],
-                    (2, true) => [u, v],
-                    (2, false) => [u, -v],
-                    _ => unreachable!(),
-                })
-                .collect();
-            if matches!((axis, direction > 0.0), (0, false) | (1, true) | (2, false)) {
-                points.reverse();
-            }
-            let polygon = crate::profile::Polygon { points };
-            let mut feature = kernel.sweep_profile(
-                &polygon,
+        if let Shape::Profile(profile) = &self.shape {
+            let profile = profile.face_coordinates(axis, direction > 0.0);
+            let mut feature = kernel.sweep_curved_profile(
+                &profile,
                 crate::kernel::ProfileSweep::Extrude {
                     height_mm: self.depth + 0.01,
                 },
