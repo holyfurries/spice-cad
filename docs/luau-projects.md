@@ -20,8 +20,10 @@ are rejected. Projects are limited to 64 files and 4 MiB of combined source.
 
 A module returns a value, usually a typed factory function or a table of functions.
 Use `cad` directly inside modules; the same sandbox and geometry limits apply to
-all modules together. Each module evaluates once per model run, so repeated imports
-share its returned value. Put parameter controls and `cad.show` calls in the entry
+all modules together. The graph is resolved and typechecked statically; module bodies
+run on their first executed `require`. Repeated imports share the returned value.
+Imports in untaken branches or uncalled functions do not execute their module bodies.
+Put parameter controls and `cad.show` calls in the entry
 file to keep properties and source navigation useful.
 
 The existing Luau language server resolves imports for typed completion, hover,

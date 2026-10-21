@@ -7,10 +7,8 @@ use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 const FILE_COUNT_MAX: usize = 64;
 const SOURCE_BYTES_MAX: usize = 4 * 1024 * 1024;
 
-struct RootLine(usize);
-
 pub fn source_line(lua: &mlua::Lua) -> usize {
-    for level in 1..64 {
+    for level in 1..256 {
         let Some(line) = lua.inspect_stack(level, |debug| {
             if debug.source().source.as_deref() == Some("@model.luau") {
                 debug.current_line()
@@ -24,7 +22,7 @@ pub fn source_line(lua: &mlua::Lua) -> usize {
             return line.saturating_sub(1);
         }
     }
-    lua.app_data_ref::<RootLine>().map_or(0, |line| line.0)
+    0
 }
 
 #[derive(Clone)]
@@ -45,6 +43,32 @@ impl Project {
     pub fn load_if_imported(path: &Path, source: &str) -> Result<Option<Self>, String> {
         if !source.contains("require") {
             return Ok(None);
+        }
+        if source.len() > SOURCE_BYTES_MAX {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_luau::LANGUAGE.into())
+                .map_err(|error| error.to_string())?;
+            let tree = parser
+                .parse(source, None)
+                .ok_or("Cannot parse model imports")?;
+            let query = Query::new(
+                &tree_sitter_luau::LANGUAGE.into(),
+                "((function_call name: (identifier) @name) (#eq? @name \"require\"))",
+            )
+            .map_err(|error| error.to_string())?;
+            let mut cursor = QueryCursor::new();
+            cursor.set_match_limit(4096);
+            let imported = cursor
+                .matches(&query, tree.root_node(), source.as_bytes())
+                .next()
+                .is_some();
+            if cursor.did_exceed_match_limit() {
+                return Err("Model import query exceeded its limit".into());
+            }
+            if !imported {
+                return Ok(None);
+            }
         }
         Self::load(path, source).map(Some)
     }
@@ -283,20 +307,41 @@ impl Project {
     }
 
     pub fn install(&self, lua: &mlua::Lua) -> mlua::Result<()> {
-        let mut lines = vec![0; self.files.len()];
-        for (index, file) in self.files.iter().enumerate() {
-            for (range, dependency) in &file.imports {
-                lines[*dependency] = if index == 0 {
-                    file.source[..range.start]
-                        .bytes()
-                        .filter(|byte| *byte == b'\n')
-                        .count()
-                } else {
-                    lines[index]
-                };
-            }
-        }
-        let mut values = HashMap::<usize, mlua::Value>::new();
+        let require_factory: mlua::Function = lua
+            .load(
+                r#"
+return function(imports)
+    return function(path)
+        local module = imports[path]
+        if module == nil then error("require needs a declared literal relative module path") end
+        return module()
+    end
+end
+"#,
+            )
+            .set_name("@spice-module-imports")
+            .eval()?;
+        let module_factory: mlua::Function = lua
+            .load(
+                r#"
+return function(loader, name)
+    local loaded = false
+    local value = nil
+    return function()
+        if not loaded then
+            local result = loader()
+            if result == nil then error("Module " .. name .. " must return a value") end
+            value = result
+            loaded = true
+        end
+        return value
+    end
+end
+"#,
+            )
+            .set_name("@spice-module-cache")
+            .eval()?;
+        let mut values = HashMap::<usize, mlua::Function>::new();
         for index in &self.order {
             let file = &self.files[*index];
             let imports = lua.create_table()?;
@@ -315,39 +360,25 @@ impl Project {
                         .clone(),
                 )?;
             }
-            let require = lua.create_function(move |_, path: String| {
-                let value: mlua::Value = imports.get(path.as_str())?;
-                if value.is_nil() {
-                    return Err(mlua::Error::runtime(
-                        "require needs a declared literal relative module path",
-                    ));
-                }
-                Ok(value)
-            })?;
+            let require: mlua::Function = require_factory.call(imports)?;
             if *index == 0 {
                 lua.globals().set("require", require)?;
             } else {
-                lua.set_app_data(RootLine(lines[*index]));
                 let environment = lua.create_table()?;
                 let metatable = lua.create_table()?;
                 metatable.set("__index", lua.globals())?;
                 environment.set_metatable(Some(metatable))?;
                 environment.set("require", require)?;
-                let value: mlua::Value = lua
+                let loader = lua
                     .load(file.source.as_ref())
                     .set_name(format!("@{}", file.path.display()))
                     .set_environment(environment)
-                    .eval()?;
-                if value.is_nil() {
-                    return Err(mlua::Error::runtime(format!(
-                        "Module {} must return a value",
-                        file.path.display()
-                    )));
-                }
+                    .into_function()?;
+                let value: mlua::Function =
+                    module_factory.call((loader, file.path.display().to_string()))?;
                 values.insert(*index, value);
             }
         }
-        lua.set_app_data(RootLine(0));
         Ok(())
     }
 }
@@ -558,6 +589,86 @@ mod tests {
         )?;
         assert_eq!(model.parts[0].line, 2);
         assert_eq!(model.parts[1].line, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn unused_branches_and_functions_do_not_execute_imported_modules() -> Result<(), String> {
+        let fixture = Fixture::new();
+        fixture.write("unused.luau", "return error('unused module executed')");
+        let source = "local active=false\nif active then local unused=require('./unused') end\nlocal function unused_factory() return require('./unused') end\ncad.show('safe',cad.box({width=2,depth=2,height=2}))";
+        let project = Project::load(&fixture.0.join("main.luau"), source)?;
+        let model = crate::model::compile_project_cached(
+            source,
+            Some(&project),
+            &mut crate::analysis::Cache::default(),
+        )?;
+        assert_eq!(model.parts.len(), 1);
+        assert_eq!(model.parts[0].name, "safe");
+        assert_eq!(model.parts[0].line, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_imports_share_singletons_and_preserve_actual_dependency_order() -> Result<(), String> {
+        let fixture = Fixture::new();
+        fixture.write("shared.luau", "return {count=0}");
+        fixture.write(
+            "first.luau",
+            "local state=require('./shared'); state.count+=1; return state.count",
+        );
+        fixture.write(
+            "second.luau",
+            "local state=require('./shared'); state.count+=1; return state.count",
+        );
+        let source = "local deferred=function() return require('./first') end\nlocal second=require('./second')\nlocal first=deferred()\nlocal again=require('./first')\nassert(second==1); assert(first==2); assert(again==2)";
+        let project = Project::load(&fixture.0.join("main.luau"), source)?;
+        let lua = mlua::Lua::new();
+        project.install(&lua).map_err(|error| error.to_string())?;
+        lua.load(source)
+            .set_name("@model.luau")
+            .exec()
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_imports_leave_root_source_attribution_intact() -> Result<(), String> {
+        let fixture = Fixture::new();
+        fixture.write("bad.luau", "\n\n\nreturn error('expected failure')");
+        let source = "local ok=pcall(function() return require('./bad') end)\nassert(not ok)\ncad.show('after',cad.box({width=2,depth=2,height=2}))";
+        let project = Project::load(&fixture.0.join("main.luau"), source)?;
+        let model = crate::model::compile_project_cached(
+            source,
+            Some(&project),
+            &mut crate::analysis::Cache::default(),
+        )?;
+        assert_eq!(model.parts[0].name, "after");
+        assert_eq!(model.parts[0].line, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn large_standalone_comments_strings_and_identifiers_keep_the_editor_source_budget()
+    -> Result<(), String> {
+        for prefix in [
+            "-- require\n",
+            "local text='require'\n",
+            "local requires_attention=true\n",
+        ] {
+            let source = format!("{prefix}{}", " ".repeat(SOURCE_BYTES_MAX));
+            assert!(
+                Project::load_if_imported(Path::new("/missing/project/main.luau"), &source)?
+                    .is_none()
+            );
+        }
+        let source = format!("{}require('./module')", " ".repeat(SOURCE_BYTES_MAX));
+        assert!(
+            Project::load_if_imported(Path::new("/missing/project/main.luau"), &source)
+                .err()
+                .expect("Project source budget")
+                .contains("4 MiB")
+        );
         Ok(())
     }
 }
