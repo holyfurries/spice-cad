@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 mod exports;
+mod geometry;
 
 use glam::{DVec3, dvec3};
 use opencascade::primitives::Shape;

@@ -8,6 +8,11 @@ license = "MIT"
 description = "Independent test-only geometry and STEP verification for Spice CAD"
 
 [dev-dependencies]
+cxx = "1"
 glam = "=0.24.2"
 opencascade = { version = "=0.3.0", default-features = false }
+opencascade-sys = { version = "=0.3.0", default-features = false }
 serde_json = "1"
+
+[build-dependencies]
+cxx-build = "1"

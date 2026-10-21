@@ -2716,8 +2716,11 @@ dependencies = [
 name = "spice-cad-verification"
 version = "0.1.0"
 dependencies = [
+ "cxx",
+ "cxx-build",
  "glam",
  "opencascade",
+ "opencascade-sys",
  "serde_json",
 ]
 

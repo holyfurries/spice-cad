@@ -19,6 +19,7 @@
 !/.cargo/config.toml
 
 !/verification/Cargo.toml
+!/verification/build.rs
 !/verification/src/**/*.rs
 !/native/Cargo.toml
 !/native/build.rs

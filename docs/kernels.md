@@ -56,12 +56,32 @@ nix develop .#verification -c cargo clippy --locked -p spice-cad-verification --
 The suite invokes `target/debug/spice-cad` to construct and export Luau models.
 Set `SPICE_CAD_BIN` to an absolute executable path when using a custom Cargo
 target directory or testing a release build. Missing executables fail explicitly.
-Checks reopen STEP files with OpenCascade and verify volumes, closed oriented
-meshes, dimensions, part counts, and print placements. Independent rack fixtures
+Checks reopen STEP files with OpenCascade and validate the imported B-rep with
+`BRepAlgo::IsValid` (the standard `BRepCheck_Analyzer`), including geometric
+checks. Volume comes directly from surfaces using adaptive Gauss–Kronrod
+integration across B-spline spans;
+non-finite results, failed integration, and estimated relative error above
+`1e-8` fail verification. Closed oriented meshes, dimensions, part counts, and
+print placements are checked separately. Independent rack fixtures
 also exercise jar clearance, joints, fit samples, and support-free orientations;
 they are test references rather than an alternative production modeler.
-Roundtrip volumes and bounds are measured from OpenCascade's imported meshes,
-avoiding conservative B-rep bounding-box padding when checking bed contact.
+Mesh volumes must agree with surface volumes within 0.2%. Bounds still come
+from imported meshes, avoiding conservative B-rep bounding-box padding when
+checking bed contact.
+
+Independent cavity and flanged-bushing fixtures check analytic volume and
+cross-sections through the walls, bore, flange, and stem. Section comparisons
+check missing and extra area, then compare line intersections within 0.001 mm.
+Analytic volume and section-area comparisons allow 0.01% relative error for
+curved STEP import and integration approximations. A deliberately misplaced
+cavity proves that matching total volume and outer bounds cannot hide incorrect
+internal geometry; a self-intersecting wire proves invalid B-reps are rejected.
+
+Validation uses OCCT's standard geometric checker. Its optional exact method
+reports curve-on-surface and same-parameter inconsistencies on current curved
+imports that the standard checker accepts. This suite does not claim exact
+curve/parameter consistency or general shape equivalence; STEP import can also
+repair geometry before validation.
 
 The default and CI Nix shells exclude OpenCascade. `.#verification` supplies
 OpenCascade 7.8.1, its CMake setup, and the runtime libraries. Version-tag CI runs

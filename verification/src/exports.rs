@@ -1,5 +1,5 @@
 use glam::{DVec3, dvec3};
-use opencascade::primitives::Shape;
+use opencascade::primitives::{Face, Shape, Wire};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -103,6 +103,7 @@ impl Drop for Fixture {
 }
 
 fn inspect_step(path: &Path) -> Result<(f64, [DVec3; 2]), Box<dyn Error>> {
+    let volume_surface_mm3 = crate::geometry::volume_mm3(path)?;
     let shape = Shape::read_step(path)?;
     let mesh = shape.mesh()?;
     assert!(!mesh.indices.is_empty());
@@ -150,7 +151,179 @@ fn inspect_step(path: &Path) -> Result<(f64, [DVec3; 2]), Box<dyn Error>> {
         path.display()
     );
     assert!(volume_mm3 > 0.0);
-    Ok((volume_mm3, bounds))
+    assert!(
+        (volume_mm3 - volume_surface_mm3).abs() < volume_surface_mm3 * 0.002,
+        "STEP mesh volume {volume_mm3} differs from surface volume {volume_surface_mm3}: {}",
+        path.display()
+    );
+    Ok((volume_surface_mm3, bounds))
+}
+
+fn section(shape: &Shape, height_mm: f64) -> Result<Shape, Box<dyn Error>> {
+    assert!(height_mm.is_finite());
+    let wire = Wire::from_ordered_points([
+        dvec3(-50.0, -50.0, height_mm),
+        dvec3(50.0, -50.0, height_mm),
+        dvec3(50.0, 50.0, height_mm),
+        dvec3(-50.0, 50.0, height_mm),
+    ])?;
+    let plane = Shape::from(Face::from_wire(&wire));
+    Ok(shape.intersect(&plane).into())
+}
+
+fn section_difference_area_mm2(actual: &Shape, expected: &Shape) -> f64 {
+    let missing: Shape = expected.subtract(actual).into();
+    let extra: Shape = actual.subtract(expected).into();
+    let area: f64 = missing
+        .faces()
+        .chain(extra.faces())
+        .map(|face| face.surface_area())
+        .sum();
+    assert!(area.is_finite());
+    assert!(area >= 0.0);
+    area
+}
+
+fn section_intersections_x_mm(shape: &Shape, y_mm: f64, height_mm: f64) -> Vec<f64> {
+    let hits = shape.faces_along_line(dvec3(-50.0, y_mm, height_mm), DVec3::X);
+    assert!(hits.len() <= 32);
+    let mut positions: Vec<f64> = hits.into_iter().map(|hit| hit.point.x).collect();
+    assert!(positions.iter().all(|position| position.is_finite()));
+    positions.sort_by(f64::total_cmp);
+    positions.dedup_by(|first, second| (*first - *second).abs() < 1e-6);
+    positions
+}
+
+#[test]
+fn exported_sections_match_independent_cavity_and_bushing_fixtures() -> TestResult {
+    let cavity: Shape = Shape::box_with_dimensions(10.0, 10.0, 10.0)
+        .subtract(&Shape::box_from_corners(
+            dvec3(2.0, 2.0, 2.0),
+            dvec3(8.0, 8.0, 8.0),
+        ))
+        .into();
+    let flange = Shape::cylinder(DVec3::ZERO, 16.0, DVec3::Z, 4.0);
+    let stem = Shape::cylinder(dvec3(0.0, 0.0, 4.0), 10.0, DVec3::Z, 16.0);
+    let outer: Shape = flange.union(&stem).into();
+    let bushing: Shape = outer
+        .subtract(&Shape::cylinder(DVec3::ZERO, 5.0, DVec3::Z, 20.0))
+        .into();
+    for (name, source, reference, volume_expected_mm3, sections) in [
+        (
+            "section-cavity",
+            "local a=cad.box({width=10,depth=10,height=10});local b=cad.box({width=6,depth=6,height=6,x=2,y=2,z=2});cad.show('hollow',cad.subtract(a,b))",
+            cavity,
+            784.0,
+            vec![(1.0, 100.0), (5.0, 64.0), (9.0, 100.0)],
+        ),
+        (
+            "section-bushing",
+            include_str!("../../models/revolved-bushing.luau"),
+            bushing,
+            std::f64::consts::PI * (231.0 * 4.0 + 75.0 * 16.0),
+            vec![
+                (2.0, std::f64::consts::PI * 231.0),
+                (10.0, std::f64::consts::PI * 75.0),
+            ],
+        ),
+    ] {
+        let fixture = Fixture::new(name, source)?;
+        fixture.run("--export-model")?;
+        let path = fixture.exports().join("model.step");
+        let (volume, _) = inspect_step(&path)?;
+        assert!(
+            (volume - volume_expected_mm3).abs() < volume_expected_mm3 * 1e-4,
+            "{name}: {volume}"
+        );
+        let actual = Shape::read_step(path)?;
+        for (height_mm, area_expected_mm2) in sections {
+            let actual_section = section(&actual, height_mm)?;
+            let reference_section = section(&reference, height_mm)?;
+            let area: f64 = actual_section.faces().map(|face| face.surface_area()).sum();
+            assert!(
+                (area - area_expected_mm2).abs() < area_expected_mm2 * 1e-4,
+                "{name} at {height_mm}: {area}"
+            );
+            let difference = section_difference_area_mm2(&actual_section, &reference_section);
+            assert!(
+                difference < area_expected_mm2 * 1e-4,
+                "{name} at {height_mm}: section difference {difference}"
+            );
+            for y_mm in [1.0, 3.0, 6.0, 12.0] {
+                let actual_positions = section_intersections_x_mm(&actual, y_mm, height_mm);
+                let expected_positions = section_intersections_x_mm(&reference, y_mm, height_mm);
+                assert_eq!(
+                    actual_positions.len(),
+                    expected_positions.len(),
+                    "{name} at z={height_mm}, y={y_mm}"
+                );
+                for (actual, expected) in actual_positions.into_iter().zip(expected_positions) {
+                    assert!(
+                        (actual - expected).abs() < 0.001,
+                        "{name} at z={height_mm}, y={y_mm}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn section_comparison_detects_equal_volume_and_bounds_with_a_misplaced_cavity() -> TestResult {
+    let fixture = Fixture::new(
+        "misplaced-cavity",
+        "local a=cad.box({width=10,depth=10,height=10});local b=cad.box({width=4,depth=4,height=4,x=1,y=2,z=2});cad.show('hollow',cad.subtract(a,b))",
+    )?;
+    fixture.run("--export-model")?;
+    let path = fixture.exports().join("model.step");
+    let (volume, bounds) = inspect_step(&path)?;
+    assert!((volume - 936.0).abs() < 1e-6);
+    assert!(bounds[0].abs().max_element() < 1e-6);
+    assert!((bounds[1] - DVec3::splat(10.0)).abs().max_element() < 1e-6);
+    let actual = Shape::read_step(path)?;
+    let reference: Shape = Shape::box_with_dimensions(10.0, 10.0, 10.0)
+        .subtract(&Shape::box_from_corners(
+            dvec3(3.0, 2.0, 2.0),
+            dvec3(7.0, 6.0, 6.0),
+        ))
+        .into();
+    let difference =
+        section_difference_area_mm2(&section(&actual, 4.0)?, &section(&reference, 4.0)?);
+    assert!((difference - 16.0).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn rejects_self_intersecting_brep_before_measuring_volume() -> TestResult {
+    let fixture = Fixture::new("invalid-brep", "")?;
+    let wire = Wire::from_ordered_points([
+        dvec3(0.0, 0.0, 0.0),
+        dvec3(10.0, 10.0, 0.0),
+        dvec3(0.0, 10.0, 0.0),
+        dvec3(10.0, 0.0, 0.0),
+    ])?;
+    let shape = Shape::from(Face::from_wire(&wire));
+    let path = fixture.directory.join("invalid.brep");
+    shape.write_brep_text(&path)?;
+    let raw = opencascade_sys::b_rep_tools::read(path.to_string_lossy().into_owned());
+    let error = crate::geometry::validate(&raw).expect_err("Reject the bow-tie wire");
+    assert!(error.to_string().contains("Invalid STEP B-rep"), "{error}");
+    Ok(())
+}
+
+#[test]
+fn rejects_step_surfaces_without_closed_volume() -> TestResult {
+    let fixture = Fixture::new("open-surface", "")?;
+    let surface = Shape::from(Face::from_wire(&Wire::rect(10.0, 10.0)));
+    let path = fixture.directory.join("surface.step");
+    surface.write_step(&path)?;
+    let error = crate::geometry::volume_mm3(&path).expect_err("A face is not a closed solid");
+    assert!(
+        error.to_string().contains("STEP volume integration failed"),
+        "{error}"
+    );
+    Ok(())
 }
 
 #[test]
