@@ -39,6 +39,7 @@ mod performance;
 mod picking;
 mod placement;
 mod preview;
+mod print_preparation;
 mod profile;
 mod raster;
 mod render_views;
@@ -87,6 +88,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "rack-tools")]
         [flag] if flag == "--rack" => None,
         [flag, path] if flag == "--model" => Some(std::path::PathBuf::from(path)),
+        [flag, path] if flag == "--check-print" => {
+            let source = model::read_source(std::path::Path::new(path))?;
+            let model = model::compile(&source)?;
+            let report = print_preparation::model_report(&model)?;
+            println!("{}", serde_json::to_string_pretty(&report.json())?);
+            if report.blocked() {
+                return Err(
+                    "Print checks failed: correct the bed placement and printer envelope".into(),
+                );
+            }
+            return Ok(());
+        }
         [flag, path] if flag == "--check-model" => {
             let source = model::read_source(std::path::Path::new(path))?;
             let snapshot = build_script_snapshot(&source, 1)?;
@@ -123,9 +136,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             return Err(
                 (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--rack | --benchmark | --model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--rack | --benchmark | --model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 } else {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
+                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                 })
                     .into(),
             );
@@ -1716,6 +1729,9 @@ impl eframe::App for Editor {
                         Navigation::RevolvedBushing => {
                             example_requested = Some(document::Example::RevolvedBushing)
                         }
+                        Navigation::FitGauge => {
+                            example_requested = Some(document::Example::FitGauge)
+                        }
                         Navigation::RocketEngine => {
                             example_requested = Some(document::Example::RocketEngine)
                         }
@@ -1823,6 +1839,7 @@ impl eframe::App for Editor {
                             ("Selected edge chamfers", document::Example::EdgeChamfers),
                             ("Revolved bushing", document::Example::RevolvedBushing),
                             ("Rocket engine assembly", document::Example::RocketEngine),
+                            ("Fit gauge", document::Example::FitGauge),
                         ] {
                             if ui.button(label).clicked() {
                                 example_requested = Some(example);

@@ -33,6 +33,7 @@ type HoleOptions = {
 	countersink: { radius: number, angle: number? }?,
 }
 local cad: {
+	print_options: ({ minimum_wall: number?, minimum_clearance: number? }) -> (),
 	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
 	toggle: (boolean, { label: string? }) -> boolean,
 	polygon: ({ { x: number, y: number } }) -> Profile,

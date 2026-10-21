@@ -85,6 +85,16 @@ fn write_model(
         files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));
         files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object with its own color material. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. All parts preserve the source origin as their pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with smooth normals within CAD faces and hard boundaries between faces. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
     } else {
+        let print_bounds = bodies
+            .iter()
+            .map(|body| body.bounds(true))
+            .collect::<Result<Vec<_>, _>>()?;
+        let report = crate::print_preparation::report(model, canonical_meshes, &print_bounds)?;
+        files.push((
+            "PRINT_CHECKS.json".into(),
+            serde_json::to_vec_pretty(&report.json()).map_err(|error| error.to_string())?,
+        ));
+        files.push(("PRINT_CHECKS.md".into(), report.markdown().into_bytes()));
         let mut manifest = Vec::with_capacity(bodies.len());
         for (index, ((body, mesh), part)) in
             bodies.iter_mut().zip(&meshes).zip(&model.parts).enumerate()

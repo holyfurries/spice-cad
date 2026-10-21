@@ -18,6 +18,7 @@ const RESULT_COUNT_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    FitGauge,
     Open,
     Run,
     Save,
@@ -53,6 +54,7 @@ pub enum Command {
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
+    (Command::FitGauge, "Examples: print fit gauge", ""),
     (Command::NewModel, "File: new model", "Ctrl+Shift+N"),
     (Command::SaveAs, "File: save model as", "Ctrl+Shift+S"),
     (Command::AutoPreview, "Model: toggle live preview", ""),

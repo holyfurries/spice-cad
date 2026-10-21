@@ -95,6 +95,7 @@ impl UserData for Edge {}
 struct Recipe {
     shapes: Vec<crate::shape_operation::Recipe>,
     shells: Vec<crate::shape_operation::Shell>,
+    print_options: Option<crate::print_preparation::Options>,
     face_features: Vec<crate::face_feature::Recipe>,
     holes: Vec<crate::hole::Recipe>,
     edges: Vec<crate::edge_reference::Reference>,
@@ -105,6 +106,7 @@ struct Recipe {
 }
 
 pub struct Model {
+    pub print_options: crate::print_preparation::Options,
     recipe: Rc<Recipe>,
     definitions: crate::dimensions::Definitions,
     pub name: String,
@@ -159,6 +161,23 @@ pub fn compile_cached(
     let recipe = Rc::new(RefCell::new(Recipe::default()));
     let cad = lua.create_table().map_err(|error| error.to_string())?;
     crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
+        "print_options",
+        lua.create_function(move |_, options: Table| {
+            let options = crate::print_preparation::Options::from_table(&options)?;
+            let mut recipe = state.borrow_mut();
+            if recipe.print_options.is_some() {
+                return Err(mlua::Error::runtime(
+                    "Declare cad.print_options only once per model",
+                ));
+            }
+            recipe.print_options = Some(options);
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
         "edge",
@@ -823,6 +842,7 @@ pub fn compile_cached(
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
     definitions.validate_parameters(analysis.take_parameters())?;
     Ok(Model {
+        print_options: recipe.print_options.unwrap_or_default(),
         recipe: Rc::new(recipe),
         definitions,
         name,
