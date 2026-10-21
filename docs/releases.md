@@ -42,7 +42,8 @@ CI runs these checks for pull requests and pushes to `main`, then uploads a
 download artifact with SHA-256 checksums and the exact application source.
 A container with no Nix installation checks that the AppImage can analyze,
 construct, and tessellate a model using its bundled dependencies. This is a
-headless check; it does not establish desktop or graphics-driver compatibility.
+headless check that also exports STEP, STL, and GLB; it does not establish desktop
+or graphics-driver compatibility.
 
 ## Cut a release
 

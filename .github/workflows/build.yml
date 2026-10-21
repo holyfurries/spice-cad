@@ -51,7 +51,15 @@ jobs:
             --mount "type=bind,source=$PWD/dist,target=/download,readonly" \
             --mount "type=bind,source=$PWD/models,target=/models,readonly" \
             ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
-            /download/spice-cad-x86_64-linux.AppImage --check-model /models/mounting-bracket.luau
+            /bin/bash -euc '
+              test ! -e /nix/store
+              /download/spice-cad-x86_64-linux.AppImage --check-model /models/mounting-bracket.luau
+              /download/spice-cad-x86_64-linux.AppImage --export-model /models/mounting-bracket.luau /tmp/print
+              /download/spice-cad-x86_64-linux.AppImage --export-game /models/mounting-bracket.luau /tmp/game
+              test -s /tmp/print/model.step
+              test -s /tmp/print/model.stl
+              test -s /tmp/game/model.glb
+            '
       - name: Assemble download and checksums
         run: |
           cp LICENSE NOTICE ASSETS.md dist/
