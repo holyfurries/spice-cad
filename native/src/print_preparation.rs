@@ -52,14 +52,37 @@ struct Part {
     size_mm: glam::DVec3,
     on_bed: bool,
     fits_bed: bool,
-    wall_mm: Option<f32>,
+    wall: Option<Sample>,
     sample_count: usize,
 }
 
 struct Clearance {
+    parts: [usize; 2],
     names: [String; 2],
-    distance_mm: f32,
+    sample: Sample,
     sample_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sample {
+    pub points: [Vec3; 2],
+    pub distance_mm: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Blocked,
+    Warning,
+    Info,
+}
+
+pub struct Finding {
+    pub title: String,
+    pub detail: String,
+    pub severity: Severity,
+    pub parts: [usize; 2],
+    pub layout: Layout,
+    pub sample: Option<Sample>,
 }
 
 pub struct Report {
@@ -70,6 +93,69 @@ pub struct Report {
 }
 
 impl Report {
+    pub fn options(&self) -> Options {
+        self.options
+    }
+    pub fn part_count(&self) -> usize {
+        self.parts.len()
+    }
+    pub fn skipped_pairs(&self) -> usize {
+        self.skipped_pairs
+    }
+
+    pub fn findings(&self) -> Vec<Finding> {
+        let mut findings = Vec::with_capacity(self.parts.len() * 3 + self.clearances.len());
+        for (index, part) in self.parts.iter().enumerate() {
+            let size = format!(
+                "{:.2} × {:.2} × {:.2} mm",
+                part.size_mm.x, part.size_mm.y, part.size_mm.z
+            );
+            if !part.fits_bed {
+                findings.push(Finding { title: format!("{} · exceeds P1S envelope", part.name), detail: format!("{size}. Each dimension must fit within 256 mm. Change dimensions or print orientation."), severity: Severity::Blocked, parts: [index; 2], layout: Layout::Print, sample: None });
+            }
+            if !part.on_bed {
+                findings.push(Finding { title: format!("{} · off the bed", part.name), detail: "The lowest point must be at Z=0 in print placement. Adjust the source or print placement.".into(), severity: Severity::Blocked, parts: [index; 2], layout: Layout::Print, sample: None });
+            }
+            let (title, detail, severity) = match part.wall {
+                Some(sample) => (
+                    format!("{} · sampled wall {:.3} mm", part.name, sample.distance_mm),
+                    format!(
+                        "{size} · {} wall rays. Warning threshold {:.2} mm. Select to inspect this sample in print placement.",
+                        part.sample_count, self.options.minimum_wall_mm
+                    ),
+                    if sample.distance_mm < self.options.minimum_wall_mm {
+                        Severity::Warning
+                    } else {
+                        Severity::Info
+                    },
+                ),
+                None => (
+                    format!("{} · wall not established", part.name),
+                    format!(
+                        "{size}. No usable thickness sample within the work budget; inspect this part in the slicer."
+                    ),
+                    Severity::Warning,
+                ),
+            };
+            findings.push(Finding {
+                title,
+                detail,
+                severity,
+                parts: [index; 2],
+                layout: Layout::Print,
+                sample: part.wall,
+            });
+        }
+        for clearance in &self.clearances {
+            findings.push(Finding { title: format!("{} / {} · sampled gap {:.3} mm", clearance.names[0], clearance.names[1], clearance.sample.distance_mm), detail: format!("{} samples · warning threshold {:.2} mm. Shown in assembly placement; intentional mating contact may be acceptable.", clearance.sample_count, self.options.minimum_clearance_mm), severity: Severity::Warning, parts: clearance.parts, layout: Layout::Assembly, sample: Some(clearance.sample) });
+        }
+        findings.sort_by_key(|finding| match finding.severity {
+            Severity::Blocked => 0,
+            Severity::Warning => 1,
+            Severity::Info => 2,
+        });
+        findings
+    }
     pub fn blocked(&self) -> bool {
         self.parts.iter().any(|part| !part.on_bed || !part.fits_bed)
     }
@@ -82,19 +168,23 @@ impl Report {
             "minimum_wall": self.options.minimum_wall_mm,
             "minimum_clearance": self.options.minimum_clearance_mm,
             "blocked": self.blocked(),
+            "wall_sample_space": "print placement",
+            "gap_sample_space": "assembly placement",
             "method": "Bounded triangle-centroid samples. Wall rays follow inward triangle normals. Assembly surface distances are sampled upper bounds, not exact minimum clearance or collision tests. Missing warnings do not establish printability.",
             "parts": self.parts.iter().map(|part| serde_json::json!({
                 "name": part.name,
                 "print_size": part.size_mm.to_array(),
                 "on_bed": part.on_bed,
                 "fits_bed": part.fits_bed,
-                "sampled_wall": part.wall_mm,
+                "sampled_wall": part.wall.map(|sample| sample.distance_mm),
+                "wall_sample_points": part.wall.map(|sample| sample.points.map(|point| point.to_array())),
                 "wall_samples": part.sample_count,
-                "thin_wall_warning": part.wall_mm.is_some_and(|wall| wall < self.options.minimum_wall_mm),
+                "thin_wall_warning": part.wall.is_some_and(|sample| sample.distance_mm < self.options.minimum_wall_mm),
             })).collect::<Vec<_>>(),
             "close_assembly_surfaces": self.clearances.iter().map(|clearance| serde_json::json!({
                 "parts": clearance.names,
-                "sampled_distance": clearance.distance_mm,
+                "sampled_distance": clearance.sample.distance_mm,
+                "sample_points": clearance.sample.points.map(|point| point.to_array()),
                 "samples": clearance.sample_count,
             })).collect::<Vec<_>>(),
             "pairs_skipped_by_budget": self.skipped_pairs,
@@ -119,12 +209,12 @@ impl Report {
                     "BLOCKED: check bed placement and size"
                 }
             ));
-            match part.wall_mm {
-                Some(wall) => text.push_str(&format!(
+            match part.wall {
+                Some(sample) => text.push_str(&format!(
                     "Sampled wall {:.3} mm ({} rays){}.\n",
-                    wall,
+                    sample.distance_mm,
                     part.sample_count,
-                    if wall < self.options.minimum_wall_mm {
+                    if sample.distance_mm < self.options.minimum_wall_mm {
                         "; THIN WALL WARNING"
                     } else {
                         ""
@@ -134,7 +224,7 @@ impl Report {
             }
         }
         for clearance in &self.clearances {
-            text.push_str(&format!("- CLOSE SURFACES: {} / {}: sampled assembly gap {:.3} mm. Intended contact may be acceptable.\n", clearance.names[0], clearance.names[1], clearance.distance_mm));
+            text.push_str(&format!("- CLOSE SURFACES: {} / {}: sampled assembly gap {:.3} mm. Intended contact may be acceptable.\n", clearance.names[0], clearance.names[1], clearance.sample.distance_mm));
         }
         if self.skipped_pairs > 0 {
             text.push_str(&format!(
@@ -157,6 +247,31 @@ pub fn model_report(model: &model::Model) -> Result<Report, String> {
         print_bounds.push(body.bounds(true)?);
     }
     report(model, &meshes.iter().collect::<Vec<_>>(), &print_bounds)
+}
+
+pub fn cached_report(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    cache: &mut model::Cache<'_>,
+) -> Result<Report, String> {
+    let model = cache.compile_project(source, project)?;
+    let prepared = cache.prepare(&model)?;
+    let print_bounds = prepared
+        .bodies
+        .iter()
+        .zip(&model.parts)
+        .map(|(body, part)| {
+            let mut placed = body.try_clone()?;
+            part.placement(Layout::Print).apply(&mut placed, false)?;
+            placed.bounds(true)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let meshes = prepared
+        .geometry
+        .iter()
+        .map(|geometry| &geometry.mesh)
+        .collect::<Vec<_>>();
+    report(&model, &meshes, &print_bounds)
 }
 
 pub fn report(
@@ -184,13 +299,19 @@ pub fn report(
             return Err("Print checks require complete bounded meshes".into());
         }
         let size_mm = print_bounds[1] - print_bounds[0];
-        let (wall_mm, sample_count) = sampled_wall(mesh, TRIANGLE_VISITS_MAX / meshes.len());
+        let (wall, sample_count) = sampled_wall(mesh, TRIANGLE_VISITS_MAX / meshes.len());
+        let print_matrix = part.placement(Layout::Print).matrix();
         parts.push(Part {
             name: part.name.clone(),
             size_mm,
             on_bed: print_bounds[0].z.abs() <= 0.001,
             fits_bed: size_mm.max_element() <= 256.0001,
-            wall_mm,
+            wall: wall.map(|sample| Sample {
+                points: sample
+                    .points
+                    .map(|point| print_matrix.transform_point3(point)),
+                ..sample
+            }),
             sample_count,
         });
         if model.print_options.minimum_clearance_mm > 0.0 {
@@ -221,16 +342,21 @@ pub fn report(
                 continue;
             }
             budget -= samples * triangles;
-            let distance_mm = sampled_distance(&assembly[first], &assembly[second], samples).min(
-                sampled_distance(&assembly[second], &assembly[first], samples),
-            );
-            if distance_mm < model.print_options.minimum_clearance_mm {
+            let forward = sampled_distance(&assembly[first], &assembly[second], samples);
+            let reverse = sampled_distance(&assembly[second], &assembly[first], samples);
+            let sample = if forward.distance_mm <= reverse.distance_mm {
+                forward
+            } else {
+                reverse
+            };
+            if sample.distance_mm < model.print_options.minimum_clearance_mm {
                 clearances.push(Clearance {
+                    parts: [first, second],
                     names: [
                         model.parts[first].name.clone(),
                         model.parts[second].name.clone(),
                     ],
-                    distance_mm,
+                    sample,
                     sample_count: samples * 2,
                 });
             }
@@ -255,7 +381,7 @@ fn mesh_bounds(mesh: &Mesh, matrix: glam::Mat4) -> [Vec3; 2] {
     bounds
 }
 
-fn sampled_wall(mesh: &Mesh, budget: usize) -> (Option<f32>, usize) {
+fn sampled_wall(mesh: &Mesh, budget: usize) -> (Option<Sample>, usize) {
     let triangles = mesh.vertices.as_chunks::<3>().0;
     assert!(!triangles.is_empty());
     assert!(budget <= TRIANGLE_VISITS_MAX);
@@ -263,6 +389,7 @@ fn sampled_wall(mesh: &Mesh, budget: usize) -> (Option<f32>, usize) {
         .min(budget / triangles.len())
         .min(triangles.len());
     let mut minimum = f64::INFINITY;
+    let mut closest = None;
     let mut checked = 0;
     for sample in 0..samples {
         let index = sample * triangles.len() / samples;
@@ -275,11 +402,17 @@ fn sampled_wall(mesh: &Mesh, budget: usize) -> (Option<f32>, usize) {
         }
         let center = (points[0] + points[1] + points[2]) / 3.0;
         if let Some(distance_mm) = wall_ray(triangles, index, center, -normal) {
-            minimum = minimum.min(distance_mm);
+            if distance_mm < minimum {
+                minimum = distance_mm;
+                closest = Some(Sample {
+                    points: [center.as_vec3(), (center - normal * distance_mm).as_vec3()],
+                    distance_mm: distance_mm as f32,
+                });
+            }
             checked += 1;
         }
     }
-    (minimum.is_finite().then_some(minimum as f32), checked)
+    (closest, checked)
 }
 
 fn wall_ray(
@@ -323,26 +456,35 @@ fn wall_ray(
     closest.is_finite().then_some(closest)
 }
 
-fn sampled_distance(first: &Mesh, second: &Mesh, samples: usize) -> f32 {
+fn sampled_distance(first: &Mesh, second: &Mesh, samples: usize) -> Sample {
     let triangles = first.vertices.as_chunks::<3>().0;
     assert!(!triangles.is_empty());
     assert!((1..=SAMPLE_COUNT_MAX).contains(&samples));
     let mut distance_squared = f32::INFINITY;
+    let mut points_closest = [Vec3::ZERO; 2];
     for sample in 0..samples {
         let points = triangles[sample * triangles.len() / samples]
             .map(|vertex| Vec3::from_array(vertex.position));
         let center = (points[0] + points[1] + points[2]) / 3.0;
         for triangle in second.vertices.as_chunks::<3>().0 {
-            distance_squared = distance_squared.min(point_triangle_distance_squared(
+            let target = point_triangle_closest(
                 center,
                 triangle.map(|vertex| Vec3::from_array(vertex.position)),
-            ));
+            );
+            let squared = center.distance_squared(target);
+            if squared < distance_squared {
+                distance_squared = squared;
+                points_closest = [center, target];
+            }
         }
     }
-    distance_squared.sqrt()
+    Sample {
+        points: points_closest,
+        distance_mm: distance_squared.sqrt(),
+    }
 }
 
-fn point_triangle_distance_squared(point: Vec3, triangle: [Vec3; 3]) -> f32 {
+fn point_triangle_closest(point: Vec3, triangle: [Vec3; 3]) -> Vec3 {
     assert!(point.is_finite());
     assert!(triangle.iter().all(|point| point.is_finite()));
     let [first, second, third] = triangle;
@@ -354,18 +496,24 @@ fn point_triangle_distance_squared(point: Vec3, triangle: [Vec3; 3]) -> f32 {
             && (third - second).cross(projected - second).dot(normal) >= 0.0
             && (first - third).cross(projected - third).dot(normal) >= 0.0
         {
-            return point.distance_squared(projected);
+            return projected;
         }
     }
     let mut minimum = f32::INFINITY;
+    let mut closest = first;
     for index in 0..3 {
         let first = triangle[index];
         let direction = triangle[(index + 1) % 3] - first;
         let along = ((point - first).dot(direction) / direction.length_squared().max(1e-20))
             .clamp(0.0, 1.0);
-        minimum = minimum.min(point.distance_squared(first + direction * along));
+        let target = first + direction * along;
+        let distance = point.distance_squared(target);
+        if distance < minimum {
+            minimum = distance;
+            closest = target;
+        }
     }
-    minimum
+    closest
 }
 
 #[cfg(test)]
@@ -382,8 +530,14 @@ mod tests {
         let source = "cad.print_options({minimum_wall=1}); local outer=cad.box({width=30,depth=30,height=20}); local cut=cad.box({width=29,depth=29,height=20,x=0.5,y=0.5,z=0.5});cad.show('cup',cad.subtract(outer,cut))";
         let report = check(source)?;
         assert!(!report.blocked());
-        assert!((report.parts[0].wall_mm.ok_or("Missing thickness")? - 0.5).abs() < 0.001);
+        assert!((report.parts[0].wall.ok_or("Missing thickness")?.distance_mm - 0.5).abs() < 0.001);
         assert_eq!(report.json()["parts"][0]["thin_wall_warning"], true);
+        let wall = report.parts[0].wall.expect("Wall sample");
+        assert!((wall.points[0].distance(wall.points[1]) - wall.distance_mm).abs() < 0.001);
+        let findings = report.findings();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].severity == Severity::Warning);
+        assert!(findings[0].layout == Layout::Print);
         Ok(())
     }
 
@@ -392,9 +546,54 @@ mod tests {
         let source = "cad.print_options({minimum_clearance=0.2});local a=cad.box({width=10,depth=10,height=10});cad.show('first',a,{print={position={x=0}}});cad.show('second',cad.translate(a,{x=0}),{assembly={position={x=10.1}},print={position={x=30}}})";
         let report = check(source)?;
         assert_eq!(report.clearances.len(), 1);
-        assert!((report.clearances[0].distance_mm - 0.1).abs() < 0.001);
+        assert!((report.clearances[0].sample.distance_mm - 0.1).abs() < 0.001);
         assert!(!report.blocked());
         assert!(report.markdown().contains("CLOSE SURFACES"));
+        let sample = report.clearances[0].sample;
+        assert!((sample.points[0].distance(sample.points[1]) - 0.1).abs() < 0.001);
+        assert!(
+            sample
+                .points
+                .iter()
+                .all(|point| (9.99..10.11).contains(&point.x))
+        );
+        let second_wall = report.parts[1].wall.expect("Second part wall sample");
+        assert!(
+            second_wall
+                .points
+                .iter()
+                .all(|point| (29.99..40.01).contains(&point.x))
+        );
+        let findings = report.findings();
+        let gap = findings
+            .iter()
+            .find(|finding| finding.layout == Layout::Assembly)
+            .ok_or("Missing gap finding")?;
+        assert_eq!(gap.parts, [0, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn cached_checks_preserve_geometry_and_transform_wall_markers_into_print_placement()
+    -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let source = "cad.show('plate',cad.box({width=10,depth=8,height=0.5}),{print={position={x=20,y=30},rotation={z=90}}})";
+        let model = cache.compile_project(source, None)?;
+        let prepared = cache.prepare(&model)?;
+        let geometry = std::sync::Arc::clone(&prepared.geometry[0]);
+        drop(prepared);
+        let report = cached_report(source, None, &mut cache)?;
+        let sample = report.parts[0].wall.ok_or("Thickness sample")?;
+        assert!((sample.distance_mm - 0.5).abs() < 0.001);
+        assert!((sample.points[0].distance(sample.points[1]) - 0.5).abs() < 0.001);
+        for point in sample.points {
+            assert!((11.99..20.01).contains(&point.x));
+            assert!((29.99..40.01).contains(&point.y));
+        }
+        let prepared = cache.prepare(&model)?;
+        assert_eq!(prepared.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(&geometry, &prepared.geometry[0]));
         Ok(())
     }
 
@@ -453,7 +652,13 @@ mod tests {
         let report = check(
             "local b=cad.box({width=10,depth=11,height=12});b=cad.rotate(b,{axis='x',angle=31});b=cad.rotate(b,{axis='y',angle=37});b=cad.translate(b,{x=1800,y=1800,z=1800});cad.show('thick',b)",
         )?;
-        assert!(report.parts[0].wall_mm.ok_or("Missing wall samples")? > 9.9);
+        assert!(
+            report.parts[0]
+                .wall
+                .ok_or("Missing wall samples")?
+                .distance_mm
+                > 9.9
+        );
         assert_eq!(report.json()["parts"][0]["thin_wall_warning"], false);
         Ok(())
     }

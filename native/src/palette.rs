@@ -38,6 +38,7 @@ pub enum Command {
     Model,
     AssemblyLayout,
     PrintLayout,
+    PrintChecks,
     Parameters,
     Diagnostics,
     Display,
@@ -83,6 +84,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Model, "View: focus model", "Ctrl+3"),
     (Command::AssemblyLayout, "Model: assembly layout", ""),
     (Command::PrintLayout, "Model: print layout", ""),
+    (Command::PrintChecks, "Model: print checks", ""),
     (Command::Parameters, "View: parameters and properties", ""),
     (
         Command::Diagnostics,

@@ -95,7 +95,7 @@ pub struct Draw {
     pub instances: Arc<Vec<Instance>>,
     pub matrix: Mat4,
     pub selected: [u32; 2],
-    pub selected_part: [u32; 2],
+    pub selected_parts: u32,
     pub selected_edge: Option<[u32; 2]>,
 }
 
@@ -297,10 +297,10 @@ fn part_visible(part:u32)->bool {
  let mask=u32(uniforms.part.z)|(u32(uniforms.part.w)<<16u);
  return (mask&(1u<<part))!=0u;
 }
-struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32> }
+struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32>, @location(4) @interpolate(flat) part:u32 }
 @vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
  let instance=instances[part]; let world=instance.matrix*vec4<f32>(position,1.0);
- var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb;
+ var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; output.part=part;
  if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
 }
 @fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
@@ -311,7 +311,8 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  let light=0.24+0.62*max(dot(normal,key),0.0)+0.16*max(dot(normal,fill),0.0);
  let specular=0.20*pow(max(dot(normal,normalize(key+view)),0.0),48.0);
  let rim=0.07*pow(1.0-max(dot(normal,view),0.0),3.0);
- var color=input.color; if input.face>=u32(uniforms.part.x) && input.face<=u32(uniforms.part.y) {color=vec3<f32>(1.0,0.65,0.20);}
+ let selected_parts=u32(uniforms.part.x)|(u32(uniforms.part.y)<<16u);
+ var color=input.color; if (selected_parts&(1u<<input.part))!=0u {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
  return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
@@ -554,8 +555,8 @@ impl egui_wgpu::CallbackTrait for Draw {
             uniform[25] = end as f32;
         }
         uniform[26] = f32::from(self.edges_enabled);
-        uniform[28] = self.selected_part[0] as f32;
-        uniform[29] = self.selected_part[1] as f32;
+        uniform[28] = (self.selected_parts & 0xffff) as f32;
+        uniform[29] = (self.selected_parts >> 16) as f32;
         uniform[30] = (self.visible_parts & 0xffff) as f32;
         uniform[31] = (self.visible_parts >> 16) as f32;
         let bits = uniform.map(f32::to_bits);

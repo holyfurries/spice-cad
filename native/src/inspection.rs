@@ -221,17 +221,10 @@ impl Face {
 
 #[derive(Clone, Copy)]
 pub enum Selection {
-    Part {
-        index: u32,
-        faces: [u32; 2],
-        bounds: [Vec3; 2],
-    },
+    Part { index: u32, bounds: [Vec3; 2] },
     Edge(Edge),
     Face(Face),
-    Pair {
-        first: Face,
-        second: Face,
-    },
+    Pair { first: Face, second: Face },
 }
 
 impl Selection {

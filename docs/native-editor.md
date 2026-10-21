@@ -159,7 +159,12 @@ viewport focus (Ctrl+1 / Ctrl+2 / Ctrl+3). Drag the Code pane boundary to resize
 it. **View** controls Properties and Diagnostics. Diagnostics start collapsed;
 errors keep the workspace layout unchanged. The footer shows checking progress
 or issue counts. Click that indicator or press Ctrl+Shift+J to open the full
-list. The footer also shows the current Vim mode, cursor position, and total line count. A viewport
+list. Drag the top edge of Diagnostics to resize its height. **Output** in the
+footer (or **View → Build output**) opens a full-width, resizable bottom dock
+with copyable build output. Both docks retain their chosen size instead of
+expanding when a message changes. Vim `:` commands appear in the existing
+footer; entering command mode does not move the file or viewport.
+The footer also shows the current Vim mode, cursor position, and total line count. A viewport
 badge distinguishes a current preview from pending changes or errors. Update
 model previews unsaved edits; Save writes the file and updates the preview.
 

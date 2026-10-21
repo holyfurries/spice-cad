@@ -17,6 +17,23 @@ or material guarantees.
 
 ## Check a model
 
+Open **Model → Print checks** (also under **View** or in the command palette),
+then choose **Run print checks** after the current model finishes building.
+The check runs in the geometry worker using cached final geometry. Editing and
+camera movement stay responsive; opening the window does not run checks.
+
+The window lists P1S envelope/bed blockers, sampled thin walls, and close assembly
+surfaces. Thresholds come from `cad.print_options` in the source. Select a row
+to reveal and frame its part or pair of parts. Wall samples use print placement;
+gap samples switch to assembly placement. The viewport highlights the affected
+parts and shows the sampled endpoints with a readable millimetre callout, including
+zero gaps. Envelope and placement blockers show the part's bounding dimensions.
+Use **Clear highlight**, click in the viewport, or close the window to clear the
+finding. Editing the source, parameters, or imported modules marks the report
+out of date and disables its findings until checks are run again.
+
+For a machine-readable report:
+
 ```sh
 nix develop -c cargo run --release --locked -- --check-print models/fit-gauge.luau
 ```
@@ -26,6 +43,8 @@ and Z=0 bed placement, sampled wall thicknesses, and close assembly surfaces.
 Invalid bed placement or size makes the command fail after printing its report.
 Thin-wall and clearance findings are advisory. Normal print exports also include
 `PRINT_CHECKS.json` and `PRINT_CHECKS.md` with the actual source snapshot.
+JSON sample endpoints identify their coordinate space: walls in print placement,
+gaps in assembly placement.
 
 Wall checks cast inward from at most 128 triangle centroids per part. Clearance
 checks sample centroid-to-triangle surface distances between nearby assembly

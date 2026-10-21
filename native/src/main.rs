@@ -39,6 +39,7 @@ mod performance;
 mod picking;
 mod placement;
 mod preview;
+mod print_checks;
 mod print_preparation;
 mod profile;
 mod project;
@@ -203,6 +204,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 enum Command {
+    CheckPrint {
+        source: String,
+        project: Option<Arc<project::Project>>,
+        revision: u64,
+    },
     ExportScript {
         project: Option<Arc<project::Project>>,
         target: export::Target,
@@ -226,11 +232,16 @@ enum Command {
     Export { parameters: RackParameters },
 }
 enum Outcome {
+    PrintChecked {
+        revision: u64,
+        result: Result<print_preparation::Report, String>,
+    },
     Model(Box<Snapshot>),
     Exported(String),
     Cancelled,
 }
 enum WorkerState {
+    CheckingPrint,
     Idle,
     Busy(ModelRevision),
     Export,
@@ -302,10 +313,9 @@ impl Scene {
             }
             Selection::Edge(edge) => Selection::Edge(self.picking().edge(edge.segments)?),
             Selection::Part { index, .. } => {
-                let range = &self.display.parts.get(*index as usize)?.faces;
+                self.display.parts.get(*index as usize)?;
                 Selection::Part {
                     index: *index,
-                    faces: [*range.start(), *range.end()],
                     bounds: *self.part_bounds.get(*index as usize)?,
                 }
             }
@@ -386,7 +396,6 @@ impl Snapshot {
             let index = self.parts.iter().position(|part| part.name == *name)?;
             return self.scene.selection(&inspection::Selection::Part {
                 index: index as u32,
-                faces: [0; 2],
                 bounds: [glam::Vec3::ZERO; 2],
             });
         }
@@ -469,6 +478,7 @@ impl Worker {
                 let mut cache = kernel.as_ref().map(model::Cache::new);
                 while let Ok((command, token)) = requests.recv() {
                     let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
+                        Command::CheckPrint { source, project, revision } => Ok(Outcome::PrintChecked { revision, result: print_preparation::cached_report(&source, project.as_deref(), cache) }),
                         Command::ExportScript { source, folder, target, project } => export::model_files_project_cached(&source, project.as_deref(), &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
                         Command::Script { path, source, editor_revision, revision, saved_at, mut input, thumbnails } => {
                             if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
@@ -831,6 +841,8 @@ fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<
 }
 
 struct Editor {
+    print_checks: print_checks::State,
+    show_print_checks: bool,
     outliner: outliner::State,
     sweep: Option<performance::Sweep>,
     preview_input: Option<performance::Input>,
@@ -900,10 +912,30 @@ impl Editor {
             .and_then(|selection| picking.selection_part(selection))
             .filter(|index| mask & (1 << index) != 0)
             .map(|index| snapshot.scene.part_bounds[index])
+            .or_else(|| {
+                self.print_checks
+                    .selection(self.print_check_revision())
+                    .filter(|finding| {
+                        snapshot.scene.layout == finding.layout || snapshot.alternate.is_none()
+                    })
+                    .and_then(|finding| {
+                        finding
+                            .parts
+                            .iter()
+                            .filter(|index| mask & (1 << **index) != 0)
+                            .map(|index| snapshot.scene.part_bounds[*index])
+                            .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])])
+                    })
+            })
             .or_else(|| snapshot.scene.visible_bounds(mask));
         if let Some(bounds) = bounds {
             self.camera.frame(bounds, self.viewport_aspect);
-            self.message = if self.selected.is_some() {
+            self.message = if self.selected.is_some()
+                || self
+                    .print_checks
+                    .selection(self.print_check_revision())
+                    .is_some()
+            {
                 "Framed selected part"
             } else {
                 "Framed visible parts"
@@ -955,6 +987,8 @@ impl Editor {
             }
         }
         Ok(Self {
+            print_checks: print_checks::State::default(),
+            show_print_checks: false,
             outliner: outliner::State::default(),
             sweep,
             preview_input: None,
@@ -1108,6 +1142,72 @@ impl Editor {
                 })
     }
 
+    fn print_check_revision(&self) -> Option<u64> {
+        let snapshot = self.snapshot.as_ref()?;
+        let script = self.script.as_ref()?;
+        if !script.source_ready()
+            || snapshot.editor_revision != Some(script.buffer.revision)
+            || snapshot.refinement_pending
+            || self.preview.pending()
+            || self.parameter_state.has_pending(script.buffer.revision)
+        {
+            return None;
+        }
+        Some(snapshot.revision)
+    }
+
+    fn start_print_checks(&mut self) {
+        let Some(revision) = self.print_check_revision().filter(|_| self.can_export()) else {
+            return;
+        };
+        let snapshot = self.snapshot.as_ref().expect("Current model");
+        let ModelSource::Script(source) = &snapshot.source else {
+            return;
+        };
+        match self.worker.try_send(Command::CheckPrint {
+            source: source.clone(),
+            project: snapshot.project.clone(),
+            revision,
+        }) {
+            Ok(()) => {
+                self.work = WorkerState::CheckingPrint;
+                self.print_checks.start(revision);
+                self.message = "Running print checks in the background…".into();
+            }
+            Err(error) => {
+                self.print_checks.start(revision);
+                self.print_checks
+                    .fail(format!("Could not start print checks: {error}"));
+            }
+        }
+    }
+
+    fn focus_print_finding(&mut self, index: usize) {
+        let revision = self.print_check_revision();
+        let Some(finding) = self.print_checks.finding(revision, index) else {
+            return;
+        };
+        let parts = finding.parts;
+        let layout = finding.layout;
+        self.show_code = self.show_code && !self.focus_editor;
+        self.focus_editor = false;
+        self.change_layout(layout);
+        self.print_checks.select(revision, index);
+        let snapshot = self.snapshot.as_ref().expect("Current model");
+        let mut bounds = snapshot.scene.part_bounds[parts[0]];
+        for index in parts {
+            self.outliner.reveal(&snapshot.parts[index].name);
+            bounds = [
+                bounds[0].min(snapshot.scene.part_bounds[index][0]),
+                bounds[1].max(snapshot.scene.part_bounds[index][1]),
+            ];
+        }
+        self.selected = None;
+        self.selected_measurement = None;
+        self.camera.frame(bounds, self.viewport_aspect);
+        self.message = "Print finding selected · dimensions are sampled reference values".into();
+    }
+
     fn export(&mut self, target: export::Target) -> Result<(), String> {
         if !self.can_export() {
             return Err("Run the current source successfully before exporting".into());
@@ -1180,6 +1280,7 @@ impl Editor {
     }
 
     fn open_measurement(&mut self, name: &str) -> Result<(), String> {
+        self.print_checks.clear_selection();
         let snapshot = self.snapshot.as_ref().ok_or("No model preview")?;
         let script = self.script.as_ref().ok_or("No source document")?;
         if snapshot.editor_revision != Some(script.buffer.revision) {
@@ -1259,6 +1360,7 @@ impl Editor {
         if !snapshot.set_layout(layout) {
             return false;
         }
+        self.print_checks.clear_selection();
         if let Some(revision) = snapshot.editor_revision {
             self.code_state
                 .outputs
@@ -1397,6 +1499,13 @@ impl Editor {
                     context.request_repaint();
                 } else {
                     match result {
+                        Ok(Outcome::PrintChecked { revision, result }) => {
+                            self.message = match &result {
+                                Ok(_) => "Print checks ready · Model → Print checks".into(),
+                                Err(error) => format!("Print checks failed: {error}"),
+                            };
+                            self.print_checks.finish(revision, result)
+                        }
                         Ok(Outcome::Model(mut snapshot)) => {
                             self.outliner.sync(&snapshot.parts);
                             if let Some(input) = &mut snapshot.input {
@@ -1440,6 +1549,7 @@ impl Editor {
                         Ok(Outcome::Exported(message)) => self.message = message,
                         Ok(Outcome::Cancelled) => {}
                         Err(error) => {
+                            self.print_checks.fail(error.clone());
                             if self.sweep.is_some() {
                                 eprintln!("Profile: preview_sweep build_error={error}");
                             }
@@ -1454,6 +1564,8 @@ impl Editor {
                 }
             }
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.print_checks
+                    .fail("Geometry worker stopped; restart the application.".into());
                 self.dirty_since = None;
                 if !matches!(self.work, WorkerState::Unavailable) {
                     self.message = format!(
@@ -1751,6 +1863,7 @@ impl eframe::App for Editor {
                             self.code_state.modal.enable(!self.code_state.modal.enabled)
                         }
                         Navigation::Performance => self.show_performance = !self.show_performance,
+                        Navigation::PrintChecks => self.show_print_checks = true,
                         Navigation::Frame => {
                             frame_layout = true;
                         }
@@ -1965,6 +2078,8 @@ impl eframe::App for Editor {
                         }
                     });
                     ui.checkbox(&mut self.show_diagnostics, "Diagnostics");
+                    ui.checkbox(&mut self.show_details, "Build output");
+                    ui.checkbox(&mut self.show_print_checks, "Print checks");
                     ui.checkbox(&mut self.show_dimensions, "Measurements & face names");
                     ui.separator();
                     ui.menu_button("Appearance", |ui| {
@@ -1978,6 +2093,7 @@ impl eframe::App for Editor {
                     }
                 });
                 ui.menu_button("Model", |ui| {
+                    if ui.button("Print checks…").clicked() { self.show_print_checks = true; ui.close(); }
                     ui.add_enabled_ui(self.script.is_some(), |ui| {
                         if ui.add_enabled(self.can_run(), egui::Button::new("Run").shortcut_text("Ctrl+Enter")).clicked() {
                             run_requested = true;
@@ -2094,7 +2210,7 @@ impl eframe::App for Editor {
                     if ui
                         .selectable_label(
                             self.show_details,
-                            egui::RichText::new("Details").size(12.0),
+                            egui::RichText::new("Output").size(12.0),
                         )
                         .clicked()
                     {
@@ -2124,11 +2240,16 @@ impl eframe::App for Editor {
                             );
                             ui.separator();
                         }
-                        let message = self
-                            .code_state
-                            .error
-                            .or(self.code_state.modal.error)
-                            .unwrap_or(&self.message);
+                        let command;
+                        let message = if self.code_state.modal.mode == modal::Mode::Command {
+                            command = format!(":{}", self.code_state.modal.command);
+                            command.as_str()
+                        } else {
+                            self.code_state
+                                .error
+                                .or(self.code_state.modal.error)
+                                .unwrap_or(&self.message)
+                        };
                         ui.allocate_ui_with_layout(
                             ui.available_size(),
                             egui::Layout::left_to_right(egui::Align::Center),
@@ -2136,6 +2257,7 @@ impl eframe::App for Editor {
                                 ui.add(
                                     egui::Label::new(
                                         egui::RichText::new(message)
+                                            .monospace()
                                             .size(12.0)
                                             .color(interface::MUTED),
                                     )
@@ -2147,12 +2269,42 @@ impl eframe::App for Editor {
                     });
                 });
             });
+        if self.show_details {
+            egui::Panel::bottom("build_output")
+                .resizable(true)
+                .default_size(160.0)
+                .min_size(70.0)
+                .max_size((ui.available_height() - 160.0).max(70.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        interface::panel_title(ui, "BUILD OUTPUT");
+                        if ui.button("Copy").clicked() {
+                            ui.ctx().copy_text(self.message.clone());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                self.show_details = false;
+                            }
+                        });
+                    });
+                    egui::ScrollArea::both()
+                        .id_salt("build_output_scroll")
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&self.message).monospace())
+                                    .wrap(),
+                            );
+                        });
+                });
+        }
         if self.show_diagnostics {
             if let (Some(diagnostics), Some(script)) = (&self.diagnostics, &self.script) {
                 egui::Panel::bottom("diagnostics")
+                    .resizable(true)
                     .default_size(132.0)
                     .min_size(70.0)
-                    .max_size(260.0)
+                    .max_size((ui.available_height() - 160.0).max(70.0))
                     .show(ui, |ui| {
                         if let Some(span) = diagnostics.show(ui) {
                             self.code_state.jump_to(span.range(&script.buffer));
@@ -2172,21 +2324,6 @@ impl eframe::App for Editor {
                         ui.label(concat!("Version ", env!("CARGO_PKG_VERSION")));
                         ui.hyperlink_to("Holy Furries Studio", "https://holyfurries.com");
                     });
-                });
-        }
-        if self.show_details {
-            egui::Window::new("Build details")
-                .open(&mut self.show_details)
-                .default_width(600.0)
-                .show(ui.ctx(), |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(320.0)
-                        .show(ui, |ui| {
-                            ui.label(&self.message);
-                        });
-                    if ui.button("Copy details").clicked() {
-                        ui.ctx().copy_text(self.message.clone());
-                    }
                 });
         }
         if self.show_performance {
@@ -2266,6 +2403,21 @@ impl eframe::App for Editor {
                 self.code_state.focus();
             }
         }
+        if self.show_print_checks {
+            let revision = self.print_check_revision();
+            let can_run = revision.is_some() && self.can_export();
+            match self
+                .print_checks
+                .show(ui.ctx(), &mut self.show_print_checks, revision, can_run)
+            {
+                Some(print_checks::Action::Run) => self.start_print_checks(),
+                Some(print_checks::Action::Focus(index)) => self.focus_print_finding(index),
+                None => {}
+            }
+        }
+        if !self.show_print_checks {
+            self.print_checks.clear_selection();
+        }
         if self.show_inspector && !self.focus_editor {
             egui::Panel::right("inspector").default_size(320.0).min_size(280.0).max_size(440.0).frame(egui::Frame::side_top_panel(ui.style()).inner_margin(12.0)).show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
@@ -2333,7 +2485,7 @@ impl eframe::App for Editor {
                 }
                 if let Some(script) = &self.script {
                     let parameters = self.code_state.parameters(&script.buffer, ui.ctx());
-                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), !matches!(self.work, WorkerState::Busy(_) | WorkerState::Export)).or(parameter_edit.take());
+                    parameter_edit = self.parameter_state.show(ui, script.buffer.revision, parameters, save_requested || run_requested || export_requested || file_dialog_requested.is_some(), matches!(self.work, WorkerState::Idle)).or(parameter_edit.take());
                 }
                 if let Some(snapshot) = &self.snapshot {
                     interface::section(ui, if snapshot.scene.layout == placement::Layout::Assembly { "Measurements" } else { "Assembly measurements" });
@@ -2481,9 +2633,6 @@ impl eframe::App for Editor {
                     (ui.available_width() - 320.0).max(240.0)
                 })
                 .show(ui, |ui| {
-                    if self.code_state.modal.mode == modal::Mode::Command {
-                        ui.monospace(format!(":{}", self.code_state.modal.command));
-                    }
                     if script.conflict.is_some() {
                         ui.colored_label(
                             interface::WARNING,
@@ -2659,13 +2808,12 @@ impl eframe::App for Editor {
                 self.selected_measurement = None;
             }
             if let Some(action) = part_action {
+                self.print_checks.clear_selection();
                 match action {
                     outliner::Action::Select(index) | outliner::Action::Frame(index) => {
-                        let faces = &snapshot.scene.display.parts[index].faces;
                         let bounds = snapshot.scene.part_bounds[index];
                         self.selected = Some(inspection::Selection::Part {
                             index: index as u32,
-                            faces: [*faces.start(), *faces.end()],
                             bounds,
                         });
                         self.selected_measurement = None;
@@ -2809,6 +2957,7 @@ impl eframe::App for Editor {
                                 &self.camera,
                             ) {
                                 self.outliner.reveal(&request.name);
+                                self.print_checks.clear_selection();
                                 self.selected = Some(selection);
                                 self.selected_measurement = None;
                                 self.camera = camera;
@@ -2837,6 +2986,7 @@ impl eframe::App for Editor {
                         self.camera.distance,
                     );
                     if response.clicked() {
+                        self.print_checks.clear_selection();
                         if let Some(position) = response.interact_pointer_pos() {
                             let extend = ui.input(|input| input.modifiers.shift);
                             let edge = if self.show_edges && !extend {
@@ -2911,25 +3061,33 @@ impl eframe::App for Editor {
                                 .selected
                                 .as_ref()
                                 .map_or([0; 2], inspection::Selection::ids),
-                            selected_part: match &self.selected {
-                                Some(inspection::Selection::Part { faces, .. }) => *faces,
-                                _ => [0; 2],
-                            },
+                            selected_parts: self.print_checks.selection(self.print_check_revision())
+                                .filter(|finding| snapshot.scene.layout == finding.layout || snapshot.alternate.is_none())
+                                .map_or_else(|| match &self.selected { Some(inspection::Selection::Part { index, .. }) => 1 << index, _ => 0 }, |finding| (1 << finding.parts[0]) | (1 << finding.parts[1])),
                             selected_edge: match &self.selected {
                                 Some(inspection::Selection::Edge(edge)) => Some(edge.segments),
                                 _ => None,
                             },
                         },
                     ));
-                    if let Some(bounds) = snapshot.scene.visible_bounds(visible_parts)
-                        .filter(|_| self.show_dimensions || self.selected.is_some()) {
+                    let print_finding = self.print_checks.selection(self.print_check_revision())
+                        .filter(|finding| snapshot.scene.layout == finding.layout || snapshot.alternate.is_none())
+                        .filter(|finding| finding.parts.iter().all(|index| visible_parts & (1 << index) != 0));
+                    let check_selection = print_finding.map(|finding| {
+                        let index = finding.parts[0];
+                        inspection::Selection::Part { index: index as u32, bounds: snapshot.scene.part_bounds[index] }
+                    });
+                    if let Some(sample) = print_finding.and_then(|finding| finding.sample) {
+                        dimensions::draw_sample(ui, rect, matrix, sample.points, sample.distance_mm, if print_finding.expect("Selected finding").layout == placement::Layout::Print { "Sampled wall" } else { "Sampled gap" });
+                    } else if let Some(bounds) = snapshot.scene.visible_bounds(visible_parts)
+                        .filter(|_| self.show_dimensions || self.selected.is_some() || check_selection.is_some()) {
                         if let Some(name) = dimensions::draw(
                             ui,
                             rect,
                             matrix,
                             bounds,
                             &snapshot.scene.annotations,
-                            self.selected.as_ref(),
+                            check_selection.as_ref().or(self.selected.as_ref()),
                             |id| picking.face_visible(id),
                         ) {
                             measurement_requested = Some(name);
@@ -3462,14 +3620,13 @@ fn focus_part(
         .parts
         .iter()
         .position(|part| part.name == request.name)?;
-    let faces = &snapshot.scene.display.parts.get(index)?.faces;
+    snapshot.scene.display.parts.get(index)?;
     let bounds = *snapshot.scene.part_bounds.get(index)?;
     let mut camera = *previous;
     camera.frame(bounds, aspect);
     Some((
         inspection::Selection::Part {
             index: index as u32,
-            faces: [*faces.start(), *faces.end()],
             bounds,
         },
         camera,
@@ -3578,7 +3735,6 @@ mod tests {
         let before = build_script_snapshot(source, 1)?;
         let selection = inspection::Selection::Part {
             index: 0,
-            faces: [1, 6],
             bounds: before.scene.part_bounds[0],
         };
         let mut after = build_script_snapshot(source, 2)?;
@@ -3838,7 +3994,6 @@ mod tests {
         assert_eq!(moved_edge.segments, edge.segments);
         let part = inspection::Selection::Part {
             index: 0,
-            faces: [1, first.scene.world_mesh().face_count],
             bounds: first.scene.bounds,
         };
         let inspection::Selection::Part { bounds, .. } =
@@ -4224,23 +4379,10 @@ mod tests {
         for aspect in [0.25, 0.5, 1.0, 2.0] {
             let (selection, camera) = focus_part(&snapshot, &request, 41, aspect, &previous)
                 .ok_or("Missing part focus")?;
-            let inspection::Selection::Part {
-                index,
-                faces,
-                bounds,
-            } = selection
-            else {
+            let inspection::Selection::Part { index, bounds } = selection else {
                 panic!("Expected part selection")
             };
             assert_eq!(index, 1);
-            assert_eq!(
-                faces,
-                [
-                    *snapshot.scene.display.parts[1].faces.start(),
-                    *snapshot.scene.display.parts[1].faces.end()
-                ]
-            );
-            assert!(faces[0] > *snapshot.scene.display.parts[0].faces.end());
             assert_eq!(camera.target, glam::vec3(210.0, -40.0, 45.0));
             assert_eq!([camera.yaw, camera.pitch], [previous.yaw, previous.pitch]);
             assert_eq!(selection.ids(), [0; 2]);
@@ -4263,7 +4405,8 @@ mod tests {
                     }
                 }
             }
-            let face = snapshot.scene.faces[&faces[0]];
+            let face =
+                snapshot.scene.faces[snapshot.scene.display.parts[index as usize].faces.start()];
             assert_eq!(
                 inspection::Selection::select(Some(&selection), face, true)?.ids(),
                 [face.id, 0]
@@ -4970,12 +5113,80 @@ mod tests {
                         assert_eq!(snapshot.revision, 4);
                         assert_eq!(snapshot.name, "bracket");
                     }
-                    Outcome::Exported(_) | Outcome::Cancelled => {
+                    Outcome::Exported(_) | Outcome::Cancelled | Outcome::PrintChecked { .. } => {
                         return Err("Expected script model".into());
                     }
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn print_checks_run_in_the_geometry_worker_and_preserve_preview_reuse() -> Result<(), String> {
+        let worker = Worker::new(egui::Context::default())?;
+        let source = "cad.show('thin',cad.box({width=12,depth=12,height=0.5}))";
+        worker
+            .try_send(Command::Script {
+                path: None,
+                source: source.into(),
+                editor_revision: 10,
+                revision: 1,
+                saved_at: None,
+                input: None,
+                thumbnails: model::ThumbnailMode::Complete,
+            })
+            .map_err(|error| error.to_string())?;
+        let Outcome::Model(first) = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??
+        else {
+            return Err("Expected first preview".into());
+        };
+        worker
+            .try_send(Command::CheckPrint {
+                source: source.into(),
+                project: None,
+                revision: 1,
+            })
+            .map_err(|error| error.to_string())?;
+        let Outcome::PrintChecked { revision, result } = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??
+        else {
+            return Err("Expected print report".into());
+        };
+        let report = result?;
+        assert_eq!(revision, 1);
+        assert!(!report.blocked());
+        assert!(
+            report
+                .findings()
+                .iter()
+                .any(|finding| finding.severity == print_preparation::Severity::Warning)
+        );
+        worker
+            .try_send(Command::Script {
+                path: None,
+                source: source.into(),
+                editor_revision: 11,
+                revision: 2,
+                saved_at: None,
+                input: None,
+                thumbnails: model::ThumbnailMode::Complete,
+            })
+            .map_err(|error| error.to_string())?;
+        let Outcome::Model(second) = worker
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|error| error.to_string())??
+        else {
+            return Err("Expected second preview".into());
+        };
+        assert_eq!(second.cached_parts, 1);
+        assert!(Arc::ptr_eq(
+            &first.scene.display.parts[0].geometry,
+            &second.scene.display.parts[0].geometry
+        ));
         Ok(())
     }
 
@@ -5059,7 +5270,7 @@ mod tests {
                 assert_eq!(snapshot.revision, 2);
                 assert!(snapshot.volume_mm3 > 0.0);
             }
-            Outcome::Exported(_) | Outcome::Cancelled => {
+            Outcome::Exported(_) | Outcome::Cancelled | Outcome::PrintChecked { .. } => {
                 return Err("Expected rebuilt geometry".into());
             }
         }

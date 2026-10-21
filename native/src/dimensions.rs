@@ -496,6 +496,73 @@ pub fn selector(mesh: &Mesh, id: u32) -> Option<String> {
     ))
 }
 
+pub fn draw_sample(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    matrix: Mat4,
+    points: [Vec3; 2],
+    distance_mm: f32,
+    label: &str,
+) {
+    let project = |point: Vec3| {
+        let point = matrix * point.extend(1.0);
+        if point.w <= 0.1 || !(0.0..=point.w).contains(&point.z) {
+            return None;
+        }
+        Some(
+            rect.center()
+                + egui::vec2(
+                    point.x / point.w * rect.width() * 0.5,
+                    -point.y / point.w * rect.height() * 0.5,
+                ),
+        )
+    };
+    let [Some(first), Some(second)] = points.map(project) else {
+        return;
+    };
+    let anchor = first.lerp(second, 0.5);
+    if !rect.contains(anchor) {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    let color = crate::interface::WARNING;
+    let galley = painter.layout_no_wrap(
+        format!("{label} ≈{distance_mm:.3} mm"),
+        egui::FontId::monospace(15.0),
+        egui::Color32::WHITE,
+    );
+    let size = galley.size() + egui::vec2(16.0, 10.0);
+    let available = rect.shrink(8.0);
+    let position = egui::pos2(
+        (anchor.x + 18.0).clamp(
+            available.left(),
+            (available.right() - size.x).max(available.left()),
+        ),
+        (anchor.y - 36.0).clamp(
+            available.top(),
+            (available.bottom() - size.y).max(available.top()),
+        ),
+    );
+    let background = egui::Rect::from_min_size(position, size);
+    painter.line_segment([first, second], egui::Stroke::new(2.0, color));
+    for point in [first, second] {
+        painter.circle_filled(point, 3.5, color);
+    }
+    painter.line_segment([anchor, background.center()], egui::Stroke::new(1.0, color));
+    painter.rect_filled(background.expand(2.0), 4.0, crate::interface::PANEL);
+    painter.rect_stroke(
+        background,
+        3.0,
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        position + egui::vec2(8.0, 5.0),
+        galley,
+        egui::Color32::WHITE,
+    );
+}
+
 pub fn draw(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -1052,6 +1119,47 @@ mod tests {
             .collect();
         output.drop_without_applying_deltas();
         labels
+    }
+
+    #[test]
+    fn sampled_gap_callouts_remain_readable_at_zero_and_subpixel_distances() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0));
+        for distance in [0.0, 0.001, 0.1] {
+            let camera = crate::viewport::Camera::rack([100.0; 3]);
+            let points = [camera.target, camera.target + Vec3::X * distance];
+            let output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    draw_sample(
+                        ui,
+                        rect,
+                        camera.matrix(1.0),
+                        points,
+                        distance,
+                        "Sampled gap",
+                    )
+                },
+            );
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 1);
+            assert_eq!(
+                labels[0].galley.job.text,
+                format!("Sampled gap ≈{distance:.3} mm")
+            );
+            assert!(rect.contains(labels[0].pos));
+            assert_eq!(labels[0].angle, 0.0);
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]
