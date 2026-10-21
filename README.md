@@ -73,6 +73,7 @@ the Nix package currently targets Linux.
 
 - [Editor and controls](docs/native-editor.md)
 - [Modeling and exports](docs/modeling.md) · [Measurements and named faces](docs/measurements.md)
+- [Sweeps, lofts and shells](docs/shape-operations.md)
 - [Spice rack design and printing](docs/spice-rack.md)
 - [Print checks and fit calibration](docs/printing.md)
 - [Performance and profiling](docs/performance.md)

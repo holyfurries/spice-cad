@@ -1729,6 +1729,9 @@ impl eframe::App for Editor {
                         Navigation::RevolvedBushing => {
                             example_requested = Some(document::Example::RevolvedBushing)
                         }
+                        Navigation::ShapeOperations => {
+                            example_requested = Some(document::Example::ShapeOperations)
+                        }
                         Navigation::FitGauge => {
                             example_requested = Some(document::Example::FitGauge)
                         }
@@ -1840,6 +1843,7 @@ impl eframe::App for Editor {
                             ("Revolved bushing", document::Example::RevolvedBushing),
                             ("Rocket engine assembly", document::Example::RocketEngine),
                             ("Fit gauge", document::Example::FitGauge),
+                            ("Sweep, loft and shell", document::Example::ShapeOperations),
                         ] {
                             if ui.button(label).clicked() {
                                 example_requested = Some(example);

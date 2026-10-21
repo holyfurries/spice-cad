@@ -1,6 +1,7 @@
 # Sweep, loft, and shell
 
-Open `models/shape-operations.luau` for three printable examples. These operators
+Choose **File → Examples → Sweep, loft and shell**, or open
+`models/shape-operations.luau`, for printable examples. These operators
 create native SMLib boundary representations and support the existing booleans,
 edge treatments, measurements, previews, and STEP/STL/GLB export.
 
