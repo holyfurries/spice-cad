@@ -3,7 +3,7 @@ Copyright (c) 2026 Holy Furries Studio
 
 Project code, example models, and documentation text are MIT licensed; see
 LICENSE. Artwork and branding use the separate terms in ASSETS.md and
-native/assets/LICENSE. Dependencies retain their own copyright and licenses.
+crates/spice-cad/assets/LICENSE. Dependencies retain their own copyright and licenses.
 
 Rust dependencies
 -----------------
@@ -53,7 +53,7 @@ https://github.com/Open-Cascade-SAS/OCCT/tree/V7_8_1
 See licenses/upstream/opencascade.txt, licenses/upstream/opencascade-sys.txt,
 licenses/OCCT-LGPL-2.1.txt, and licenses/OCCT-LGPL-EXCEPTION.txt.
 The complete application source and pinned rebuild inputs are provided by
-this repository, Cargo.lock, and flake.lock; see docs/kernels.md for replacing
+this repository, Cargo.lock, and flake.lock; see docs/development.md for replacing
 and rebuilding the reference libraries.
 
 Packaging

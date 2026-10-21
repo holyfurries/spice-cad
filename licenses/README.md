@@ -15,7 +15,7 @@ From the repository root:
 
 ```sh
 nix develop
-cargo-about generate --manifest-path native/Cargo.toml --all-features --locked --offline --fail --config about.toml licenses/about.hbs --output-file licenses/RUST-DEPENDENCIES.txt
+cargo-about generate --manifest-path crates/spice-cad/Cargo.toml --all-features --locked --offline --fail --config about.toml licenses/about.hbs --output-file licenses/RUST-DEPENDENCIES.txt
 ```
 
 Review license changes whenever `Cargo.lock`, bundled fonts, or native inputs
@@ -70,7 +70,7 @@ identifies its published license declaration and author attribution.
   `epaint_default_fonts 0.37.0/fonts/`, including the Hack/Bitstream, Noto, Ubuntu,
   and emoji/icon notices. These fonts retain their original licenses.
 - OpenCascade 7.8.1's LGPL text and exception apply to the separate test-only
-  verification package. Its source is pinned in the verification Nix shell; [rebuild instructions](../docs/kernels.md)
+  verification package. Its source is pinned in the verification Nix shell; [rebuild instructions](../docs/development.md#independent-geometry-verification)
   explain how to modify the reference libraries. The default application does
   not link OpenCascade.
 

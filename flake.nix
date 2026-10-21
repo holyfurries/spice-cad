@@ -33,7 +33,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          version = (builtins.fromTOML (builtins.readFile ./native/Cargo.toml)).package.version;
+          version = (builtins.fromTOML (builtins.readFile ./crates/spice-cad/Cargo.toml)).package.version;
         in
         {
           default = self.packages.${system}.spice-cad;
@@ -60,9 +60,9 @@
                   "ASSETS.md"
                   "about.toml"
                   "licenses"
-                  "native"
-                  "verification"
-                  "models"
+                  "crates"
+                  "tools"
+                  "examples"
                 ];
             };
             cargoLock.lockFile = ./Cargo.lock;
@@ -109,13 +109,13 @@
                 Terminal=false
                 Categories=Graphics;3DGraphics;Engineering;
               ''} $out/share/applications/spice-cad.desktop
-              install -Dm644 native/assets/spice-cad.svg \
+              install -Dm644 crates/spice-cad/assets/spice-cad.svg \
                 $out/share/icons/hicolor/scalable/apps/spice-cad.svg
               install -Dm644 LICENSE $out/share/doc/spice-cad/LICENSE
               install -m644 NOTICE ASSETS.md $out/share/doc/spice-cad/
               cp -r licenses $out/share/doc/spice-cad/licenses
-              install -Dm644 native/assets/LICENSE \
-                $out/share/doc/spice-cad/native/assets/LICENSE
+              install -Dm644 crates/spice-cad/assets/LICENSE \
+                $out/share/doc/spice-cad/crates/spice-cad/assets/LICENSE
             '';
             meta = {
               description = "Native code-first CAD editor with typed Luau and SMLib";

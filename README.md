@@ -48,13 +48,13 @@ press **F** over the viewport to frame the model.
 | Four-part spice rack                                                                           | Multipart rocket engine                                                                    |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | ![Exploded spice rack with four colored parts and dovetail joints](docs/images/spice-rack.png) | ![Rocket engine with a chamber, nozzle, and mounting plate](docs/images/rocket-engine.png) |
-| [Rack source](models/rack-parts.luau)                                                          | [Engine source](models/rocket-engine.luau)                                                 |
+| [Rack source](examples/rack-parts.luau)                                                          | [Engine source](examples/rocket-engine.luau)                                                 |
 
 Use **File → Export**:
 
 - **3D print · STEP + STL** writes separate parts in their print placements.
   Import STLs into your slicer as millimetres. The rack example splits into four
-  parts for the Bambu Lab P1S; [printing and assembly notes](docs/spice-rack.md#print-and-assemble-on-the-p1s)
+  parts for the Bambu Lab P1S; [printing and assembly notes](docs/printing.md#spice-rack-for-the-p1s)
   cover joint fit samples and orientation.
 - **Game asset · GLB** writes the assembly with named parts and colors.
 
@@ -69,21 +69,23 @@ cargo test --locked
 The native app is the default Cargo target. This is an actively developed tool;
 the Nix package currently targets Linux.
 Independent OpenCascade checks live in test-only tooling; see
-[kernel verification](docs/kernels.md#independent-verification).
+[kernel verification](docs/development.md#independent-geometry-verification).
+
+The workspace contains the application in `crates/spice-cad/`, independent test
+tooling in `tools/verification/`, and Luau models in `examples/`. See
+[development](docs/development.md) for build commands and architecture.
 
 ## Guides
 
-- [Editor and controls](docs/native-editor.md)
-- [Modeling and exports](docs/modeling.md) · [Measurements and named faces](docs/measurements.md)
-- [Sweeps, lofts and shells](docs/shape-operations.md)
-- [Reusable typed Luau modules](docs/luau-projects.md)
-- [Spice rack design and printing](docs/spice-rack.md)
-- [Print checks and fit calibration](docs/printing.md)
-- [Performance and profiling](docs/performance.md)
-- [Browser prototype](docs/browser-prototype.md) · [Kernel evaluation](docs/kernels.md)
+- [Editor and controls](docs/editor.md)
+- [Modeling, measurements, and modules](docs/modeling.md)
+- [Printing, fit calibration, and the spice rack](docs/printing.md)
+- [Development and verification](docs/development.md)
+- [Linux downloads and releases](docs/releases.md)
 
-The [typed CAD API](native/types/cad.luau) and [example models](models/) are the
-reference for writing scripts. Detailed implementation notes live in [evaluation/](evaluation/).
+The [typed CAD API](crates/spice-cad/types/cad.luau) and [example models](examples/) are the
+reference for writing scripts. Profiling commands and measured evidence live in
+[benchmarks/](benchmarks/README.md).
 
 ## License
 

@@ -32,7 +32,7 @@ jobs:
         run: |
           if [ "$FORCE_CHECKS" = true ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             echo "native=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BASE_SHA" HEAD -- Cargo.toml Cargo.lock flake.nix flake.lock native models verification .github; then
+          elif git diff --quiet "$BASE_SHA" HEAD -- Cargo.toml Cargo.lock flake.nix flake.lock crates tools examples .github; then
             echo "native=false" >> "$GITHUB_OUTPUT"
           else
             echo "native=true" >> "$GITHUB_OUTPUT"
@@ -202,13 +202,13 @@ jobs:
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             --user 0:0 --env HOME=/tmp --env APPIMAGE_EXTRACT_AND_RUN=1 \
             --mount "type=bind,source=$PWD/dist,target=/download,readonly" \
-            --mount "type=bind,source=$PWD/models,target=/models,readonly" \
+            --mount "type=bind,source=$PWD/examples,target=/examples,readonly" \
             ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
             /bin/bash -euc '
               test ! -e /nix/store
-              /download/spice-cad-x86_64-linux.AppImage --check-model /models/mounting-bracket.luau
-              /download/spice-cad-x86_64-linux.AppImage --export-model /models/mounting-bracket.luau /tmp/print
-              /download/spice-cad-x86_64-linux.AppImage --export-game /models/mounting-bracket.luau /tmp/game
+              /download/spice-cad-x86_64-linux.AppImage --check-model /examples/mounting-bracket.luau
+              /download/spice-cad-x86_64-linux.AppImage --export-model /examples/mounting-bracket.luau /tmp/print
+              /download/spice-cad-x86_64-linux.AppImage --export-game /examples/mounting-bracket.luau /tmp/game
               test -s /tmp/print/model.step
               test -s /tmp/print/model.stl
               test -s /tmp/game/model.glb
@@ -217,8 +217,8 @@ jobs:
         run: |
           cp LICENSE NOTICE ASSETS.md dist/
           cp -r licenses dist/
-          mkdir -p dist/native/assets
-          cp native/assets/LICENSE dist/native/assets/
+          mkdir -p dist/crates/spice-cad/assets
+          cp crates/spice-cad/assets/LICENSE dist/crates/spice-cad/assets/
           cp docs/releases.md dist/INSTALL.md
           git archive --format=tar.gz --prefix=spice-cad-source/ HEAD > dist/spice-cad-source.tar.gz
           cd dist

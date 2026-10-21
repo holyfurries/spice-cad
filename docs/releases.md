@@ -37,7 +37,7 @@ nix develop -c cargo test --locked
 nix develop -c cargo build --locked
 nix develop .#verification -c cargo test --locked -p spice-cad-verification
 nix build .#spice-cad-appimage
-./result --appimage-extract-and-run --check-model models/mounting-bracket.luau
+./result --appimage-extract-and-run --check-model examples/mounting-bracket.luau
 ```
 
 CI runs formatting in a lightweight shell without building the CAD kernel.
@@ -51,7 +51,7 @@ These jobs use SMLib without OpenCascade. On version tags, packaging runs in
 parallel with native lint and tests. A separate verification job downloads that
 exact AppImage artifact, checks its SHA-256 checksum, and extracts it once in a
 network-isolated container with no host Nix store. The full independent suite
-invokes the packaged app through `verification/src/bin/packaged-app.rs` and
+invokes the packaged app through `tools/verification/src/bin/packaged-app.rs` and
 reopens its STEP exports with OpenCascade outside the container. Checks include
 B-rep validity, surface volumes, cross-sections, closed meshes, dimensions, part
 counts, print placements, and independent rack fixtures. Native checks, packaging,
@@ -80,7 +80,7 @@ read-only access to the app and models.
 
 Push a version tag, such as `v0.1.0`, on a reviewed commit. The same checks run
 before a **draft** GitHub release is created. Draft creation does not change
-repository visibility or publish a release. Update `native/Cargo.toml` when
+repository visibility or publish a release. Update `crates/spice-cad/Cargo.toml` when
 changing the application version; the AppImage name follows that version.
 
 Before publishing the draft, test its actual download on a separate Linux

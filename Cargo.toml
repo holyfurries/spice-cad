@@ -1,6 +1,6 @@
 [workspace]
-members = ["native", "verification"]
-default-members = ["native"]
+members = ["crates/spice-cad", "tools/verification"]
+default-members = ["crates/spice-cad"]
 resolver = "3"
 
 [profile.release]
