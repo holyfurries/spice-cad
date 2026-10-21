@@ -5,8 +5,8 @@
 ## Open and save
 
 `cargo run --release --locked` launches the native application from `nix develop`.
-Installed builds run without the checkout. The first launch opens the four-part
-spice rack; **File → Examples** opens other bundled models while preserving
+Installed builds run without the checkout. The first launch opens a rounded
+cube; **File → Examples** opens other bundled models while preserving
 existing personal copies.
 
 | Action | Shortcut |

@@ -448,7 +448,7 @@ fn luau_rack_matches_independently_constructed_reference_geometry() -> TestResul
     .into_iter()
     .enumerate()
     {
-        let source = include_str!("../../../examples/rack.luau")
+        let source = include_str!("../fixtures/rack-blank.luau")
             .replace(
                 "cad.number(310,",
                 &format!("cad.number({},", parameters.rack_width_mm),

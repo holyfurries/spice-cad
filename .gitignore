@@ -29,6 +29,7 @@
 !/tools/**/Cargo.toml
 !/tools/**/build.rs
 !/tools/**/src/**/*.rs
+!/tools/verification/fixtures/*.luau
 !/examples/**/*.luau
 !/benchmarks/*.md
 !/benchmarks/results/*.json

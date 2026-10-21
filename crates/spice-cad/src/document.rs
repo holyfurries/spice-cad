@@ -140,6 +140,7 @@ impl Drop for Watcher {
 
 #[derive(Clone, Copy)]
 pub enum Example {
+    Cube,
     CurvedLoft,
     SmoothSweep,
     MiteredPipe,
@@ -154,7 +155,6 @@ pub enum Example {
     ExtrudedBracket,
     RoundedEnclosure,
     MeasuredBlock,
-    Rack,
     MountingBracket,
 }
 
@@ -165,6 +165,7 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             .join(".local/share"),
     };
     let (name, source) = match example {
+        Example::Cube => ("cube.luau", include_str!("../../../examples/cube.luau")),
         Example::CurvedLoft => (
             "curved-loft.luau",
             include_str!("../../../examples/curved-loft.luau"),
@@ -237,7 +238,6 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             "measured-block.luau",
             include_str!("../../../examples/measured-block.luau"),
         ),
-        Example::Rack => ("rack.luau", include_str!("../../../examples/rack.luau")),
         Example::MountingBracket => (
             "mounting-bracket.luau",
             include_str!("../../../examples/mounting-bracket.luau"),
@@ -573,7 +573,7 @@ mod tests {
     fn installed_example_is_embedded_and_never_overwrites_user_edits() -> Result<(), String> {
         let folder = std::env::temp_dir().join(format!("spice-cad-example-{}", std::process::id()));
         let path = folder.join("models/example.luau");
-        let source = include_str!("../../../examples/rack.luau");
+        let source = include_str!("../../../examples/cube.luau");
         assert_eq!(create_example_model(path.clone(), source)?, path);
         assert_eq!(model::read_source(&path)?, source);
         std::fs::write(&path, "user edits").map_err(|error| error.to_string())?;

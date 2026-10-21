@@ -14,7 +14,7 @@ On Linux, with [Nix](https://nixos.org/download/) and flakes enabled, run from t
 nix run .#spice-cad
 ```
 
-The first launch builds the app. It opens a four-part spice rack; choose another
+The first launch builds the app. It opens a rounded cube; choose another
 model under **File → Examples**, or use **File → Open** for your own `.luau` file.
 To install it: `nix profile install .#spice-cad`.
 

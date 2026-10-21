@@ -77,9 +77,8 @@ replace a small sample of the actual joint.
 
 ## Spice rack for the P1S
 
-The startup model is [the four-part rack](../examples/rack-parts.luau).
-[The unsplit rack](../examples/rack.luau) remains a construction example and
-exceeds the P1S bed. Choose **File → Examples → Spice rack · four parts** to open
+The printable example is [the four-part rack](../examples/rack-parts.luau).
+Choose **File → Examples → Spice rack · four parts** to open
 a personal copy. The default design holds 25 jars of the largest measured size.
 
 | Source parameter | Default, mm unless stated | Meaning |

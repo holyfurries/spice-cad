@@ -82,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(completed, kind)| performance::Sweep::new(started, Arc::clone(completed), kind));
     let model_path = match arguments.as_slice() {
         [_] if benchmarking => None,
-        [] => Some(document::example_model(document::Example::RackParts)?),
+        [] => Some(document::example_model(document::Example::Cube)?),
         [flag, path] if flag == "--model" => Some(std::path::PathBuf::from(path)),
         [flag, path] if flag == "--check-print" => {
             let source = model::read_source(std::path::Path::new(path))?;
@@ -1946,7 +1946,7 @@ impl eframe::App for Editor {
                             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
                             self.camera.pitch = 1.55;
                         }
-                        Navigation::Rack => example_requested = Some(document::Example::Rack),
+                        Navigation::Cube => example_requested = Some(document::Example::Cube),
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
                         }
@@ -2080,7 +2080,7 @@ impl eframe::App for Editor {
                     ui.separator();
                     ui.menu_button("Examples", |ui| {
                         for (label, example) in [
-                            ("Spice rack", document::Example::Rack),
+                            ("Rounded cube", document::Example::Cube),
                             ("Spice rack · four parts", document::Example::RackParts),
                             ("Mounting bracket", document::Example::MountingBracket),
                             ("Measured block", document::Example::MeasuredBlock),
@@ -4429,11 +4429,47 @@ mod tests {
     }
 
     #[test]
+    fn startup_cube_has_rounded_edges_and_valid_geometry() -> Result<(), String> {
+        let source = include_str!("../../../examples/cube.luau");
+        for (source, size, rounded) in [
+            (source.to_string(), 40.0, true),
+            (
+                source.replace("cad.number(2,", "cad.number(0,"),
+                40.0,
+                false,
+            ),
+            (
+                source.replace("cad.number(40,", "cad.number(20,"),
+                20.0,
+                true,
+            ),
+        ] {
+            let snapshot = build_script_snapshot(&source, 1)?;
+            assert_eq!(snapshot.name, "Cube");
+            assert_eq!(snapshot.scene.part_bounds.len(), 1);
+            let dimensions = snapshot.scene.bounds[1] - snapshot.scene.bounds[0];
+            assert!((dimensions - glam::Vec3::splat(size)).abs().max_element() < 0.01);
+            snapshot.scene.world_mesh().validate()?;
+            let box_volume = f64::from(size).powi(3);
+            if rounded {
+                assert!(snapshot.volume_mm3 < box_volume);
+                assert!(snapshot.volume_mm3 > box_volume * 0.95);
+            } else {
+                assert!((snapshot.volume_mm3 - box_volume).abs() < 0.01);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn luau_models_preserve_native_geometry_and_allow_reused_operands() -> Result<(), String> {
         let bracket = build_script_snapshot(include_str!("../../../examples/bracket.luau"), 1)?;
         assert_eq!(bracket.name, "bracket");
         assert!((bracket.volume_mm3 - 64080.0).abs() < 0.01);
-        let rack = build_script_snapshot(include_str!("../../../examples/rack.luau"), 2)?;
+        let rack = build_script_snapshot(
+            include_str!("../../../tools/verification/fixtures/rack-blank.luau"),
+            2,
+        )?;
         assert!((rack.volume_mm3 - 972678.0).abs() < 0.01);
         let model = model::compile(
             "local a = cad.box({width=10, depth=10, height=10})\nlocal b = cad.box({width=5, depth=5, height=12, z=-1})\ncad.show('reused', cad.union(cad.subtract(a, b), b))",

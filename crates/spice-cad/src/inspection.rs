@@ -636,8 +636,10 @@ mod tests {
 
     #[test]
     fn rack_lips_have_local_eight_mm_spans_and_tread_separation() -> Result<(), String> {
-        let snapshot =
-            crate::build_script_snapshot(include_str!("../../../examples/rack.luau"), 1)?;
+        let snapshot = crate::build_script_snapshot(
+            include_str!("../../../tools/verification/fixtures/rack-blank.luau"),
+            1,
+        )?;
         let lip = snapshot
             .scene
             .faces
