@@ -4,7 +4,7 @@ Native CAD driven by typed Luau scripts, by [Holy Furries Studio](https://holyfu
 Write shapes in code, adjust parameters in the UI, and export parts for 3D printing
 or simple game assets. Built with Rust, SMLib, and egui/wgpu.
 
-![Spice CAD showing the mounting bracket's source, live model, and editable properties](docs/images/workspace.png)
+![Spice CAD showing the rounded cube's source, live model, and size and corner-radius sliders](docs/images/workspace.png)
 
 ## Start
 
