@@ -8,7 +8,7 @@ native/assets/LICENSE. Dependencies retain their own copyright and licenses.
 Rust dependencies
 -----------------
 licenses/RUST-DEPENDENCIES.txt lists the Linux dependency graph and license
-texts for Cargo.lock, including optional rack-tools components. Supplemental
+texts for the native application's dependency graph in Cargo.lock. Supplemental
 upstream notices are mapped in licenses/README.md. A listed optional component
 is not necessarily linked into the default application.
 
@@ -42,12 +42,12 @@ The egui 0.37.0 default fonts have their own licenses and notices, reproduced
 in licenses/fonts/. Tree-sitter's bundled Unicode data notice is reproduced
 in licenses/tree-sitter/unicode-LICENSE.txt.
 
-Optional OpenCascade reference tools
------------------------------------
-The normal Spice CAD application uses SMLib. The spice-rack reference CLI
-and the rack-tools feature additionally use opencascade-rs 0.3.0 under
+Test-only OpenCascade verification
+---------------------------------
+The application and default tests use SMLib. The separate
+spice-cad-verification test package uses opencascade-rs 0.3.0 under
 LGPL-2.1 and Open CASCADE Technology 7.8.1 under LGPL-2.1 with its exception.
-This software makes use of facilities provided by Open CASCADE Technology.
+This verification software makes use of facilities provided by Open CASCADE Technology.
 https://github.com/bschwind/opencascade-rs
 https://github.com/Open-Cascade-SAS/OCCT/tree/V7_8_1
 See licenses/upstream/opencascade.txt, licenses/upstream/opencascade-sys.txt,

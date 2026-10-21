@@ -32,19 +32,26 @@ driver, and terminal error with startup failures.
 
 ```sh
 nix develop .#format -c cargo fmt --all -- --check
-nix develop -c cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
-nix develop -c cargo test --locked --workspace --all-features
+nix develop -c cargo clippy --locked --all-targets -- -D warnings
+nix develop -c cargo test --locked
+nix develop -c cargo build --locked
+nix develop .#verification -c cargo test --locked -p spice-cad-verification
 nix build .#spice-cad-appimage
 ./result --appimage-extract-and-run --check-model models/mounting-bracket.luau
 ```
 
 CI runs formatting in a lightweight shell without building the CAD kernel.
-Pull requests and pushes to `main` run lint and all tests when native code,
+Pull requests and pushes to `main` run native lint and tests when native code,
 models, dependencies, or CI configuration change; documentation-only changes
 skip native builds. Nix tools/kernel and Cargo dependencies have separate caches.
 CI disables debug symbols and incremental compilation and uses lld for test
 linking; production release optimization is unchanged. Native tools are cached
 before Rust compilation so a later failure does not discard that build.
+These jobs use SMLib without OpenCascade. A separate verification job runs on
+version tags: it builds the actual app, reopens its STEP exports with OpenCascade,
+and checks volumes, bounds, closed meshes, print placements, and independent rack
+fixtures. Verification must pass before packaging. Its Nix cache is separate;
+the Cargo dependency cache is shared with native checks.
 
 AppImages are built only when a `v*` version tag is pushed.
 These runs upload a download artifact with SHA-256 checksums
@@ -61,8 +68,8 @@ read-only access to the app and models.
 
 Push a version tag, such as `v0.1.0`, on a reviewed commit. The same checks run
 before a **draft** GitHub release is created. Draft creation does not change
-repository visibility or publish a release. Update the Cargo package versions
-when changing versions; the AppImage name follows the native package version.
+repository visibility or publish a release. Update `native/Cargo.toml` when
+changing the application version; the AppImage name follows that version.
 
 Before publishing the draft, test its actual download on a separate Linux
 desktop: launch it, open a model, edit a parameter, save/reopen, export STEP/STL

@@ -3,12 +3,11 @@
     reason = "Repository guidelines require explicit nested control flow"
 )]
 use eframe::{egui, egui_wgpu};
-use spice_rack::{PARAMETERS, RackParameters};
-#[cfg(any(test, feature = "rack-tools"))]
-use spice_rack::{build_rack, printing};
+#[cfg(test)]
+use std::time::Duration;
 use std::{
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::Instant,
 };
 #[cfg(test)]
 mod allocations;
@@ -81,15 +80,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .zip(sweep_kind)
         .map(|(completed, kind)| performance::Sweep::new(started, Arc::clone(completed), kind));
-    #[cfg(feature = "rack-tools")]
-    if arguments.as_slice() == ["--benchmark"] {
-        return benchmark().map_err(Into::into);
-    }
     let model_path = match arguments.as_slice() {
         [_] if benchmarking => None,
         [] => Some(document::example_model(document::Example::RackParts)?),
-        #[cfg(feature = "rack-tools")]
-        [flag] if flag == "--rack" => None,
         [flag, path] if flag == "--model" => Some(std::path::PathBuf::from(path)),
         [flag, path] if flag == "--check-print" => {
             let source = model::read_source(std::path::Path::new(path))?;
@@ -158,11 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                (if cfg!(feature = "rack-tools") {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--rack | --benchmark | --model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
-                } else {
-                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
-                })
+                                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                     .into(),
             );
         }
@@ -225,12 +214,6 @@ enum Command {
         revision: u64,
         saved_at: Option<std::time::SystemTime>,
     },
-    Build {
-        parameters: RackParameters,
-        revision: u64,
-    },
-    #[cfg(feature = "rack-tools")]
-    Export { parameters: RackParameters },
 }
 enum Outcome {
     PrintChecked {
@@ -249,19 +232,14 @@ enum WorkerState {
     Unavailable,
 }
 #[derive(Clone, Copy)]
-enum ModelRevision {
-    Script(u64),
-    Rack(RackParameters),
-}
+struct ModelRevision(u64);
 
 impl ModelRevision {
-    fn current(&self, source: Option<u64>, parameters: RackParameters) -> bool {
-        match self {
-            Self::Script(revision) => source == Some(*revision),
-            Self::Rack(previous) => source.is_none() && *previous == parameters,
-        }
+    fn current(&self, source: Option<u64>) -> bool {
+        source == Some(self.0)
     }
 }
+
 struct Scene {
     display: Arc<viewport::Geometry>,
     instances: Arc<Vec<viewport::Instance>>,
@@ -338,7 +316,7 @@ struct Snapshot {
     analysis_ms: f64,
     script_ms: f64,
     total_ms: f64,
-    source: ModelSource,
+    source: String,
     project: Option<Arc<project::Project>>,
     name: String,
     volume_mm3: f64,
@@ -352,10 +330,7 @@ impl Snapshot {
     }
 
     fn visible_parts(&self, outliner: &outliner::State) -> u32 {
-        match &self.source {
-            ModelSource::Rack(_) => u32::MAX,
-            ModelSource::Script(_) => outliner.visible_parts(&self.parts),
-        }
+        outliner.visible_parts(&self.parts)
     }
 
     fn part_source(&self, index: usize, revision: u64) -> Option<usize> {
@@ -421,11 +396,6 @@ impl Snapshot {
         true
     }
 }
-#[derive(PartialEq)]
-enum ModelSource {
-    Rack(RackParameters),
-    Script(String),
-}
 struct Worker {
     commands: Option<mpsc::SyncSender<(Command, cancellation::Token)>>,
     generation: cancellation::Generation,
@@ -478,33 +448,91 @@ impl Worker {
                 let kernel = kernel::Kernel::new();
                 let mut cache = kernel.as_ref().map(model::Cache::new);
                 while let Ok((command, token)) = requests.recv() {
-                    let result = cache.as_mut().map_err(|error| (*error).clone()).and_then(|cache| match command {
-                        Command::CheckPrint { source, project, revision } => Ok(Outcome::PrintChecked { revision, result: print_preparation::cached_report(&source, project.as_deref(), cache) }),
-                        Command::ExportScript { source, folder, target, project } => export::model_files_project_cached(&source, project.as_deref(), &folder, target, cache).map(|()| Outcome::Exported(format!("Exported {} to {}", target.description(), folder.display()))),
-                        Command::Script { path, source, editor_revision, revision, saved_at, mut input, thumbnails } => {
-                            if let Some(input) = &mut input { input.worker_started_ms = input.elapsed_ms(Instant::now()); }
-                            let source = source.to_string();
-                            let project = path.as_deref().map(|path| project::Project::load_if_imported(path, &source)).transpose()?.flatten();
-                            cache.with_preview(token, |cache| build_script_snapshot_project(source, revision, cache, thumbnails, project.as_ref())).map(|snapshot| {
-                                let Some(mut snapshot) = snapshot else { return Outcome::Cancelled; };
-                                if let Some(input) = &mut input { input.worker_finished_ms = input.elapsed_ms(Instant::now()); }
-                                snapshot.input = input; snapshot.saved_at = saved_at; snapshot.editor_revision = Some(editor_revision); Outcome::Model(Box::new(snapshot))
-                            })
-                        }
-                        Command::Build {
-                            parameters,
-                            revision,
-                        } => kernel.as_ref().map_err(Clone::clone)
-                            .and_then(|kernel| build_snapshot(kernel, parameters, revision))
-                            .map(|snapshot| Outcome::Model(Box::new(snapshot))),
-                        #[cfg(feature = "rack-tools")]
-                        Command::Export { parameters } => {
-                            export_parts(parameters, std::path::Path::new("output/native"))
-                                .map(|()| Outcome::Exported("Exported four rack parts, four fit samples, and assembled STEP to output/native".into()))
-                        }
-                    });
+                    let result =
+                        cache
+                            .as_mut()
+                            .map_err(|error| (*error).clone())
+                            .and_then(|cache| match command {
+                                Command::CheckPrint {
+                                    source,
+                                    project,
+                                    revision,
+                                } => Ok(Outcome::PrintChecked {
+                                    revision,
+                                    result: print_preparation::cached_report(
+                                        &source,
+                                        project.as_deref(),
+                                        cache,
+                                    ),
+                                }),
+                                Command::ExportScript {
+                                    source,
+                                    folder,
+                                    target,
+                                    project,
+                                } => export::model_files_project_cached(
+                                    &source,
+                                    project.as_deref(),
+                                    &folder,
+                                    target,
+                                    cache,
+                                )
+                                .map(|()| {
+                                    Outcome::Exported(format!(
+                                        "Exported {} to {}",
+                                        target.description(),
+                                        folder.display()
+                                    ))
+                                }),
+                                Command::Script {
+                                    path,
+                                    source,
+                                    editor_revision,
+                                    revision,
+                                    saved_at,
+                                    mut input,
+                                    thumbnails,
+                                } => {
+                                    if let Some(input) = &mut input {
+                                        input.worker_started_ms = input.elapsed_ms(Instant::now());
+                                    }
+                                    let source = source.to_string();
+                                    let project = path
+                                        .as_deref()
+                                        .map(|path| {
+                                            project::Project::load_if_imported(path, &source)
+                                        })
+                                        .transpose()?
+                                        .flatten();
+                                    cache
+                                        .with_preview(token, |cache| {
+                                            build_script_snapshot_project(
+                                                source,
+                                                revision,
+                                                cache,
+                                                thumbnails,
+                                                project.as_ref(),
+                                            )
+                                        })
+                                        .map(|snapshot| {
+                                            let Some(mut snapshot) = snapshot else {
+                                                return Outcome::Cancelled;
+                                            };
+                                            if let Some(input) = &mut input {
+                                                input.worker_finished_ms =
+                                                    input.elapsed_ms(Instant::now());
+                                            }
+                                            snapshot.input = input;
+                                            snapshot.saved_at = saved_at;
+                                            snapshot.editor_revision = Some(editor_revision);
+                                            Outcome::Model(Box::new(snapshot))
+                                        })
+                                }
+                            });
                     let result = result.map_err(|message| {
-                        if message.len() <= 8192 { return message; }
+                        if message.len() <= 8192 {
+                            return message;
+                        }
                         let head = &message[..message.floor_char_boundary(4096)];
                         let tail = &message[message.ceil_char_boundary(message.len() - 2048)..];
                         format!("{head}\n[Build message truncated]\n{tail}")
@@ -536,70 +564,6 @@ impl Drop for Worker {
             }
         }
     }
-}
-
-fn build_snapshot(
-    kernel: &kernel::Kernel,
-    parameters: RackParameters,
-    revision: u64,
-) -> Result<Snapshot, String> {
-    assert!(revision > 0);
-    parameters.layout()?;
-    let start = Instant::now();
-    let mut body = kernel.rack(parameters)?;
-    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let start = Instant::now();
-    let kernel::Tessellation {
-        mut mesh,
-        volume_mm3,
-    } = body.mesh()?;
-    mesh.smooth_normals();
-    let edges = body.edges()?;
-    let faces = inspection::faces(&mesh)?;
-    let tessellation_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let bounds = body.bounds(true)?.map(|point| point.as_vec3());
-    let geometry = Arc::new(model::Geometry {
-        mesh,
-        edges,
-        bounds,
-        volume_mm3,
-    });
-    let display = Arc::new(viewport::Geometry::new(&[geometry])?);
-    Ok(Snapshot {
-        refinement_pending: false,
-        thumbnails_pending: false,
-        thumbnail_renders: 0,
-        input: None,
-        cached_parts: 0,
-        scene: Scene {
-            display,
-            instances: Arc::new(vec![viewport::Instance::new(
-                glam::Mat4::IDENTITY,
-                mesh::DEFAULT_COLOR,
-            )]),
-            layout: placement::Layout::Assembly,
-            outputs: Arc::new(Vec::new()),
-            part_bounds: vec![bounds],
-            faces,
-            bounds,
-            annotations: dimensions::Annotations::default(),
-        },
-        parts: Vec::new(),
-        alternate: None,
-        checks: dimensions::Annotations::default(),
-        editor_revision: None,
-        saved_at: None,
-        analysis_ms: 0.0,
-        script_ms: 0.0,
-        total_ms: build_ms + tessellation_ms,
-        source: ModelSource::Rack(parameters),
-        project: None,
-        name: "Spice rack".into(),
-        volume_mm3,
-        build_ms,
-        tessellation_ms,
-        revision,
-    })
 }
 
 #[cfg(test)]
@@ -691,7 +655,7 @@ fn build_script_snapshot_project(
         analysis_ms: model.analysis_ms,
         script_ms: model.script_ms,
         total_ms: total.elapsed().as_secs_f64() * 1000.0,
-        source: ModelSource::Script(source),
+        source,
         project: project.cloned().map(Arc::new),
         name: model.name,
         volume_mm3,
@@ -782,65 +746,6 @@ fn build_scene(
     })
 }
 
-#[cfg(any(test, feature = "rack-tools"))]
-fn export_parts(parameters: RackParameters, folder: &std::path::Path) -> Result<(), String> {
-    parameters.layout()?;
-    let parts = printing::build_parts(parameters)?;
-    let samples = printing::build_fit_samples(parameters.thickness_mm)?;
-    let mut exports = Vec::with_capacity(8);
-    for part in parts.iter().chain(samples.iter()) {
-        let (shape, _) = part.on_bed()?;
-        let mesh = shape.mesh().map_err(|error| error.to_string())?;
-        if mesh.indices.len() > 300000 {
-            return Err("Print mesh exceeds its triangle budget".into());
-        }
-        let mut vertices = Vec::with_capacity(mesh.indices.len());
-        for triangle in mesh.indices.as_chunks::<3>().0.iter() {
-            let points: [glam::DVec3; 3] =
-                std::array::from_fn(|index| mesh.vertices[triangle[index]]);
-            let normal = (points[1] - points[0])
-                .cross(points[2] - points[0])
-                .normalize_or_zero();
-            if normal.length_squared() < 0.5 {
-                return Err(format!("{} has a degenerate face", part.name));
-            }
-            if points.iter().all(|point| point.z > 0.01) {
-                if normal.z < -std::f64::consts::FRAC_1_SQRT_2 - 1e-6 {
-                    return Err(format!(
-                        "{} needs support in its print orientation",
-                        part.name
-                    ));
-                }
-            }
-            vertices.extend(points.map(|point| crate::mesh::Vertex {
-                position: point.as_vec3().to_array(),
-                normal: normal.as_vec3().to_array(),
-                face_id: 1,
-                color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
-            }));
-        }
-        crate::mesh::Mesh {
-            vertices,
-            face_count: 1,
-        }
-        .validate()?;
-        exports.push((part.name, shape));
-    }
-    std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-    printing::assemble_parts(&parts)
-        .write_step(folder.join("spice-rack.step"))
-        .map_err(|error| error.to_string())?;
-    for (name, shape) in exports {
-        shape
-            .write_step(folder.join(format!("spice-rack-{name}.step")))
-            .map_err(|error| error.to_string())?;
-        shape
-            .write_stl_with_tolerance(folder.join(format!("spice-rack-{name}.stl")), 0.1)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 struct Editor {
     print_checks: print_checks::State,
     show_print_checks: bool,
@@ -878,11 +783,9 @@ struct Editor {
     show_performance: bool,
     edge_width_px: f32,
     exit: ExitState,
-    parameters: RackParameters,
     snapshot: Option<Snapshot>,
     worker: Worker,
     work: WorkerState,
-    dirty_since: Option<Instant>,
     revision: u64,
     camera: viewport::Camera,
     views: viewport::Views,
@@ -1193,7 +1096,7 @@ impl Editor {
         viewport::initialize(context)?;
         performance::stage(profile, "viewport_ready");
         interface::configure(&context.egui_ctx);
-        let layout = PARAMETERS.layout()?;
+        let camera = viewport::Camera::for_dimensions([100.0; 3]);
         let worker = Worker::new(context.egui_ctx.clone())?;
         let script = if let Some(sweep) = &sweep {
             Some(document::Document::loaded(
@@ -1215,9 +1118,6 @@ impl Editor {
         let mut code_state = code_editor::State::default();
         code_state.modal.enable(true);
         let mut palette = palette::State::default();
-        let dirty_since = script
-            .is_none()
-            .then_some(Instant::now() - Duration::from_secs(1));
         if sweep.is_none() {
             if let Some(script) = &script {
                 palette.remember(script.path.clone());
@@ -1260,14 +1160,12 @@ impl Editor {
             show_performance: false,
             edge_width_px: 1.5,
             exit: ExitState::Open,
-            parameters: PARAMETERS,
             snapshot: None,
             worker,
             work: WorkerState::Idle,
-            dirty_since,
             revision: 0,
-            camera: viewport::Camera::rack(layout.dimensions_mm.to_array()),
-            views: viewport::Views::new(viewport::Camera::rack(layout.dimensions_mm.to_array())),
+            camera,
+            views: viewport::Views::new(camera),
             viewport_aspect: 1.0,
             selected: None,
             selected_measurement: None,
@@ -1304,7 +1202,6 @@ impl Editor {
         self.diagnostics = Some(diagnostics);
         self.language_popup = None;
         self.frame_next_model = true;
-        self.dirty_since = None;
         self.preview.run(
             self.script.as_ref().expect("Adopted model").buffer.revision,
             Instant::now(),
@@ -1365,19 +1262,11 @@ impl Editor {
     fn can_export(&self) -> bool {
         matches!(self.work, WorkerState::Idle)
             && !self.preview.pending()
-            && self.dirty_since.is_none()
-            && self
-                .snapshot
-                .as_ref()
-                .is_some_and(|model| match (&model.source, &self.script) {
-                    (ModelSource::Rack(parameters), None) => {
-                        cfg!(feature = "rack-tools") && *parameters == self.parameters
-                    }
-                    (ModelSource::Script(_), Some(script)) => {
-                        model.editor_revision == Some(script.buffer.revision)
-                    }
-                    _ => false,
-                })
+            && self.snapshot.as_ref().is_some_and(|model| {
+                self.script
+                    .as_ref()
+                    .is_some_and(|script| model.editor_revision == Some(script.buffer.revision))
+            })
     }
 
     fn print_check_revision(&self) -> Option<u64> {
@@ -1399,9 +1288,7 @@ impl Editor {
             return;
         };
         let snapshot = self.snapshot.as_ref().expect("Current model");
-        let ModelSource::Script(source) = &snapshot.source else {
-            return;
-        };
+        let source = &snapshot.source;
         match self.worker.try_send(Command::CheckPrint {
             source: source.clone(),
             project: snapshot.project.clone(),
@@ -1453,30 +1340,22 @@ impl Editor {
         if !self.can_export() {
             return Err("Run the current source successfully before exporting".into());
         }
-        let command = match &self.snapshot.as_ref().expect("Validated export").source {
-            #[cfg(feature = "rack-tools")]
-            ModelSource::Rack(parameters) => Command::Export {
-                parameters: *parameters,
-            },
-            #[cfg(not(feature = "rack-tools"))]
-            ModelSource::Rack(_) => return Err("Rack tools are not enabled".into()),
-            ModelSource::Script(source) => {
-                let stamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|error| error.to_string())?
-                    .as_nanos();
-                Command::ExportScript {
-                    project: self
-                        .snapshot
-                        .as_ref()
-                        .expect("Validated export")
-                        .project
-                        .clone(),
-                    target,
-                    source: source.clone(),
-                    folder: format!("output/native/model-{stamp}").into(),
-                }
-            }
+        let snapshot = self.snapshot.as_ref().expect("Validated export");
+        let source = &snapshot.source;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos();
+        let command = Command::ExportScript {
+            project: self
+                .snapshot
+                .as_ref()
+                .expect("Validated export")
+                .project
+                .clone(),
+            target,
+            source: source.clone(),
+            folder: format!("output/native/model-{stamp}").into(),
         };
         match self.worker.try_send(command) {
             Ok(()) => {
@@ -1670,7 +1549,7 @@ impl Editor {
                 if thumbnails == model::ThumbnailMode::Complete {
                     self.refinement.dispatched();
                 }
-                self.work = WorkerState::Busy(ModelRevision::Script(revision));
+                self.work = WorkerState::Busy(ModelRevision(revision));
                 if let Some(diagnostics) = &mut self.diagnostics {
                     diagnostics.run_started();
                 }
@@ -1706,7 +1585,6 @@ impl Editor {
                 }
                 if let Some(error) = &script.read_error {
                     self.message.clone_from(error);
-                    self.dirty_since = None;
                 }
             }
         }
@@ -1723,20 +1601,14 @@ impl Editor {
                     _ => None,
                 };
                 let current = active.is_none_or(|revision| {
-                    revision.current(
-                        self.script.as_ref().map(|script| script.buffer.revision),
-                        self.parameters,
-                    )
+                    revision.current(self.script.as_ref().map(|script| script.buffer.revision))
                 });
                 if let Some(sweep) = &mut self.sweep {
                     if matches!(&result, Ok(Outcome::Model(snapshot)) if snapshot.input.is_some()) {
                         sweep.result(current);
                     }
                 }
-                let run_revision = match active {
-                    Some(ModelRevision::Script(revision)) => Some(revision),
-                    _ => None,
-                };
+                let run_revision = active.map(|revision| revision.0);
                 if !current {
                     context.request_repaint();
                 } else {
@@ -1809,7 +1681,6 @@ impl Editor {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.print_checks
                     .fail("Geometry worker stopped; restart the application.".into());
-                self.dirty_since = None;
                 if !matches!(self.work, WorkerState::Unavailable) {
                     self.message = format!(
                         "Geometry worker stopped: {}. Restart the application.",
@@ -1819,49 +1690,6 @@ impl Editor {
                 self.work = WorkerState::Unavailable;
             }
             Err(mpsc::TryRecvError::Empty) => {}
-        }
-        if matches!(self.work, WorkerState::Idle) {
-            if let Some(changed) = self.dirty_since {
-                if changed.elapsed() >= Duration::from_millis(150) {
-                    self.dirty_since = None;
-                    match self.parameters.layout() {
-                        Ok(_) => {
-                            if let Some(snapshot) = &mut self.snapshot {
-                                if let ModelSource::Rack(parameters) = snapshot.source {
-                                    let equivalent = RackParameters {
-                                        jar_height_mm: self.parameters.jar_height_mm,
-                                        cabinet_clearance_mm: self.parameters.cabinet_clearance_mm,
-                                        ..parameters
-                                    };
-                                    if equivalent == self.parameters {
-                                        snapshot.source = ModelSource::Rack(self.parameters);
-                                        self.message =
-                                            "Clearances checked; existing geometry reused".into();
-                                        return;
-                                    }
-                                }
-                            }
-                            self.revision += 1;
-                            match self.worker.try_send(Command::Build {
-                                parameters: self.parameters,
-                                revision: self.revision,
-                            }) {
-                                Ok(()) => {
-                                    self.work =
-                                        WorkerState::Busy(ModelRevision::Rack(self.parameters));
-                                    self.message =
-                                        "Rebuilding geometry; viewport remains interactive…".into();
-                                }
-                                Err(error) => {
-                                    self.work = WorkerState::Unavailable;
-                                    self.message = error.to_string();
-                                }
-                            }
-                        }
-                        Err(error) => self.message = error,
-                    }
-                }
-            }
         }
     }
 }
@@ -2763,38 +2591,7 @@ impl eframe::App for Editor {
                     });
                 }
 
-                return;
             }
-            ui.heading("Rack dimensions"); ui.label("Millimetres"); ui.separator();
-            let mut changed = false;
-            egui::Grid::new("dimensions").num_columns(2).spacing([10.0, 12.0]).show(ui, |ui| {
-                for (label, value, range) in [
-                    ("Width", &mut self.parameters.rack_width_mm, 100.0..=480.0),
-                    ("Step rise", &mut self.parameters.step_rise_mm, 10.0..=80.0),
-                    ("Jar diameter", &mut self.parameters.jar_diameter_mm, 20.0..=100.0),
-                    ("Jar height", &mut self.parameters.jar_height_mm, 20.0..=300.0),
-                    ("Jar spacing", &mut self.parameters.clearance_mm, 0.5..=10.0),
-                    ("Cabinet gap", &mut self.parameters.cabinet_clearance_mm, 1.0..=20.0),
-                    ("Wall thickness", &mut self.parameters.thickness_mm, 1.0..=10.0),
-                    ("Lip height", &mut self.parameters.lip_height_mm, 1.0..=20.0),
-                ] {
-                    ui.label(label); changed |= ui.add(egui::DragValue::new(value).range(range).speed(0.1)).changed(); ui.end_row();
-                }
-                ui.label("Steps"); changed |= ui.add(egui::DragValue::new(&mut self.parameters.step_count).range(1..=8)).changed(); ui.end_row();
-            });
-            ui.add_space(12.0);
-            if ui.button("Reset dimensions").clicked() { self.parameters = PARAMETERS; changed = true; }
-            if changed { self.dirty_since = Some(Instant::now()); }
-            ui.separator();
-            if let Err(error) = self.parameters.layout() { ui.colored_label(interface::WARNING, error); }
-            if let Some(snapshot) = &self.snapshot {
-                ui.label(format!("{} triangles · {} faces", snapshot.scene.display.vertex_count()/3, snapshot.scene.display.face_count()));
-                ui.label(format!("Volume {:.0} mm³", snapshot.volume_mm3));
-                if snapshot.source != ModelSource::Rack(self.parameters) { ui.colored_label(interface::WARNING, "Showing the previous valid geometry"); }
-            }
-            ui.separator(); ui.label(self.selected.as_ref().map_or("Click a face or edge to select".into(), |selection| selection.latest().map_or("Selected edge".into(), |face| format!("Selected face {}", face.id))));
-            ui.separator(); ui.small("Preview: rack blank. Print export adds the splitting joints. Joint clearance: 0.2 mm.");
-            ui.small("Export uses OpenCascade for STEP and verified print geometry. Print and dry-fit the samples first.");
         });
         });
         }
@@ -3660,11 +3457,6 @@ impl eframe::App for Editor {
             if let Some(delay) = self.preview.delay(Instant::now()) {
                 ui.ctx().request_repaint_after(delay);
             }
-            if let Some(changed) = self.dirty_since {
-                ui.ctx().request_repaint_after(
-                    Duration::from_millis(150).saturating_sub(changed.elapsed()),
-                );
-            }
         }
         if let Some(sweep) = &self.sweep {
             let now = Instant::now();
@@ -3760,97 +3552,15 @@ fn snapshot_camera(snapshot: &Snapshot, aspect: f32) -> viewport::Camera {
     assert!(aspect.is_finite());
     assert!(aspect > 0.0);
     let [minimum, maximum] = snapshot.scene.bounds;
-    let mut camera = viewport::Camera::rack((maximum - minimum).as_dvec3().to_array());
+    let mut camera = viewport::Camera::for_dimensions((maximum - minimum).as_dvec3().to_array());
     camera.target = (minimum + maximum) / 2.0;
     camera.distance /= aspect.min(1.0);
     camera
 }
 
-#[cfg(feature = "rack-tools")]
-fn benchmark() -> Result<(), String> {
-    let kernel = kernel::Kernel::new()?;
-    let mut smlib = Vec::with_capacity(7);
-    let mut occt = Vec::with_capacity(7);
-    let mut mesh_ms = Vec::with_capacity(7);
-    let mut volume = 0.0;
-    for _ in 0..7 {
-        let start = Instant::now();
-        let mut shape = kernel.rack(PARAMETERS)?;
-        smlib.push(start.elapsed().as_secs_f64() * 1000.0);
-        let start = Instant::now();
-        let tessellation = shape.mesh()?;
-        let mesh = tessellation.mesh;
-        mesh_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-        volume = mesh.volume_mm3();
-        let exact = tessellation.volume_mm3;
-        if (exact - volume).abs() > 0.01 {
-            return Err(format!(
-                "SMLib exact/mesh volumes disagree: {exact} / {volume}"
-            ));
-        }
-        let start = Instant::now();
-        let reference = build_rack(PARAMETERS)?;
-        occt.push(start.elapsed().as_secs_f64() * 1000.0);
-        let mesh = reference.mesh().map_err(|error| error.to_string())?;
-        let reference_volume: f64 = mesh
-            .indices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(|triangle| {
-                mesh.vertices[triangle[0]]
-                    .dot(mesh.vertices[triangle[1]].cross(mesh.vertices[triangle[2]]))
-                    / 6.0
-            })
-            .sum();
-        if (reference_volume - volume).abs() > 0.01 {
-            return Err(format!(
-                "Kernel volumes disagree: OCCT {reference_volume} / SMLib {volume}"
-            ));
-        }
-    }
-    for measurements in [&mut smlib, &mut occt, &mut mesh_ms] {
-        measurements.remove(0);
-        measurements.sort_by(f64::total_cmp);
-    }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let result = format!(
-        "{{\n  \"profile\": \"{profile}\",\n  \"workload\": \"default rack blank, identical ordered box unions; OCCT clean included\",\n  \"warm_samples\": 6,\n  \"smlib_build_median_ms\": {},\n  \"occt_build_median_ms\": {},\n  \"smlib_mesh_and_audit_median_ms\": {},\n  \"volume_mm3\": {volume}\n}}\n",
-        (smlib[2] + smlib[3]) / 2.0,
-        (occt[2] + occt[3]) / 2.0,
-        (mesh_ms[2] + mesh_ms[3]) / 2.0
-    );
-    std::fs::create_dir_all("output/native").map_err(|error| error.to_string())?;
-    std::fs::write("output/native/benchmark.json", &result).map_err(|error| error.to_string())?;
-    print!("{result}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "rack-tools")]
-    #[test]
-    fn outliner_keeps_the_rack_tools_model_visible_and_frameable() -> Result<(), String> {
-        let kernel = kernel::Kernel::new()?;
-        let snapshot = build_snapshot(&kernel, PARAMETERS, 1)?;
-        let mask = snapshot.visible_parts(&outliner::State::default());
-        assert_eq!(mask, u32::MAX);
-        assert_eq!(
-            snapshot.scene.visible_bounds(mask),
-            Some(snapshot.scene.bounds)
-        );
-        assert_eq!(
-            snapshot.scene.part_bounds.len(),
-            snapshot.scene.display.parts.len()
-        );
-        Ok(())
-    }
 
     #[test]
     fn outliner_part_selection_tracks_names_even_when_geometry_is_shared() -> Result<(), String> {
@@ -4452,20 +4162,6 @@ mod tests {
         }
         let folder = std::env::temp_dir().join(format!("spice-cad-layout-{}", std::process::id()));
         export::model_files(source, &folder, export::Target::Print)?;
-        for index in 1..=2 {
-            let shape = opencascade::primitives::Shape::read_step(
-                folder.join(format!("part-{index:02}.step")),
-            )
-            .map_err(|error| error.to_string())?;
-            let bounds = opencascade::bounding_box::aabb(&shape);
-            assert!(bounds.min().z.abs() < 0.001);
-            assert!(
-                (bounds.max() - bounds.min() - glam::dvec3(10.0, 10.0, 2.0))
-                    .abs()
-                    .max_element()
-                    < 0.001
-            );
-        }
         assert_eq!(
             std::fs::read_to_string(folder.join("model.luau")).map_err(|error| error.to_string())?,
             source
@@ -4551,20 +4247,10 @@ mod tests {
     fn build_identity_rejects_results_from_older_edits_and_other_documents() {
         let first = text_buffer::Buffer::from("first");
         let second = text_buffer::Buffer::from("second");
-        let key = ModelRevision::Script(first.revision);
-        assert!(key.current(Some(first.revision), PARAMETERS));
-        assert!(!key.current(Some(second.revision), PARAMETERS));
-        assert!(!key.current(None, PARAMETERS));
-        let rack = ModelRevision::Rack(PARAMETERS);
-        assert!(rack.current(None, PARAMETERS));
-        assert!(!rack.current(Some(second.revision), PARAMETERS));
-        assert!(!rack.current(
-            None,
-            RackParameters {
-                rack_width_mm: PARAMETERS.rack_width_mm - 1.0,
-                ..PARAMETERS
-            }
-        ));
+        let key = ModelRevision(first.revision);
+        assert!(key.current(Some(first.revision)));
+        assert!(!key.current(Some(second.revision)));
+        assert!(!key.current(None));
     }
 
     #[test]
@@ -4636,73 +4322,12 @@ mod tests {
             let folder = folder.with_extension(index.to_string());
             export::model_files(source, &folder, crate::export::Target::Print)?;
             let expected = build_script_snapshot(source, 1)?;
-            let shape = opencascade::primitives::Shape::read_step(folder.join("model.step"))
-                .map_err(|error| error.to_string())?;
-            let mesh = shape.mesh().map_err(|error| error.to_string())?;
-            let volume: f64 = mesh
-                .indices
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|triangle| {
-                    mesh.vertices[triangle[0]]
-                        .dot(mesh.vertices[triangle[1]].cross(mesh.vertices[triangle[2]]))
-                        / 6.0
-                })
-                .sum();
             assert!(
-                (volume - expected.volume_mm3).abs() < expected.volume_mm3 * 0.002,
-                "STEP imported volume {volume} differs from {}",
-                expected.volume_mm3
-            );
-            let bounds = opencascade::bounding_box::aabb(&shape);
-            assert!(
-                bounds.min().abs().max_element() < 0.2,
-                "STEP bounds minimum {:?}",
-                bounds.min()
-            );
-            assert!(
-                (bounds.max() - glam::DVec3::from_array(dimensions))
+                (expected.scene.bounds[1] - glam::Vec3::from_array(dimensions))
                     .abs()
                     .max_element()
                     < 0.2
             );
-            let mut imported = Vec::with_capacity(mesh.indices.len());
-            for triangle in mesh.indices.as_chunks::<3>().0 {
-                let points = triangle.map(|index| mesh.vertices[index]);
-                // OpenCascade can emit pole triangles that collapse under the audit's 0.001 mm weld.
-                let welded = points.map(|point| {
-                    point
-                        .to_array()
-                        .map(|value| (value * 1000.0).round() as i64)
-                });
-                if welded[0] == welded[1] {
-                    continue;
-                }
-                if welded[1] == welded[2] {
-                    continue;
-                }
-                if welded[2] == welded[0] {
-                    continue;
-                }
-                let normal = (points[1] - points[0])
-                    .cross(points[2] - points[0])
-                    .normalize_or_zero()
-                    .as_vec3()
-                    .to_array();
-                imported.extend(points.map(|point| crate::mesh::Vertex {
-                    position: point.as_vec3().to_array(),
-                    normal,
-                    face_id: 1,
-                    color: crate::mesh::vertex_color(crate::mesh::DEFAULT_COLOR),
-                }));
-            }
-            crate::mesh::Mesh {
-                vertices: imported,
-                face_count: 1,
-            }
-            .validate()
-            .map_err(|error| format!("STEP imported mesh {index}: {error}"))?;
             let bytes =
                 std::fs::read(folder.join("model.stl")).map_err(|error| error.to_string())?;
             let count = u32::from_le_bytes(bytes[80..84].try_into().expect("STL count"));
@@ -4801,77 +4426,6 @@ mod tests {
             assert!(error.contains(message), "{error}");
             assert!(!folder.exists());
         }
-    }
-
-    #[test]
-    fn rack_parts_match_the_reference_and_export_on_the_p1s_bed() -> Result<(), String> {
-        let source = include_str!("../../models/rack-parts.luau");
-        let reference = spice_rack::printing::build_parts(PARAMETERS)?;
-        for layout in [placement::Layout::Assembly, placement::Layout::Print] {
-            let kernel = kernel::Kernel::new()?;
-            let source = source.replace("cad.number(12,", "cad.number(0,");
-            let model = model::compile(&source)?;
-            let mut bodies = model.build(&kernel)?;
-            for (part, body) in model.parts.iter().zip(&mut bodies) {
-                part.placement(layout).apply(body, false)?;
-            }
-            assert_eq!(model.parts.len(), 4);
-            assert_eq!(bodies.len(), reference.len());
-            let meshes = model.meshes(&mut bodies, false)?;
-            for (index, (body, reference)) in bodies.iter_mut().zip(&reference).enumerate() {
-                meshes[index].validate()?;
-                let mesh = reference.shape.mesh().map_err(|error| error.to_string())?;
-                let volume: f64 = mesh
-                    .indices
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .map(|triangle| {
-                        let [a, b, c] = triangle.map(|index| mesh.vertices[index]);
-                        a.dot(b.cross(c)) / 6.0
-                    })
-                    .sum();
-                assert!((body.volume()? - volume).abs() < 0.01, "Part {index}");
-                let [minimum, maximum] = body.bounds(true)?;
-                if layout == placement::Layout::Print {
-                    assert!(minimum.z.abs() < 0.001);
-                    let (_, dimensions) = reference.on_bed()?;
-                    assert!(((maximum - minimum) - dimensions).abs().max_element() < 0.001);
-                    assert!((maximum - minimum).max_element() < 246.001);
-                } else {
-                    let bounds = opencascade::bounding_box::aabb(&reference.shape);
-                    assert!((minimum - bounds.min()).abs().max_element() < 0.001);
-                    assert!((maximum - bounds.max()).abs().max_element() < 0.001);
-                }
-            }
-            drop(bodies);
-            drop(kernel);
-            if layout == placement::Layout::Print {
-                let folder = std::env::temp_dir()
-                    .join(format!("spice-cad-rack-parts-{}", std::process::id()));
-                export::model_files(&source, &folder, export::Target::Print)?;
-                let manifest: serde_json::Value = serde_json::from_slice(
-                    &std::fs::read(folder.join("parts.json")).map_err(|error| error.to_string())?,
-                )
-                .map_err(|error| error.to_string())?;
-                let parts = manifest.as_array().ok_or("Expected parts manifest")?;
-                assert_eq!(parts.len(), 4);
-                for (part, expected) in parts.iter().zip(&model.parts) {
-                    assert_eq!(part["name"], expected.name);
-                    for format in ["step", "stl"] {
-                        let name = part[format].as_str().ok_or("Missing export filename")?;
-                        assert!(
-                            std::fs::metadata(folder.join(name))
-                                .map_err(|error| error.to_string())?
-                                .len()
-                                > 84
-                        );
-                    }
-                }
-                std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
-            }
-        }
-        Ok(())
     }
 
     #[test]
@@ -5177,10 +4731,7 @@ mod tests {
                     worker
                         .try_send(Command::ExportScript {
                             project: None,
-                            source: match &snapshot.source {
-                                ModelSource::Script(source) => source.clone(),
-                                _ => unreachable!(),
-                            },
+                            source: snapshot.source.clone(),
                             folder: folder.join(directory),
                             target,
                         })
@@ -5314,119 +4865,39 @@ mod tests {
     }
 
     #[test]
-    fn native_mesh_preserves_cavities_volume_and_face_selection() -> Result<(), String> {
-        let kernel = kernel::Kernel::new()?;
-        for parameters in [
-            PARAMETERS,
-            RackParameters {
-                rack_width_mm: 300.5,
-                step_count: 3,
-                step_rise_mm: 70.0,
-                thickness_mm: 4.0,
-                ..PARAMETERS
-            },
-        ] {
-            let snapshot = build_snapshot(&kernel, parameters, 1)?;
-            let reference = build_rack(parameters)?
-                .mesh()
-                .map_err(|error| error.to_string())?;
-            let volume: f64 = reference
-                .indices
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|triangle| {
-                    reference.vertices[triangle[0]]
-                        .dot(reference.vertices[triangle[1]].cross(reference.vertices[triangle[2]]))
-                        / 6.0
-                })
-                .sum();
-            assert!((snapshot.volume_mm3 - volume).abs() < volume * 1e-6);
-            assert!(snapshot.scene.world_mesh().face_count > 6);
-            let layout = parameters.layout()?;
-            let camera = viewport::Camera::rack(layout.dimensions_mm.to_array());
-            let matrix = camera.matrix(1.5);
-            assert!(
-                snapshot
-                    .scene
-                    .world_mesh()
-                    .pick(matrix, [0.0, 0.0])
-                    .is_some()
-            );
-            assert_eq!(
-                snapshot.scene.world_mesh().pick(matrix, [-0.99, 0.99]),
-                None
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn worker_recovers_after_invalid_request() -> Result<(), String> {
         let worker = Worker::new(egui::Context::default())?;
-        worker
-            .try_send(Command::Build {
-                parameters: RackParameters {
-                    step_count: 0,
-                    ..PARAMETERS
-                },
-                revision: 1,
-            })
-            .map_err(|error| error.to_string())?;
-        assert!(
+        for (revision, source) in [
+            (1, "cad.show('bad',cad.box({width=-1,depth=2,height=3}))"),
+            (
+                2,
+                "cad.show('valid',cad.box({width=10,depth=20,height=30}))",
+            ),
+        ] {
             worker
+                .try_send(Command::Script {
+                    path: None,
+                    thumbnails: model::ThumbnailMode::Complete,
+                    input: None,
+                    source: ropey::Rope::from_str(source),
+                    editor_revision: revision,
+                    revision,
+                    saved_at: None,
+                })
+                .map_err(|error| error.to_string())?;
+            let result = worker
                 .recv_timeout(Duration::from_secs(20))
-                .map_err(|error| error.to_string())?
-                .is_err()
-        );
-        worker
-            .try_send(Command::Build {
-                parameters: PARAMETERS,
-                revision: 2,
-            })
-            .map_err(|error| error.to_string())?;
-        let result = worker
-            .recv_timeout(Duration::from_secs(20))
-            .map_err(|error| error.to_string())??;
-        match result {
-            Outcome::Model(snapshot) => {
-                assert_eq!(snapshot.revision, 2);
-                assert!(snapshot.volume_mm3 > 0.0);
-            }
-            Outcome::Exported(_) | Outcome::Cancelled | Outcome::PrintChecked { .. } => {
-                return Err("Expected rebuilt geometry".into());
+                .map_err(|error| error.to_string())?;
+            if revision == 1 {
+                assert!(result.is_err());
+            } else {
+                let Outcome::Model(snapshot) = result? else {
+                    return Err("Expected rebuilt geometry".into());
+                };
+                assert_eq!(snapshot.revision, revision);
+                assert!((snapshot.volume_mm3 - 6000.0).abs() < 0.001);
             }
         }
-        Ok(())
-    }
-
-    #[test]
-    fn print_export_checks_supports_before_writing_and_emits_all_parts() -> Result<(), String> {
-        let folder =
-            std::env::temp_dir().join(format!("spice-cad-print-test-{}", std::process::id()));
-        let parameters = RackParameters {
-            rack_width_mm: 300.0,
-            step_count: 3,
-            step_rise_mm: 35.0,
-            thickness_mm: 4.0,
-            ..PARAMETERS
-        };
-        let error =
-            export_parts(parameters, &folder).expect_err("Short configuration needs supports");
-        assert!(error.contains("needs support"));
-        assert!(!folder.exists());
-        export_parts(PARAMETERS, &folder)?;
-        let files = std::fs::read_dir(&folder)
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        assert_eq!(files.len(), 17);
-        assert!(
-            files
-                .iter()
-                .all(|entry| entry.metadata().is_ok_and(|data| data.len() > 84))
-        );
-        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         Ok(())
     }
 }

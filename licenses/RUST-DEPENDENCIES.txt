@@ -1082,17 +1082,6 @@ THIS SOFTWARE.
 
 
 ===============================================================================
-GNU Lesser General Public License v2.1 only (LGPL-2.1)
-
-Used by:
-  opencascade-sys 0.3.0 — https://github.com/bschwind/opencascade-rs
-  opencascade 0.3.0 — https://github.com/bschwind/opencascade-rs
-
-This crate archive does not contain its license text. Its declared license is
-LGPL-2.1. Copyright notices and license texts are provided in licenses/upstream/;
-see licenses/README.md for the component-to-file mapping and source revisions.
-
-===============================================================================
 MIT License (MIT)
 
 Used by:
@@ -1232,7 +1221,6 @@ MIT License (MIT)
 Used by:
   cc 1.8.0 — https://github.com/rust-lang/cc-rs
   cfg-if 1.0.5 — https://github.com/rust-lang/cfg-if
-  cmake 0.1.58 — https://github.com/rust-lang/cmake-rs
   find-msvc-tools 0.1.14 — https://github.com/rust-lang/cc-rs
   jobserver 0.1.35 — https://github.com/rust-lang/jobserver-rs
   pkg-config 0.3.34 — https://github.com/rust-lang/pkg-config-rs
@@ -1431,33 +1419,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-
-===============================================================================
-MIT License (MIT)
-
-Used by:
-  sexp 1.1.4 — https://github.com/cgaebel/sexp
-
-Copyright (c) 2015 Clark Gaebel <cg.wowus.cg@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 
 ===============================================================================
@@ -3409,35 +3370,6 @@ SOFTWARE.
 MIT License (MIT)
 
 Used by:
-  spice-rack 0.1.0
-
-MIT License
-
-Copyright (c) 2026 AWV Informatik AG
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-===============================================================================
-MIT License (MIT)
-
-Used by:
   spice-cad 0.1.0
   accesskit 0.25.1 — https://github.com/AccessKit/accesskit
   dpi 0.1.2 — https://github.com/rust-windowing/winit
@@ -3451,7 +3383,6 @@ Used by:
   libm 0.2.16 — https://github.com/rust-lang/compiler-builtins
   lua-src 551.0.2 — https://github.com/mlua-rs/lua-src-rs
   mlua-sys 0.13.0 — https://github.com/mlua-rs/mlua
-  opencascade-kicad-parser 0.3.0
   profiling 1.0.18 — https://github.com/aclysma/profiling
   tree-sitter-luau 1.2.0 — https://github.com/tree-sitter-grammars/tree-sitter-luau
   tree-sitter 0.25.10 — https://github.com/tree-sitter/tree-sitter

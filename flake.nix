@@ -1,5 +1,5 @@
 {
-  description = "Native Rust CAD editor and parametric spice rack";
+  description = "Native code-driven CAD editor";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.occt-nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
@@ -33,7 +33,6 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          occt_pkgs = import occt-nixpkgs { inherit system; };
           version = (builtins.fromTOML (builtins.readFile ./native/Cargo.toml)).package.version;
         in
         {
@@ -62,7 +61,7 @@
                   "about.toml"
                   "licenses"
                   "native"
-                  "src"
+                  "verification"
                   "models"
                 ];
             };
@@ -73,7 +72,6 @@
             ];
             doCheck = false;
             nativeBuildInputs = [
-              pkgs.cmake
               pkgs.pkg-config
               pkgs.makeWrapper
             ];
@@ -82,7 +80,6 @@
               pkgs.tbb
             ];
             SMLIB_ROOT = self.packages.${system}.smlib;
-            CMAKE_POLICY_VERSION_MINIMUM = "3.10";
             postInstall = ''
               wrapProgram $out/bin/spice-cad \
                 --prefix PATH : ${
@@ -127,15 +124,6 @@
               platforms = systems;
             };
           };
-          spice-cad-rack-tools = self.packages.${system}.spice-cad.overrideAttrs (previous: {
-            pname = "spice-cad-rack-tools";
-            cargoBuildFlags = previous.cargoBuildFlags ++ [
-              "--features"
-              "rack-tools"
-            ];
-            buildInputs = previous.buildInputs ++ [ occt_pkgs.opencascade-occt ];
-            DEP_OCCT_ROOT = occt_pkgs.opencascade-occt;
-          });
           luau = pkgs.luau.overrideAttrs {
             version = "0.740";
             nativeBuildInputs = [
@@ -197,9 +185,16 @@
               + ":${
                 pkgs.lib.makeLibraryPath [
                   pkgs.stdenv.cc.cc.lib
-                  occt
                 ]
               }";
+          });
+          verification = self.devShells.${system}.ci.overrideAttrs (previous: {
+            nativeBuildInputs = previous.nativeBuildInputs ++ [ pkgs.cmake ];
+            buildInputs = previous.buildInputs ++ [ occt ];
+            LD_LIBRARY_PATH = previous.LD_LIBRARY_PATH + ":${pkgs.lib.makeLibraryPath [ occt ]}";
+            DEP_OCCT_ROOT = "${occt}";
+            CMAKE_PREFIX_PATH = "${occt}";
+            CMAKE_POLICY_VERSION_MINIMUM = "3.10";
           });
           default = pkgs.mkShell {
             packages = with pkgs; [
@@ -208,7 +203,6 @@
               rustc
               rustfmt
               clippy
-              cmake
               pkg-config
               git
               ripgrep
@@ -218,7 +212,6 @@
               stylua
             ];
             buildInputs = [
-              occt
               self.packages.${system}.smlib
               pkgs.tbb
               pkgs.libxkbcommon
@@ -242,9 +235,6 @@
               pkgs.libxi
               pkgs.libxrandr
             ];
-            DEP_OCCT_ROOT = "${occt}";
-            CMAKE_PREFIX_PATH = "${occt}";
-            CMAKE_POLICY_VERSION_MINIMUM = "3.10";
           };
         }
       );

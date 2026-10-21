@@ -8,11 +8,7 @@ license = "MIT"
 description = "Native code-driven CAD by Holy Furries Studio"
 homepage = "https://holyfurries.com"
 
-[features]
-rack-tools = ["spice-rack/reference"]
-
 [dependencies]
-spice-rack = { path = "..", default-features = false }
 glam = "=0.24.2"
 cxx = "=1.0.194"
 eframe = { version = "=0.37.0", default-features = false, features = ["clipboard", "default_fonts", "wgpu", "x11", "wayland"] }
@@ -28,7 +24,3 @@ png = "=0.18.1"
 
 [build-dependencies]
 cxx-build = "=1.0.194"
-
-[dev-dependencies]
-spice-rack = { path = "..", features = ["reference"] }
-opencascade = { version = "=0.3.0", default-features = false }

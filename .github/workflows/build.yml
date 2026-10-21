@@ -32,7 +32,7 @@ jobs:
         run: |
           if [ "$FORCE_CHECKS" = true ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             echo "native=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BASE_SHA" HEAD -- Cargo.toml Cargo.lock flake.nix flake.lock src native models .github; then
+          elif git diff --quiet "$BASE_SHA" HEAD -- Cargo.toml Cargo.lock flake.nix flake.lock native models verification .github; then
             echo "native=false" >> "$GITHUB_OUTPUT"
           else
             echo "native=true" >> "$GITHUB_OUTPUT"
@@ -64,15 +64,15 @@ jobs:
         id: nix-cache
         uses: nix-community/cache-nix-action/restore@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: nix-tools-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-prefixes-first-match: nix-tools-v1-${{ runner.os }}-
+          primary-key: nix-tools-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-tools-v2-${{ runner.os }}-
       - name: Prepare pinned tools
         run: nix develop .#ci --profile .ci-environment -c true
       - name: Save native tools before compiling Rust
         if: steps.nix-cache.outputs.hit-primary-key != 'true'
         uses: nix-community/cache-nix-action/save@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: nix-tools-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          primary-key: nix-tools-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
           gc-max-store-size-linux: 3G
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -80,13 +80,51 @@ jobs:
           cmd-format: nix develop .#ci -c {0}
           key: ${{ hashFiles('flake.lock', 'flake.nix') }}
           cache-bin: "false"
+          shared-key: native
       - name: Lint
-        run: nix develop .#ci -c cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
+        run: nix develop .#ci -c cargo clippy --locked -p spice-cad --all-targets -- -D warnings
       - name: Test
-        run: nix develop .#ci -c cargo test --locked --workspace --all-features
-  package:
+        run: nix develop .#ci -c cargo test --locked -p spice-cad
+  verification:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [format, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = false
+      - name: Cache independent verification tools
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-verification-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-verification-v1-${{ runner.os }}-
+          restore-prefixes-all-matches: nix-tools-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          gc-max-store-size-linux: 3G
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cmd-format: nix develop .#verification -c {0}
+          key: ${{ hashFiles('flake.lock', 'flake.nix') }}
+          shared-key: native
+          cache-bin: "false"
+      - name: Verify native exports with OpenCascade
+        run: |
+          nix develop .#verification --profile .verification-environment -c sh -eu -c '
+            cargo build --locked -p spice-cad
+            cargo clippy --locked -p spice-cad-verification --all-targets -- -D warnings
+            cargo test --locked -p spice-cad-verification
+          '
+  package:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [format, linux, verification]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -100,7 +138,7 @@ jobs:
           primary-key: nix-release-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}-${{ github.sha }}
           restore-prefixes-first-match: |
             nix-release-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}-
-          restore-prefixes-all-matches: nix-tools-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-all-matches: nix-tools-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
           gc-max-store-size-linux: 3G
       - name: Keep native tools available for subsequent releases
         run: nix develop .#ci --profile .ci-environment -c true

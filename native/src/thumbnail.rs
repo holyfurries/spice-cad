@@ -10,7 +10,8 @@ pub const PIXEL_VISITS_MAX: usize = 8_000_000;
 pub fn render(mesh: &Mesh, bounds: [Vec3; 2], remaining: &mut usize) -> Option<egui::ColorImage> {
     assert!(*remaining <= PIXEL_VISITS_MAX);
     assert!(mesh.vertices.len() <= 300000);
-    let mut camera = crate::viewport::Camera::rack((bounds[1] - bounds[0]).as_dvec3().to_array());
+    let mut camera =
+        crate::viewport::Camera::for_dimensions((bounds[1] - bounds[0]).as_dvec3().to_array());
     camera.target = (bounds[0] + bounds[1]) / 2.0;
     let matrix = camera.matrix(WIDTH as f32 / HEIGHT as f32);
     let mut image = egui::ColorImage::filled([WIDTH, HEIGHT], crate::interface::VIEWPORT);

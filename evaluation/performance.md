@@ -1,5 +1,9 @@
 # Native performance and distribution
 
+Historical snapshot: the legacy rack configurator, export CLI, and paired kernel
+benchmark described below have been removed. Current commands and test-only
+OpenCascade verification are documented in [kernel verification](../docs/kernels.md#independent-verification).
+
 Fast startup, responsive editing and resizing, low idle cost, and simple
 installation are product requirements. RAD Debugger is an architectural reference,
 not a measured baseline: https://github.com/EpicGames/raddebugger.

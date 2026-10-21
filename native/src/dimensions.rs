@@ -1125,7 +1125,7 @@ mod tests {
     fn sampled_gap_callouts_remain_readable_at_zero_and_subpixel_distances() {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 600.0));
         for distance in [0.0, 0.001, 0.1] {
-            let camera = crate::viewport::Camera::rack([100.0; 3]);
+            let camera = crate::viewport::Camera::for_dimensions([100.0; 3]);
             let points = [camera.target, camera.target + Vec3::X * distance];
             let output = egui::Context::default().run_ui(
                 egui::RawInput {
@@ -1166,7 +1166,7 @@ mod tests {
     fn panning_does_not_switch_dimension_anchor_corners() {
         let bounds = [Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)];
         let center = (bounds[0] + bounds[1]) * 0.5;
-        let mut camera = crate::viewport::Camera::rack([40.0, 30.0, 20.0]);
+        let mut camera = crate::viewport::Camera::for_dimensions([40.0, 30.0, 20.0]);
         camera.yaw = -1.45;
         camera.distance = 150.0;
         let eye_offset_x = camera.yaw.cos() * camera.pitch.cos() * camera.distance;
@@ -1193,7 +1193,7 @@ mod tests {
             segments: [0, 1],
             geometry: crate::inspection::EdgeGeometry::Line(points),
         });
-        let mut camera = crate::viewport::Camera::rack([1.0, 1.0, 40.0]);
+        let mut camera = crate::viewport::Camera::for_dimensions([1.0, 1.0, 40.0]);
         camera.distance = 200.0;
         camera.target = Vec3::new(-0.01, 0.0, 20.0);
         let before = camera_labels(&camera, points, Some(&selected));
@@ -1216,7 +1216,7 @@ mod tests {
             segments: [0, 1],
             geometry: crate::inspection::EdgeGeometry::Line(points),
         });
-        let mut camera = crate::viewport::Camera::rack([40.0, 1.0, 1.0]);
+        let mut camera = crate::viewport::Camera::for_dimensions([40.0, 1.0, 1.0]);
         camera.target = Vec3::new(20.0, 0.0, 0.0);
         let mut previous: Option<egui::Pos2> = None;
         for distance in 200..=400 {
@@ -1238,7 +1238,7 @@ mod tests {
 
     #[test]
     fn dimension_labels_follow_edges_stay_upright_and_merge_matching_checks() {
-        let camera = crate::viewport::Camera::rack([40.0, 30.0, 20.0]);
+        let camera = crate::viewport::Camera::for_dimensions([40.0, 30.0, 20.0]);
         let annotations = Annotations {
             faces: Vec::new(),
             measurements: vec![Measurement {

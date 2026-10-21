@@ -1,8 +1,10 @@
+#![cfg(test)]
+
+mod exports;
+
 use glam::{DVec3, dvec3};
-#[cfg(feature = "reference")]
 use opencascade::primitives::Shape;
 
-#[cfg(feature = "reference")]
 pub mod printing;
 
 pub const CABINET_DIMENSIONS_MM: DVec3 = dvec3(493.0, 293.0, 322.0);
@@ -104,7 +106,6 @@ impl RackParameters {
     }
 }
 
-#[cfg(feature = "reference")]
 pub fn build_rack(parameters: RackParameters) -> Result<Shape, String> {
     let layout = parameters.layout()?;
     let width_mm = layout.dimensions_mm.x;
@@ -148,7 +149,6 @@ pub fn build_rack(parameters: RackParameters) -> Result<Shape, String> {
     Ok(rack.union(&back).clean())
 }
 
-#[cfg(all(test, feature = "reference"))]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;

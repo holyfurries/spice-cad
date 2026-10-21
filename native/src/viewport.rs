@@ -26,7 +26,7 @@ impl Camera {
             ((bounds[1] - bounds[0]).length() * 1.7 / aspect.min(1.0)).clamp(10.0, 5000.0);
     }
 
-    pub fn rack(dimensions: [f64; 3]) -> Self {
+    pub fn for_dimensions(dimensions: [f64; 3]) -> Self {
         let size = Vec3::new(
             dimensions[0] as f32,
             dimensions[1] as f32,
@@ -807,7 +807,7 @@ mod tests {
             "cad.show('box',cad.box({width=10,depth=20,height=30}))",
             1,
         )?;
-        let mut camera = Camera::rack([10.0, 20.0, 30.0]);
+        let mut camera = Camera::for_dimensions([10.0, 20.0, 30.0]);
         camera.frame(snapshot.scene.bounds, 1.0);
         let mut views = Views::new(camera);
         let geometry = Arc::clone(&snapshot.scene.display);

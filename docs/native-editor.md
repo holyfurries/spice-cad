@@ -42,25 +42,14 @@ nix develop -c cargo run --release --locked
 It uses egui/wgpu and native SMLib, with no browser, WebView, or WASM runtime.
 Launch without arguments for the Luau workspace and the four-part spice rack;
 use `-- --model FILE.luau` to open another model. The normal executable links
-SMLib without OpenCascade. The optional rack-tools build provides the older rack
-configurator and kernel comparison:
-
-```sh
-nix run .#spice-cad-rack-tools -- --rack
-```
-
-From the development shell, use
-`cargo run --release --locked -p spice-cad --features rack-tools -- --rack`. The
-original rack export CLI is explicitly selected with
-`cargo run --locked -p spice-rack`. The starter source is embedded in the
+SMLib without OpenCascade. The starter source is embedded in the
 executable and created once at
 `$XDG_DATA_HOME/spice-cad/models/spice-rack-measurements.luau`, or under
 `~/.local/share/spice-cad/models/` when `XDG_DATA_HOME` is unset. Existing edits
 are preserved; installed applications do not need the source checkout.
 **File → Examples → Spice rack · four parts** opens four named, colored rack pieces
-with the same dovetail dimensions and 0.2 mm clearance as the dedicated rack
-exporter. Set `separation = 0` to inspect the assembly, or increase it to expose
-the joints. Use **Assembly / Print layout** with the viewport tools to inspect either
+with 0.2 mm dovetail clearance. Set `separation = 0` to inspect the assembly, or
+increase it to expose the joints. Use **Assembly / Print layout** with the viewport tools to inspect either
 arrangement. **File → Export → 3D print · STEP + STL** always exports the four
 bed-oriented parts, regardless of the displayed layout. `parts.json` maps the
 numbered files to their part names; slice each part separately. The original
@@ -92,50 +81,29 @@ shading and dark CAD edge outlines make curved faces and boundaries easier to
 read. **Surface edges** toggles outlines; **Width** adjusts their thickness.
 Outlines follow kernel curves, hide occluded edges, and omit triangle diagonals
 and periodic surface seams. Curved faces use smooth shading across their mesh
-facets. Dimension edits in the rack configurator rebuild on a dedicated geometry
+facets. Source and parameter edits rebuild on a dedicated geometry
 worker after a short debounce. Camera movement and selection reuse the GPU
-buffers; validated jar-height and cabinet-gap changes reuse geometry. Invalid
+buffers; placement-only edits reuse geometry. Invalid
 edits keep the previous valid preview and disable printing export. The UI CPU
 timing under **Performance** excludes GPU rendering and presentation; it is not
 a total-frame or input-latency measurement.
 
-## Legacy rack tools
+## Native architecture and verification
 
-In the rack-tools build, **Export P1S parts** writes four rack parts, four fit
-samples, and an assembled STEP to `output/native/`. Print parts are checked for
-closed, oriented meshes, P1S bounds, and above-bed overhangs before files are
-written. This export uses the existing OpenCascade implementation. The legacy
-`--rack` viewport shows the unsplit rack blank; the default Luau example shows
-four printable parts. Joint clearance remains 0.2 mm in the native app.
-[Luau projects](luau-projects.md) support local modules. A separate project-file
-format, interactive sketches, feature history, and manual edge editing remain
-future work.
+`native/src/model.rs` owns Luau recipes, `kernel.rs` the SMLib binding,
+`viewport.rs` the persistent GPU renderer, and `mesh.rs` mesh validation and
+picking. SMLib handles stay on one geometry worker; its global context is
+serialized. Mesh extraction includes cavity shells and corrects their winding
+using the source regions' void flags. Rack geometry lives in the same Luau
+example files used by the editor and export CLI.
 
-`src/lib.rs` owns shared rack parameters and the OpenCascade reference model;
-`src/main.rs` remains the export CLI. `native/src/kernel.rs` contains the SMLib
-binding and mesh extraction, `viewport.rs` the persistent GPU renderer, and
-`mesh.rs` mesh checks and face picking. SMLib handles stay on one worker thread;
-its global context is serialized. Mesh extraction includes cavity shells and
-corrects their winding using the source regions' void flags.
-
-To compare native kernels on the default rack blank:
-
-```sh
-nix develop -c cargo run --release --locked -p spice-cad --features rack-tools -- --benchmark
-```
-
-The command discards the first paired build and reports six warm samples in
-`output/native/benchmark.json`, with geometry and tessellation/audit times
-separate. It verifies mesh closure and volume against SMLib's exact solid and
-the OpenCascade reference. This planar box-union workload does not establish
-performance on curved surfaces or fillets. See `evaluation/native-results.json`
-for recorded checks. Run native and reference tests with
-`cargo test --workspace --locked`, and lint with
-`cargo clippy --workspace --all-targets --locked -- -D warnings` inside
-`nix develop`.
-Tests default to one test thread through `.cargo/config.toml` because native
-fixtures share SMLib's global context; this avoids unrelated fixture contention
-consuming worker-response timeouts.
+Run normal tests with `nix develop -c cargo test --locked` and lint with
+`nix develop -c cargo clippy --locked --all-targets -- -D warnings`.
+These do not depend on OpenCascade. A separate test-only workspace package
+reopens native exports with OpenCascade and compares independent reference
+fixtures; see [kernel verification](kernels.md#independent-verification).
+Tests default to one thread through `.cargo/config.toml` to avoid contention
+on SMLib's global context consuming worker-response timeouts.
 
 ## Editing Luau models
 

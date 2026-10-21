@@ -630,38 +630,6 @@ impl Kernel {
             _kernel: self,
         })
     }
-
-    pub fn rack(&self, parameters: spice_rack::RackParameters) -> Result<Body<'_>, String> {
-        let layout = parameters.layout()?;
-        let width = layout.dimensions_mm.x;
-        let depth = layout.dimensions_mm.y;
-        let thickness = parameters.thickness_mm;
-        let mut rack = self.box_shape([0.0; 3], [width, depth, thickness])?;
-        for index in 0..parameters.step_count {
-            let y = f64::from(index) * layout.tread_depth_mm;
-            let z = f64::from(index) * parameters.step_rise_mm;
-            let height = z + thickness + parameters.lip_height_mm;
-            for x in [0.0, width - thickness] {
-                rack.union(self.box_shape(
-                    [x, y, 0.0],
-                    [x + thickness, y + layout.tread_depth_mm, height],
-                )?)?;
-            }
-            rack.union(self.box_shape(
-                [0.0, y, z],
-                [width, y + layout.tread_depth_mm, z + thickness],
-            )?)?;
-            rack.union(self.box_shape(
-                [0.0, y, z - parameters.step_rise_mm.min(z)],
-                [width, y + thickness, height],
-            )?)?;
-        }
-        rack.union(self.box_shape(
-            [0.0, depth - thickness, 0.0],
-            layout.dimensions_mm.to_array(),
-        )?)?;
-        Ok(rack)
-    }
 }
 
 impl Body<'_> {

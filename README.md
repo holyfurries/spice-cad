@@ -63,11 +63,13 @@ Use **File → Export**:
 ```sh
 nix develop
 cargo run --release --locked
-cargo test --locked --workspace --all-features
+cargo test --locked
 ```
 
 The native app is the default Cargo target. This is an actively developed tool;
 the Nix package currently targets Linux.
+Independent OpenCascade checks live in test-only tooling; see
+[kernel verification](docs/kernels.md#independent-verification).
 
 ## Guides
 

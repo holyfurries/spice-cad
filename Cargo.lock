@@ -2704,22 +2704,21 @@ dependencies = [
  "glam",
  "libc",
  "mlua",
- "opencascade",
  "png",
  "ropey",
  "serde_json",
- "spice-rack",
  "tree-sitter",
  "tree-sitter-luau",
  "url",
 ]
 
 [[package]]
-name = "spice-rack"
+name = "spice-cad-verification"
 version = "0.1.0"
 dependencies = [
  "glam",
  "opencascade",
+ "serde_json",
 ]
 
 [[package]]

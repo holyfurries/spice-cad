@@ -3,8 +3,8 @@
 Keep this directory, the root `LICENSE` and `NOTICE`, and the brand terms with
 distributed builds. Nix installs them under `share/doc/spice-cad/`.
 
-`RUST-DEPENDENCIES.txt` is generated from `Cargo.lock`, including optional
-reference tools and build dependencies, for x86-64 and ARM64 Linux. It is a
+`RUST-DEPENDENCIES.txt` is generated from the native application's dependency graph
+in `Cargo.lock`, including build dependencies, for x86-64 and ARM64 Linux. It is a
 conservative inventory, not a claim that every listed crate is linked into
 each executable. Native kernel, font, and Unicode notices are collected
 separately because Cargo metadata does not fully describe their contents.
@@ -69,8 +69,8 @@ identifies its published license declaration and author attribution.
 - `fonts/` copies every `.txt` license/notice from
   `epaint_default_fonts 0.37.0/fonts/`, including the Hack/Bitstream, Noto, Ubuntu,
   and emoji/icon notices. These fonts retain their original licenses.
-- OpenCascade 7.8.1's LGPL text and exception apply to the optional reference
-  tools. Their source is pinned in the Nix environment; [rebuild instructions](../docs/kernels.md)
+- OpenCascade 7.8.1's LGPL text and exception apply to the separate test-only
+  verification package. Its source is pinned in the verification Nix shell; [rebuild instructions](../docs/kernels.md)
   explain how to modify the reference libraries. The default application does
   not link OpenCascade.
 

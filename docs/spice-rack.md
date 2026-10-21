@@ -1,14 +1,11 @@
-# Spice rack reference
+# Spice rack
 
 [← Spice CAD](../README.md) · Commands run from the repository root.
 
-This page covers the original rack export CLI. The native app's four-part
-example lives in [`models/rack-parts.luau`](../models/rack-parts.luau).
-
-The reference model is written in Rust, using the open-source
-[opencascade-rs](https://github.com/bschwind/opencascade-rs) bindings and
-[OpenCascade](https://github.com/Open-Cascade-SAS/OCCT) geometry kernel. Model
-generation and export run from the command line; no GUI modeling is required.
+The printable model is [`models/rack-parts.luau`](../models/rack-parts.luau).
+Open it in the native app, adjust Properties, and export with SMLib. The unsplit
+blank in `models/rack.luau` is a construction example. Independent OpenCascade
+fixtures remain in test-only verification.
 
 ## Cabinet measurements
 
@@ -50,75 +47,58 @@ neighboring jars still need checking.
 
 ## Generate the model
 
+The native app opens the four-part rack by default. Choose **File → Export →
+3D print · STEP + STL** to export each part in its print placement, or run:
+
 ```sh
-nix develop
-cargo run --locked -p spice-rack
+nix develop -c cargo run --release --locked -- --export-model models/rack-parts.luau output/rack
 ```
 
-The first run downloads the pinned environment and compiles the Rust
-dependencies. Later runs reuse the build. Alternatively, run
-`nix develop -c cargo run --locked -p spice-rack` without entering a shell.
-
-Exports land in `output/`:
-
-- `spice-rack.step`: assembled CAD geometry for inspection in FreeCAD or other
-  CAD software.
-- `spice-rack-{front,rear}-{left,right}.stl`: four rack parts, already oriented
-  for printing.
-- `spice-rack-fit-{width,depth}-{male,female}.stl`: two pairs of small joint fit
-  samples.
-- Each part and sample also has a STEP file in its print orientation.
-
-STL is unitless; import as millimetres. The generator removes the old
-single-piece `spice-rack.stl` after writing the new exports. Print the named
-part STLs rather than the assembled preview.
-
-STEP carries the resulting geometry. The parameters and construction logic
-remain in the Rust source, rather than a GUI feature history.
+Choose a new directory for each export. It contains `part-01` through `part-04`
+STEP/STL files, `parts.json` mapping names to files, the exact Luau source, and
+print-check reports. The STEP files describe individual parts in print placement.
+For an assembled preview, use Assembly in the viewport or export a game-asset GLB.
+Import STLs into the slicer as millimetres and print separate parts.
 
 ## Adjust the design
 
-Edit `PARAMETERS` near the top of `src/lib.rs`, then run
-`cargo run --locked -p spice-rack` again. All lengths are millimetres. X is
-width, Y is depth from front to back, and Z is height.
+Edit the declarations near the top of `models/rack-parts.luau`, or use the
+Properties controls. All lengths are millimetres: X is width, Y is depth from
+front to back, and Z is height.
 
-| Parameter              | Default | Meaning                                                                  |
-| ---------------------- | ------: | ------------------------------------------------------------------------ |
-| `rack_width_mm`        |     310 | Total rack width                                                         |
-| `step_count`           |       5 | Number of rising steps                                                   |
-| `step_rise_mm`         |      42 | Height difference between steps                                          |
-| `jar_diameter_mm`      |      50 | Widest jar diameter, including its lid                                   |
-| `jar_height_mm`        |     135 | Measured jar height, including its lid                                   |
-| `clearance_mm`         |     1.5 | Gap between jars and around jar footprints                               |
-| `cabinet_clearance_mm` |       5 | Minimum spare depth and height; also checked against total cabinet width |
-| `thickness_mm`         |       3 | Platform, side, base, and riser thickness                                |
-| `lip_height_mm`        |       8 | Retaining lip height above each platform                                 |
+| Parameter | Default | Meaning |
+| --- | ---: | --- |
+| `width` | 310 | Total rack width |
+| `steps` | 5 | Number of rising steps |
+| `rise` | 42 | Height difference between steps |
+| `jar_diameter` | 50 | Widest jar diameter |
+| `jar_spacing` | 1.5 | Jar spacing |
+| `wall` | 3 | Platform, side, base, and riser thickness |
+| `lip` | 8 | Retaining lip height |
+| `joint_clearance` | 0.2 | Dovetail pocket enlargement |
+| `separation` | 12 | Displayed part separation; print geometry is unchanged |
 
 Each tread is 56 mm deep, with 53 mm clear behind its front lip. The rack fits
 five 50 mm jars per step, for **25 largest-size jars**. Smaller jars may allow
 more capacity. Jar geometry is omitted from exports.
 
 The base, stepped side panels, platforms, and risers form a hollow structure
-under the raised treads. The spice jar height is checked, including room to lift
-vertically over the lips. Dimensions exceeding the cabinet allowances cause an
-error before export.
+under the raised treads. The rack splits halfway across its width and after the
+third step. Integral dovetails join its base, platforms, and outer side panels.
+The source declares assembly and bed-oriented print placements separately.
 
-The rack is split halfway across its width and after the third step. Its four
-parts use integral dovetails in the base, platforms, and outer side panels. The
-assembled dimensions and jar capacity stay the same. `src/printing.rs`
-constructs the joints, splits the geometry, and positions each part on its outer
-side panel for printing. `build_rack` constructs the unsplit geometry.
-
-The model checks finite dimensions, bounded step counts, jar footprints, and the
-cabinet envelope before invoking the kernel. The hinge is recorded above but not
-modeled because its full footprint is unknown. Change `build_rack` when the
-arrangement itself needs to change.
+The cabinet/jar clearances above describe the default design. Recheck them when
+changing parameters; the current Luau example does not dynamically simulate jar
+lifting or hinge interference. The source validates joint dimensions and step
+counts, while export checks bed placement, mesh closure, and the printer envelope.
+The independent verification fixtures check the default rack's jar and lifting
+clearances, joint movement, and print orientations.
 
 ## Print and assemble on the P1S
 
 The [P1S build volume](https://bambulab.com/en-us/p1p) is 256 × 256 × 256 mm.
-The generator limits each print footprint to 246 × 246 mm, leaving at least 5 mm
-on each side when centered on the plate. With the default dimensions:
+Exports must fit that envelope. Leave room for brims and other slicer additions.
+The default parts fit within a 246 mm footprint, with these dimensions:
 
 | Part        | Print dimensions, X × Y × Z |
 | ----------- | --------------------------- |
@@ -127,19 +107,16 @@ on each side when centered on the plate. With the default dimensions:
 | Front right | 95 × 174 × 155 mm           |
 | Rear right  | 179 × 115 × 155 mm          |
 
-1. Print both male/female fit pairs using the intended filament profile. Keep
-   their exported orientations; the width pair tests a joint printed vertically
-   and the depth pair tests one printed flat. A brim can help the narrow width
-   samples.
-1. Dry-fit the samples by sliding across their plate thickness. Adjust
-   `JOINT_CLEARANCE_MM` in `src/printing.rs` and regenerate if needed. Its
-   default is 0.2 mm enlargement of the pocket profile. The samples should slide
-   together without forcing or cracking; actual fit depends on material and
-   calibration.
+1. Print **File → Examples → Fit gauge** with the intended filament for baseline
+   clearance calibration. Test a small section of the actual dovetail before
+   committing to all four rack parts; the generic fit gauge is not that joint.
+1. Adjust `joint_clearance` in Properties or the Luau source if needed. Its
+   default is 0.2 mm pocket enlargement. Joints should slide together without
+   forcing or cracking; actual fit depends on material and calibration.
 1. Import each rack STL into Bambu Studio at 100% scale and center it on the
    plate. Keep the exported orientation, with the broad outer side panel on the
-   bed. The geometry is designed for supports off; tests check all above-bed
-   faces against a 45° overhang limit. Check the sliced preview before printing.
+   bed. The default reference fixtures pass a 45° above-bed overhang check.
+   Changed dimensions still need slicer review. Check the sliced preview before printing.
    Filament and final wall/infill settings have not yet been selected.
 1. Turn the parts upright. For each left/right half, align the front section's
    two side-panel dovetails with the rear section's pockets. Start the rear
@@ -158,13 +135,14 @@ two dovetails; the generator reports an error otherwise.
 ## Check changes
 
 ```sh
-cargo fmt --all
-nix fmt flake.nix
-cargo test --workspace --locked
-cargo clippy --workspace --locked --all-targets -- -D warnings
+nix develop -c cargo fmt --all
+nix develop -c cargo test --locked
+nix develop -c cargo clippy --locked --all-targets -- -D warnings
+nix develop -c cargo build --locked
+nix develop .#verification -c cargo test --locked -p spice-cad-verification
 ```
 
-Tests check invalid parameters and cabinet collisions, verify closed and
+Independent verification fixtures check invalid parameters and cabinet collisions, verify closed and
 consistently oriented assembled meshes in two configurations, and intersect all
 25 jar positions and their vertical lifting volumes against the assembled rack
 to prove clear space. They also check every part/sample mesh, print dimensions,

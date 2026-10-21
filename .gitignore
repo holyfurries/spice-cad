@@ -18,7 +18,8 @@
 !/deny.toml
 !/.cargo/config.toml
 
-!/src/**/*.rs
+!/verification/Cargo.toml
+!/verification/src/**/*.rs
 !/native/Cargo.toml
 !/native/build.rs
 !/native/assets/spice-cad.svg

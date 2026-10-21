@@ -1,29 +1,8 @@
-[package]
-name = "spice-rack"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
-publish = false
-license = "MIT"
-
 [workspace]
-members = ["native"]
+members = ["native", "verification"]
 default-members = ["native"]
 resolver = "3"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
-
-[features]
-default = ["reference"]
-reference = ["dep:opencascade"]
-
-[[bin]]
-name = "spice-rack"
-path = "src/main.rs"
-required-features = ["reference"]
-
-[dependencies]
-glam = "=0.24.2"
-opencascade = { version = "=0.3.0", default-features = false, optional = true }

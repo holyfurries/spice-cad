@@ -382,8 +382,8 @@ remain mandatory. The scripting environment exposes no general file/process
 access. [Local typed modules](luau-projects.md) use bounded, captured imports
 within the project directory. Validated geometry and meshes are reused when
 their inputs match. Interactive sketch editing and per-part pivots are not
-implemented. The existing P1S rack
-export remains available in the rack-tools build with `--rack`.
+implemented. The four-part P1S rack is a normal Luau example; export it through
+the same File menu or CLI as any other model.
 
 Format source with `cargo fmt --all`, Luau files with
 `stylua --syntax Luau models native/types`, and Nix with `nixfmt flake.nix`, all
