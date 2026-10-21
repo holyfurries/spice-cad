@@ -56,6 +56,10 @@ nix develop .#verification -c cargo clippy --locked -p spice-cad-verification --
 The suite invokes `target/debug/spice-cad` to construct and export Luau models.
 Set `SPICE_CAD_BIN` to an absolute executable path when using a custom Cargo
 target directory or testing a release build. Missing executables fail explicitly.
+`SPICE_CAD_ARTIFACTS` chooses the fixture directory; unsuccessful fixtures retain
+their source, exports, and command logs. Successful fixtures are explicitly
+removed after all assertions pass. CI uses the packaged AppImage through a
+container adapter; it does not rebuild a debug application for verification.
 Checks reopen STEP files with OpenCascade and validate the imported B-rep with
 `BRepAlgo::IsValid` (the standard `BRepCheck_Analyzer`), including geometric
 checks. Volume comes directly from surfaces using adaptive Gauss–Kronrod
@@ -85,7 +89,8 @@ repair geometry before validation.
 
 The default and CI Nix shells exclude OpenCascade. `.#verification` supplies
 OpenCascade 7.8.1, its CMake setup, and the runtime libraries. Version-tag CI runs
-this suite in a separate job that gates packaging; routine push/PR jobs run the
+this suite against the packaged download in a separate job that gates draft
+release creation; routine push/PR jobs run the
 native suite. Use the verification shell for an intentional full-workspace test.
 
 ## Modify the verification engine

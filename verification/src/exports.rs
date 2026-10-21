@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -17,8 +17,11 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str, source: &str) -> Result<Self, Box<dyn Error>> {
-        let directory =
-            std::env::temp_dir().join(format!("spice-verification-{}-{name}", std::process::id()));
+        let root = std::env::var_os("SPICE_CAD_ARTIFACTS")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        std::fs::create_dir_all(&root)?;
+        let directory = root.join(format!("spice-verification-{}-{name}", std::process::id()));
         std::fs::create_dir(&directory)?;
         let fixture = Self { directory };
         std::fs::write(fixture.source(), source)?;
@@ -39,11 +42,13 @@ impl Fixture {
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/debug/spice-cad")
             });
         let mut command = Command::new(&binary);
+        let stdout_path = self.directory.join(format!("{flag}.stdout.log"));
+        let stderr_path = self.directory.join(format!("{flag}.stderr.log"));
         command
             .arg(flag)
             .arg(self.source())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(std::fs::File::create(&stdout_path)?)
+            .stderr(std::fs::File::create(&stderr_path)?);
         if flag == "--export-model" {
             command.arg(self.exports());
         }
@@ -65,16 +70,17 @@ impl Fixture {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
+        let status = child.wait()?;
+        let stdout = fixture_log(&stdout_path)?;
+        let stderr = fixture_log(&stderr_path)?;
+        if !status.success() {
             return Err(format!(
-                "{flag} failed: {}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+                "{flag} failed ({status}) for {}: {stdout}\n{stderr}",
+                self.source().display()
             )
             .into());
         }
-        Ok(String::from_utf8(output.stdout)?)
+        Ok(stdout)
     }
 
     fn volume(&self) -> Result<f64, Box<dyn Error>> {
@@ -90,16 +96,46 @@ impl Fixture {
             .ok_or("Missing volume value")?
             .parse()?)
     }
+
+    fn finish(self) -> TestResult {
+        std::fs::remove_dir_all(self.directory)?;
+        Ok(())
+    }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        match std::fs::remove_dir_all(&self.directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => eprintln!("Verification: temporary directory cleanup failed: {error}"),
-        }
+fn fixture_log(path: &Path) -> Result<String, Box<dyn Error>> {
+    if std::fs::metadata(path)?.len() > 1024 * 1024 {
+        return Err(format!("Model command log exceeds 1 MiB: {}", path.display()).into());
     }
+    Ok(std::fs::read_to_string(path)?)
+}
+
+#[test]
+fn failed_commands_preserve_source_and_logs() -> TestResult {
+    let fixture = Fixture::new("failed-command", "this is invalid Luau")?;
+    let directory = fixture.directory.clone();
+    assert!(fixture.run("--check-model").is_err());
+    drop(fixture);
+    assert_eq!(
+        std::fs::read_to_string(directory.join("model.luau"))?,
+        "this is invalid Luau"
+    );
+    let stdout = directory.join("--check-model.stdout.log");
+    let stderr = directory.join("--check-model.stderr.log");
+    assert!(stdout.is_file());
+    assert!(stderr.is_file());
+    assert!(std::fs::metadata(stdout)?.len() + std::fs::metadata(stderr)?.len() > 0);
+    std::fs::remove_dir_all(directory)?;
+    Ok(())
+}
+
+#[test]
+fn successful_fixtures_are_removed() -> TestResult {
+    let fixture = Fixture::new("successful-command", "")?;
+    let directory = fixture.directory.clone();
+    fixture.finish()?;
+    assert!(!directory.try_exists()?);
+    Ok(())
 }
 
 fn inspect_step(path: &Path) -> Result<(f64, [DVec3; 2]), Box<dyn Error>> {
@@ -265,6 +301,7 @@ fn exported_sections_match_independent_cavity_and_bushing_fixtures() -> TestResu
                 }
             }
         }
+        fixture.finish()?;
     }
     Ok(())
 }
@@ -291,6 +328,7 @@ fn section_comparison_detects_equal_volume_and_bounds_with_a_misplaced_cavity() 
     let difference =
         section_difference_area_mm2(&section(&actual, 4.0)?, &section(&reference, 4.0)?);
     assert!((difference - 16.0).abs() < 1e-6);
+    fixture.finish()?;
     Ok(())
 }
 
@@ -309,6 +347,7 @@ fn rejects_self_intersecting_brep_before_measuring_volume() -> TestResult {
     let raw = opencascade_sys::b_rep_tools::read(path.to_string_lossy().into_owned());
     let error = crate::geometry::validate(&raw).expect_err("Reject the bow-tie wire");
     assert!(error.to_string().contains("Invalid STEP B-rep"), "{error}");
+    fixture.finish()?;
     Ok(())
 }
 
@@ -323,6 +362,7 @@ fn rejects_step_surfaces_without_closed_volume() -> TestResult {
         error.to_string().contains("STEP volume integration failed"),
         "{error}"
     );
+    fixture.finish()?;
     Ok(())
 }
 
@@ -388,6 +428,7 @@ fn curved_step_exports_reopen_with_matching_volumes_bounds_and_closed_meshes() -
                 .max_element()
                 < 0.2
         );
+        fixture.finish()?;
     }
     Ok(())
 }
@@ -440,6 +481,7 @@ fn luau_rack_matches_independently_constructed_reference_geometry() -> TestResul
             })
             .sum();
         assert!((fixture.volume()? - volume).abs() < volume * 1e-6);
+        fixture.finish()?;
     }
     let fixture = Fixture::new("rack-parts", include_str!("../../models/rack-parts.luau"))?;
     fixture.run("--export-model")?;
@@ -465,6 +507,7 @@ fn luau_rack_matches_independently_constructed_reference_geometry() -> TestResul
         let (_, dimensions) = part.on_bed()?;
         assert!((bounds[1] - bounds[0] - dimensions).abs().max_element() < 0.001);
     }
+    fixture.finish()?;
     Ok(())
 }
 
@@ -486,6 +529,7 @@ fn step_exports_use_print_placements_instead_of_assembly_placements() -> TestRes
         );
         assert!((bounds[0].x - (index - 1) as f64 * 40.0).abs() < 0.001);
     }
+    fixture.finish()?;
     Ok(())
 }
 
@@ -525,6 +569,7 @@ fn multipart_step_exports_preserve_native_volumes_and_part_counts() -> TestResul
             (total - expected).abs() < expected * 0.002,
             "{name}: STEP {total}, native {expected}"
         );
+        fixture.finish()?;
     }
     Ok(())
 }

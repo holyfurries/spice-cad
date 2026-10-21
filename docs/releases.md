@@ -47,11 +47,23 @@ skip native builds. Nix tools/kernel and Cargo dependencies have separate caches
 CI disables debug symbols and incremental compilation and uses lld for test
 linking; production release optimization is unchanged. Native tools are cached
 before Rust compilation so a later failure does not discard that build.
-These jobs use SMLib without OpenCascade. A separate verification job runs on
-version tags: it builds the actual app, reopens its STEP exports with OpenCascade,
-and checks volumes, bounds, closed meshes, print placements, and independent rack
-fixtures. Verification must pass before packaging. Its Nix cache is separate;
-the Cargo dependency cache is shared with native checks.
+These jobs use SMLib without OpenCascade. On version tags, packaging runs in
+parallel with native lint and tests. A separate verification job downloads that
+exact AppImage artifact, checks its SHA-256 checksum, and extracts it once in a
+network-isolated container with no host Nix store. The full independent suite
+invokes the packaged app through `verification/src/bin/packaged-app.rs` and
+reopens its STEP exports with OpenCascade outside the container. Checks include
+B-rep validity, surface volumes, cross-sections, closed meshes, dimensions, part
+counts, print placements, and independent rack fixtures. Native checks, packaging,
+and packaged verification must all pass before draft release creation. Verification
+has a separate Nix cache; the Cargo dependency cache is shared with native checks.
+
+Failed verification uploads `spice-cad-verification-failure` for 14 days. It
+contains the suite log, extraction/container logs, and failed fixture directories
+with their Luau source, command stdout/stderr, and available exports. Successful
+fixtures are removed. Set `SPICE_CAD_ARTIFACTS` to an absolute directory to choose
+where local failures are retained; otherwise fixtures remain in the test process's
+temporary directory. The console failure identifies the fixture or command path.
 
 AppImages are built only when a `v*` version tag is pushed.
 These runs upload a download artifact with SHA-256 checksums
