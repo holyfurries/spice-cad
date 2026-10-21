@@ -2240,20 +2240,19 @@ impl eframe::App for Editor {
                             );
                             ui.separator();
                         }
-                        let command;
-                        let message = if self.code_state.modal.mode == modal::Mode::Command {
-                            command = format!(":{}", self.code_state.modal.command);
-                            command.as_str()
-                        } else {
-                            self.code_state
-                                .error
-                                .or(self.code_state.modal.error)
-                                .unwrap_or(&self.message)
-                        };
                         ui.allocate_ui_with_layout(
                             ui.available_size(),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
+                                if self.code_state.modal.mode == modal::Mode::Command {
+                                    interface::vim_command(ui, &self.code_state.modal.command);
+                                    return;
+                                }
+                                let message = self
+                                    .code_state
+                                    .error
+                                    .or(self.code_state.modal.error)
+                                    .unwrap_or(&self.message);
                                 ui.add(
                                     egui::Label::new(
                                         egui::RichText::new(message)

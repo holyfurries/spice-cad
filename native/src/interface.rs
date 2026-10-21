@@ -14,6 +14,54 @@ pub const ERROR: Color32 = Color32::from_rgb(238, 144, 144);
 pub const SELECTION: Color32 = Color32::from_rgb(44, 63, 90);
 pub const CONTROL_HEIGHT: f32 = 36.0;
 
+pub fn vim_command(ui: &mut egui::Ui, command: &str) {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, 3.0, SELECTION);
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, ACCENT),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.left_center() + egui::vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        "COMMAND",
+        FontId::monospace(11.0),
+        ACCENT,
+    );
+    let hint_width = if rect.width() > 420.0 {
+        painter.text(
+            rect.right_center() - egui::vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            "Enter run · Esc cancel",
+            FontId::proportional(11.0),
+            MUTED,
+        );
+        136.0
+    } else {
+        0.0
+    };
+    let content = egui::Rect::from_min_max(
+        rect.min + egui::vec2(76.0, 3.0),
+        rect.max - egui::vec2(hint_width + 8.0, 3.0),
+    );
+    let text = painter.layout_no_wrap(format!(":{command}"), FontId::monospace(14.0), TEXT);
+    let left = content.left() - (text.size().x + 9.0 - content.width()).max(0.0);
+    let position = egui::pos2(left, rect.center().y - text.size().y * 0.5);
+    let cursor = egui::Rect::from_min_size(
+        egui::pos2(left + text.size().x + 1.0, content.top()),
+        egui::vec2(7.0, content.height()),
+    );
+    let painter = painter.with_clip_rect(content);
+    painter.galley(position, text, TEXT);
+    painter.rect_filled(cursor, 0.0, ACCENT);
+    response
+        .on_hover_text("Vim command line · Enter runs the command · Esc returns to normal mode");
+}
+
 pub fn configure(context: &egui::Context) {
     let mut style = (*context.style_of(egui::Theme::Dark)).clone();
     style
