@@ -49,7 +49,7 @@ the cached geometry. Movement-only cache hits bypass face resolution.
 Three local debug runs of `spice-cad --check-model models/mounting-bracket.luau`
 before and after replacing intermediate tessellation produced these medians:
 
-| Stage | Tessellated selection (`75c31f2`) | Direct B-rep selection |
+| Stage | Tessellated selection (`33a7fd7`) | Direct B-rep selection |
 | --- | ---: | ---: |
 | Kernel construction | 664.0 ms | 83.2 ms |
 | Final display mesh | 307.5 ms | 304.0 ms |

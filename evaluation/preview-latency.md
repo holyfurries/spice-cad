@@ -25,7 +25,7 @@ Opening another document also clears its previous slider timing tag.
 
 Release runs used NVIDIA RTX 3070 Vulkan, an isolated 1400×900 Xvfb window and six
 held back-and-forth separation-slider sweeps, followed by Undo, face selection and
-layout switches. The first run added only phase instrumentation to `a4f2816`:
+layout switches. The first run added only phase instrumentation to `b37f28a`:
 
 | Interval | Median ms | p95 ms |
 | --- | ---: | ---: |

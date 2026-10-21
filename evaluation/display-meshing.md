@@ -37,7 +37,7 @@ No quality settings were relaxed.
 
 Three separate native `--check-model` debug runs per model, with no concurrent
 builds or tests, produced these medians. The baseline executable was built from
-`224dc53`; both executables use the same pinned kernel and development environment.
+`a02c5b8`; both executables use the same pinned kernel and development environment.
 
 | Model | Display before | Display after | Total before | Total after |
 | --- | ---: | ---: | ---: | ---: |
@@ -125,7 +125,7 @@ It repeats validation only to isolate its cost; the production mesh stage
 already contains its validation pass. Do not add the audit time to total
 display preparation.
 
-Three-sample debug audit medians for the bracket compared with `0116693`:
+Three-sample debug audit medians for the bracket compared with `f4e2e1b`:
 
 | Validation metric | Coordinate-pair tree | Compact edge uses |
 | --- | ---: | ---: |

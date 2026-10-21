@@ -46,7 +46,7 @@ holes, and reuse of an unchanged final revision.
 
 ## Integrated comparison
 
-2026-10-20: release builds of `15ad279` (benchmark changes only) and `f69fe8d`
+2026-10-20: release builds of `6d55cbd` (benchmark changes only) and `d8c5079`
 (intermediate cache, volume memo, face features and game validation correction).
 Three sequential baseline/integrated pairs ran on NVIDIA RTX 3070 Vulkan with
 1200×650 application framebuffers in a private 1600×1000 Xvfb display. No builds

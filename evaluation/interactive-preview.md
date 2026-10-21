@@ -51,8 +51,8 @@ and workload before and after the change.
 
 ## Integrated verification
 
-Release comparison on 2026-10-20 used the previous `f69fe8d` executable and
-`9a59d80`, NVIDIA RTX 3070 Vulkan, and a private Xvfb display. Application
+Release comparison on 2026-10-20 used the previous `d8c5079` executable and
+`a884447`, NVIDIA RTX 3070 Vulkan, and a private Xvfb display. Application
 framebuffers were 1200×650. Three baseline/integrated pairs ran sequentially
 without concurrent builds from this task. Other host activity was uncontrolled.
 Each integrated sweep finished with `preview_sweep_quality final=true`, including

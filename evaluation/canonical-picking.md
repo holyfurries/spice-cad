@@ -26,7 +26,7 @@ These are scoped Rust requests, excluding kernel, Lua and driver allocations.
 Grid-based regression tests compare picking with materialized world geometry
 across rotations, both layouts, overlapping parts, near clipping and zoom levels.
 
-A matched release heaptrack workload compared commit `6ec33e0` with this change.
+A matched release heaptrack workload compared commit `43da2b7` with this change.
 Both runs used Xvfb at 1400×900 and the llvmpipe Vulkan renderer. Six held slider
 sweeps produced 278 accepted changes, followed by one Undo and Assembly/Print
 switches. Including initial construction and Undo, each run built 280 models,
