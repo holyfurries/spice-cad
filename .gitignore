@@ -29,6 +29,8 @@
 !/evaluation/*.json
 !/evaluation/*.rs
 !/evaluation/*.html
+!/docs/**/*.md
+!/docs/images/*.png
 
 /target/
 /output/
