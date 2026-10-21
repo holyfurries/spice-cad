@@ -14,7 +14,7 @@ pub enum Target {
 impl Target {
     pub fn description(self) -> &'static str {
         match self {
-            Self::Print => "STEP, STL, and source",
+            Self::Print => "STEP, STL, print checks, and source",
             Self::Game => "GLB game asset and source",
         }
     }

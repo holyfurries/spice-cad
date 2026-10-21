@@ -5,6 +5,9 @@ Choose **File → Examples → Sweep, loft and shell**, or open
 create native SMLib boundary representations and support the existing booleans,
 edge treatments, measurements, previews, and STEP/STL/GLB export.
 
+**File → Examples → Hollow mitered pipe** demonstrates a circular sweep with an
+open bore, controlled by radius, wall, and leg-length sliders.
+
 ## Sweep
 
 `cad.sweep(profile, {path = {{x=0,y=0,z=0}, {x=0,y=0,z=30}, {x=30,y=0,z=30}}})`

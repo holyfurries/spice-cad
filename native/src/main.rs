@@ -92,7 +92,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [flag, path] if flag == "--check-print" => {
             let source = model::read_source(std::path::Path::new(path))?;
             let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
-            let model = model::compile_project_cached(&source, project.as_ref(), &mut analysis::Cache::default())?;
+            let model = model::compile_project_cached(
+                &source,
+                project.as_ref(),
+                &mut analysis::Cache::default(),
+            )?;
             let report = print_preparation::model_report(&model)?;
             println!("{}", serde_json::to_string_pretty(&report.json())?);
             if report.blocked() {
@@ -1780,6 +1784,9 @@ impl eframe::App for Editor {
                         Navigation::RevolvedBushing => {
                             example_requested = Some(document::Example::RevolvedBushing)
                         }
+                        Navigation::MiteredPipe => {
+                            example_requested = Some(document::Example::MiteredPipe)
+                        }
                         Navigation::ShapeOperations => {
                             example_requested = Some(document::Example::ShapeOperations)
                         }
@@ -1896,6 +1903,7 @@ impl eframe::App for Editor {
                             ("Rocket engine assembly", document::Example::RocketEngine),
                             ("Fit gauge", document::Example::FitGauge),
                             ("Sweep, loft and shell", document::Example::ShapeOperations),
+                            ("Hollow mitered pipe", document::Example::MiteredPipe),
                         ] {
                             if ui.button(label).clicked() {
                                 example_requested = Some(example);

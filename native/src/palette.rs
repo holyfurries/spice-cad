@@ -18,6 +18,7 @@ const RESULT_COUNT_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    MiteredPipe,
     ShapeOperations,
     FitGauge,
     Open,
@@ -56,6 +57,7 @@ pub enum Command {
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
+    (Command::MiteredPipe, "Examples: hollow mitered pipe", ""),
     (
         Command::ShapeOperations,
         "Examples: sweep, loft and shell",

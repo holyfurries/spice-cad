@@ -378,10 +378,11 @@ wall-clock timeout on native kernel calls. Primitive sizes and fillet radii are
 0.01–1000 mm; supplied coordinates and translations must stay within ±2000 mm.
 Rotation angles are bounded to ±360000 degrees. Mesh volume checks allow a
 surface-area/chord tolerance for curved tessellation; closure and winding checks
-remain mandatory. The scripting environment exposes no file/process access or
-module imports. Repeated operand recipes are evaluated again; incremental
-geometry caching is not implemented. Interactive sketch editing and per-part
-pivots are not implemented. The existing P1S rack
+remain mandatory. The scripting environment exposes no general file/process
+access. [Local typed modules](luau-projects.md) use bounded, captured imports
+within the project directory. Validated geometry and meshes are reused when
+their inputs match. Interactive sketch editing and per-part pivots are not
+implemented. The existing P1S rack
 export remains available in the rack-tools build with `--rack`.
 
 Format source with `cargo fmt --all`, Luau files with

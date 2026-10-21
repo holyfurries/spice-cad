@@ -91,10 +91,12 @@ a total-frame or input-latency measurement.
 In the rack-tools build, **Export P1S parts** writes four rack parts, four fit
 samples, and an assembled STEP to `output/native/`. Print parts are checked for
 closed, oriented meshes, P1S bounds, and above-bed overhangs before files are
-written. This export uses the existing OpenCascade implementation; the native
-SMLib viewport currently shows the unsplit rack blank. Joint clearance remains
-0.2 mm in the native app. Native project files, interactive sketches, feature
-history, and edge editing are future work.
+written. This export uses the existing OpenCascade implementation. The legacy
+`--rack` viewport shows the unsplit rack blank; the default Luau example shows
+four printable parts. Joint clearance remains 0.2 mm in the native app.
+[Luau projects](luau-projects.md) support local modules. A separate project-file
+format, interactive sketches, feature history, and manual edge editing remain
+future work.
 
 `src/lib.rs` owns shared rack parameters and the OpenCascade reference model;
 `src/main.rs` remains the export CLI. `native/src/kernel.rs` contains the SMLib
