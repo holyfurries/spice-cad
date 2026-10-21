@@ -46,8 +46,8 @@ CI disables debug symbols and incremental compilation and uses lld for test
 linking; production release optimization is unchanged. Native tools are cached
 before Rust compilation so a later failure does not discard that build.
 
-AppImages are built only for version tags or **Actions → Build and package →
-Run workflow**. These runs upload a download artifact with SHA-256 checksums
+AppImages are built only when a `v*` version tag is pushed.
+These runs upload a download artifact with SHA-256 checksums
 and the exact application source. A container with no Nix installation checks
 that the AppImage can analyze, construct, and tessellate a model using its bundled
 dependencies. This is a
