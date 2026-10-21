@@ -1787,6 +1787,12 @@ impl eframe::App for Editor {
                         Navigation::MiteredPipe => {
                             example_requested = Some(document::Example::MiteredPipe)
                         }
+                        Navigation::CurvedLoft => {
+                            example_requested = Some(document::Example::CurvedLoft)
+                        }
+                        Navigation::SmoothSweep => {
+                            example_requested = Some(document::Example::SmoothSweep)
+                        }
                         Navigation::ShapeOperations => {
                             example_requested = Some(document::Example::ShapeOperations)
                         }
@@ -1904,6 +1910,8 @@ impl eframe::App for Editor {
                             ("Fit gauge", document::Example::FitGauge),
                             ("Sweep, loft and shell", document::Example::ShapeOperations),
                             ("Hollow mitered pipe", document::Example::MiteredPipe),
+                            ("Curved lofts", document::Example::CurvedLoft),
+                            ("Smooth hollow sweep", document::Example::SmoothSweep),
                         ] {
                             if ui.button(label).clicked() {
                                 example_requested = Some(example);

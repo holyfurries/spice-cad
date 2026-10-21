@@ -18,6 +18,8 @@ const RESULT_COUNT_MAX: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    CurvedLoft,
+    SmoothSweep,
     MiteredPipe,
     ShapeOperations,
     FitGauge,
@@ -57,6 +59,8 @@ pub enum Command {
 }
 
 pub const COMMANDS: &[(Command, &str, &str)] = &[
+    (Command::CurvedLoft, "Examples: curved lofts", ""),
+    (Command::SmoothSweep, "Examples: smooth hollow sweep", ""),
     (Command::MiteredPipe, "Examples: hollow mitered pipe", ""),
     (
         Command::ShapeOperations,

@@ -3,7 +3,7 @@ use mlua::Table;
 
 #[derive(Clone, PartialEq)]
 pub struct Section {
-    pub polygon: crate::profile::Polygon,
+    pub profile: crate::profile::Profile,
     pub position: [f64; 3],
 }
 
@@ -11,9 +11,33 @@ pub struct Section {
 pub enum Recipe {
     Sweep {
         profile: SweepProfile,
-        path: Vec<[f64; 3]>,
+        path: SweepPath,
     },
-    Loft(Vec<Section>),
+    Loft {
+        sections: Vec<Section>,
+        degree: u32,
+    },
+}
+
+#[derive(PartialEq)]
+pub enum SweepPath {
+    Mitered(Vec<[f64; 3]>),
+    Smooth(Vec<PathSegment>),
+}
+
+#[derive(PartialEq)]
+pub enum PathSegment {
+    Line {
+        start: DVec3,
+        end: DVec3,
+    },
+    Arc {
+        center: DVec3,
+        x_axis: DVec3,
+        y_axis: DVec3,
+        radius: f64,
+        angle: f64,
+    },
 }
 
 #[derive(Clone, PartialEq)]
@@ -100,6 +124,80 @@ pub fn validate_loft_polygon(
     Ok(())
 }
 
+pub fn validate_loft_profile(
+    profile: &crate::profile::Profile,
+    previous: Option<&crate::profile::Profile>,
+) -> mlua::Result<()> {
+    use crate::profile::Profile;
+    if matches!(profile, Profile::Region(_)) {
+        return Err(mlua::Error::runtime(
+            "Loft requires single convex loops; holes and islands are unsupported",
+        ));
+    }
+    if let Profile::Polygon(polygon) = profile {
+        let previous_polygon = previous.and_then(|value| value.polygon().ok());
+        if previous_polygon.is_some_and(|value| value.points.len() != polygon.points.len()) {
+            return Err(mlua::Error::runtime(
+                "Loft profiles must have equal vertex counts and matching vertex order",
+            ));
+        }
+        validate_loft_polygon(polygon, previous_polygon)?;
+    }
+    let segments = profile.segments();
+    let tangent = |segment: &crate::profile::Segment, end: bool| {
+        let point = if end { segment.end } else { segment.start };
+        match segment.center {
+            Some(center) => (point - center).perp().normalize(),
+            None => (segment.end - segment.start).normalize(),
+        }
+    };
+    let mut turning = 0.0;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.angle < 0.0 {
+            return Err(mlua::Error::runtime(
+                "Loft profiles must be convex with counterclockwise arcs",
+            ));
+        }
+        let incoming = tangent(segment, true);
+        let outgoing = tangent(&segments[(index + 1) % segments.len()], false);
+        let angle = incoming.perp_dot(outgoing).atan2(incoming.dot(outgoing));
+        if angle < -1e-7 {
+            return Err(mlua::Error::runtime(
+                "Loft profiles must be convex without reflex corners",
+            ));
+        }
+        turning += segment.angle + angle.max(0.0);
+    }
+    if (turning - std::f64::consts::TAU).abs() > 1e-6 {
+        return Err(mlua::Error::runtime(
+            "Loft profiles must be single convex loops",
+        ));
+    }
+    if let Some(previous) = previous {
+        if matches!(previous, Profile::Region(_)) {
+            return Err(mlua::Error::runtime("Loft requires single convex loops"));
+        }
+        let before = previous.segments();
+        if before.len() != segments.len() {
+            return Err(mlua::Error::runtime(
+                "Loft profiles need matching line/arc counts and order",
+            ));
+        }
+        for (first, second) in before.iter().zip(&segments) {
+            if first.center.is_some() != second.center.is_some()
+                || (first.angle - second.angle).abs() > 1e-7
+                || tangent(first, false).dot(tangent(second, false)) <= 1e-9
+                || tangent(first, true).dot(tangent(second, true)) <= 1e-9
+            {
+                return Err(mlua::Error::runtime(
+                    "Loft sections need corresponding edges, arc angles, and seam directions without twisting",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn array_count(table: &Table, minimum: usize, maximum: usize) -> mlua::Result<usize> {
     let count = table.raw_len();
     if !(minimum..=maximum).contains(&count) {
@@ -148,7 +246,11 @@ pub fn position(table: &Table, require_xy: bool) -> mlua::Result<[f64; 3]> {
     Ok(values)
 }
 
-pub fn path(table: Table, profile: &SweepProfile) -> mlua::Result<Vec<[f64; 3]>> {
+pub fn path(
+    table: Table,
+    profile: &SweepProfile,
+    bend_radius: Option<f64>,
+) -> mlua::Result<SweepPath> {
     let count = array_count(&table, 2, 64)?;
     let mut points = Vec::with_capacity(count);
     for index in 1..=count {
@@ -161,6 +263,18 @@ pub fn path(table: Table, profile: &SweepProfile) -> mlua::Result<Vec<[f64; 3]>>
     let first = vectors[1] - vectors[0];
     let mut length = 0.0;
     let radius = profile.footprint_radius();
+    if let Some(bend) = bend_radius {
+        if !bend.is_finite() || !(0.01..=1000.0).contains(&bend) {
+            return Err(mlua::Error::runtime(
+                "Sweep bend radius must be finite and between 0.01 and 1000 mm",
+            ));
+        }
+        if bend <= radius + 1e-7 {
+            return Err(mlua::Error::runtime(
+                "Sweep bend radius must exceed the profile footprint radius",
+            ));
+        }
+    }
     for index in 1..count {
         let direction = vectors[index] - vectors[index - 1];
         if direction.length() < 0.01 {
@@ -185,7 +299,9 @@ pub fn path(table: Table, profile: &SweepProfile) -> mlua::Result<Vec<[f64; 3]>>
                 return Err(mlua::Error::runtime("Sweep paths must not double back"));
             }
             let tangent_half = ((1.0 - cosine) / (1.0 + cosine)).sqrt();
-            if previous.length().min(direction.length()) <= radius * tangent_half * 2.0 {
+            if bend_radius.is_none()
+                && previous.length().min(direction.length()) <= radius * tangent_half * 2.0
+            {
                 return Err(mlua::Error::runtime(
                     "Sweep segments are too short for the profile and miter angle",
                 ));
@@ -236,19 +352,240 @@ pub fn path(table: Table, profile: &SweepProfile) -> mlua::Result<Vec<[f64; 3]>>
                     distance = distance.min((offset + first * a - second * b).length());
                 }
             }
-            if distance <= radius * 2.0 {
+            if distance <= (radius + bend_radius.unwrap_or(0.0)) * 2.0 {
                 return Err(mlua::Error::runtime(
-                    "Nonadjacent sweep segments must be separated by more than the profile diameter",
+                    "Nonadjacent sweep segments need separation beyond the profile diameter and bend allowance",
                 ));
             }
         }
     }
-    Ok(points)
+    let Some(bend_radius) = bend_radius else {
+        return Ok(SweepPath::Mitered(points));
+    };
+    let mut trims = vec![0.0; count];
+    for index in 1..count - 1 {
+        let incoming = (vectors[index] - vectors[index - 1]).normalize();
+        let outgoing = (vectors[index + 1] - vectors[index]).normalize();
+        let angle = incoming
+            .cross(outgoing)
+            .length()
+            .atan2(incoming.dot(outgoing));
+        if angle > 1e-10 {
+            trims[index] = bend_radius * (angle * 0.5).tan();
+            if trims[index] < 0.01 {
+                return Err(mlua::Error::runtime(
+                    "Sweep bend is too small; remove nearly collinear waypoints",
+                ));
+            }
+        }
+    }
+    for index in 0..count - 1 {
+        if vectors[index].distance(vectors[index + 1]) - trims[index] - trims[index + 1] < 0.01 {
+            return Err(mlua::Error::runtime(
+                "Sweep bend radius leaves insufficient straight length between corners",
+            ));
+        }
+    }
+    let mut segments = Vec::with_capacity(count * 2 - 3);
+    let mut start = vectors[0];
+    for index in 1..count - 1 {
+        let incoming = (vectors[index] - vectors[index - 1]).normalize();
+        let outgoing = (vectors[index + 1] - vectors[index]).normalize();
+        let end = vectors[index] - incoming * trims[index];
+        segments.push(PathSegment::Line { start, end });
+        start = vectors[index] + outgoing * trims[index];
+        if trims[index] > 0.0 {
+            let normal = incoming.cross(outgoing).normalize();
+            let x_axis = incoming.cross(normal);
+            let center = end - x_axis * bend_radius;
+            segments.push(PathSegment::Arc {
+                center,
+                x_axis,
+                y_axis: normal.cross(x_axis),
+                radius: bend_radius,
+                angle: incoming.dot(outgoing).clamp(-1.0, 1.0).acos(),
+            });
+        }
+    }
+    segments.push(PathSegment::Line {
+        start,
+        end: vectors[count - 1],
+    });
+    Ok(SweepPath::Smooth(segments))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{kernel::Kernel, model};
+
+    const ROUNDED_PROFILE: &str = "local function rounded(width:number,height:number,radius:number) return cad.path({start={x=radius,y=0},segments={{to={x=width-radius,y=0}},{to={x=width,y=radius},center={x=width-radius,y=radius}},{to={x=width,y=height-radius}},{to={x=width-radius,y=height},center={x=width-radius,y=height-radius}},{to={x=radius,y=height}},{to={x=0,y=height-radius},center={x=radius,y=height-radius}},{to={x=0,y=radius}},{to={x=radius,y=0},center={x=radius,y=radius}}}}) end\n";
+
+    #[test]
+    fn curved_lofts_keep_exact_sections_volume_closed_mesh_and_step() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        for (source, expected) in [
+            ("cad.show('cone',cad.loft({{profile=cad.circle({radius=5,x=7,y=9}),z=0},{profile=cad.circle({radius=3,x=7,y=9}),z=12,x=2}}))".to_owned(), std::f64::consts::PI * 196.0),
+            (format!("{ROUNDED_PROFILE}local p=rounded(20,12,2); cad.show('rounded',cad.loft({{{{profile=p,z=0}},{{profile=p,z=15,x=3}}}}))"), (240.0 - (4.0 - std::f64::consts::PI) * 4.0) * 15.0),
+            ("local p=cad.circle({radius=4});cad.show('smooth',cad.loft({{profile=p,z=0},{profile=p,z=8},{profile=p,z=16},{profile=p,z=24}},{degree=3}))".to_owned(), std::f64::consts::PI * 16.0 * 24.0),
+        ] {
+            let compiled = model::compile(&source)?;
+            let mut bodies = compiled.build(&kernel)?;
+            let body = &mut bodies[0];
+            let volume = body.volume()?;
+            assert!((volume - expected).abs() < expected * 1e-5, "{volume} != {expected}");
+            let mesh = body.mesh()?.mesh;
+            mesh.validate()?;
+            assert!((mesh.volume_mm3() - expected).abs() < expected * 0.02);
+            assert!(body.step_data("curved-loft")?.contains("CLOSED_SHELL"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rounded_sweeps_have_exact_tangent_bends_in_multiple_planes() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let elbow_length = 60.0 - 20.0 + std::f64::consts::FRAC_PI_2 * 10.0;
+        for (path, length) in [
+            (
+                "{{x=0,y=0,z=0},{x=0,y=0,z=30},{x=30,y=0,z=30}}",
+                elbow_length,
+            ),
+            (
+                "{{x=0,y=0,z=0},{x=0,y=0,z=30},{x=-30,y=0,z=30}}",
+                elbow_length,
+            ),
+            (
+                "{{x=0,y=0,z=0},{x=30,y=0,z=0},{x=30,y=30,z=0}}",
+                elbow_length,
+            ),
+            (
+                "{{x=0,y=0,z=0},{x=18,y=24,z=0},{x=18,y=24,z=30}}",
+                elbow_length,
+            ),
+            (
+                "{{x=0,y=0,z=0},{x=0,y=0,z=60},{x=60,y=0,z=60},{x=60,y=0,z=120}}",
+                180.0 - 40.0 + std::f64::consts::PI * 10.0,
+            ),
+            ("{{x=0,y=0,z=0},{x=18,y=24,z=0}}", 30.0),
+        ] {
+            for (profile, area) in [
+                ("cad.circle({radius=2})", std::f64::consts::PI * 4.0),
+                (
+                    "cad.polygon({{x=-1,y=-2},{x=1,y=-2},{x=1,y=2},{x=-1,y=2}})",
+                    8.0,
+                ),
+            ] {
+                let source =
+                    format!("cad.show('bend',cad.sweep({profile},{{path={path},bend_radius=10}}))");
+                let compiled = model::compile(&source)?;
+                let mut bodies = compiled
+                    .build(&kernel)
+                    .map_err(|error| format!("{path} {profile}: {error}"))?;
+                let body = &mut bodies[0];
+                let expected = area * length;
+                let volume = body.volume()?;
+                assert!(
+                    (volume - expected).abs() < expected * 1e-5,
+                    "{path}: {volume} != {expected}"
+                );
+                let mesh = body.mesh()?.mesh;
+                mesh.validate()?;
+                assert!((mesh.volume_mm3() - expected).abs() < expected * 0.025);
+                assert!(body.step_data("smooth-bend")?.contains("CLOSED_SHELL"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn curved_operations_reject_invalid_matches_degrees_and_bend_clearances() -> Result<(), String>
+    {
+        for source in [
+            "local p=cad.circle({radius=2});cad.show('x',cad.loft({{profile=p,z=0},{profile=p,z=10}},{degree=3}))",
+            "local p=cad.circle({radius=2});cad.show('x',cad.loft({{profile=p,z=0},{profile=p,z=10}},{degree=0}))",
+            "local p=cad.circle({radius=2});cad.show('x',cad.loft({{profile=p,z=0},{profile=p,z=10},{profile=p,z=20},{profile=p,z=30}},{degree=2.5}))",
+            "local p=cad.circle({radius=2});cad.show('x',cad.loft({{profile=p,z=0},{profile=cad.polygon({{x=0,y=0},{x=4,y=0},{x=4,y=4},{x=0,y=4}}),z=10}}))",
+            "local p=cad.profile({loops={cad.circle({radius=4}),cad.circle({radius=2})}});cad.show('x',cad.loft({{profile=p,z=0},{profile=p,z=10}}))",
+        ] {
+            assert!(model::compile(source).is_err(), "{source}");
+        }
+        for radius in ["0", "2", "30", "0/0", "math.huge", "-1"] {
+            let source = format!(
+                "cad.show('x',cad.sweep(cad.circle({{radius=2}}),{{path={{{{x=0,y=0,z=0}},{{x=0,y=0,z=30}},{{x=30,y=0,z=30}}}},bend_radius={radius}}}))"
+            );
+            assert!(model::compile(&source).is_err(), "radius={radius}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn curved_operation_cache_tracks_bend_radius_sections_and_loft_degree() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        for (source, target, replacement) in [
+            (
+                "cad.show('x',cad.sweep(cad.circle({radius=2}),{path={{x=0,y=0,z=0},{x=0,y=0,z=40},{x=40,y=0,z=40}},bend_radius=10}))",
+                "bend_radius=10",
+                "bend_radius=12",
+            ),
+            (
+                "cad.show('x',cad.loft({{profile=cad.circle({radius=6}),z=0},{profile=cad.circle({radius=7}),z=10},{profile=cad.circle({radius=5}),z=20},{profile=cad.circle({radius=4}),z=30}},{degree=1}))",
+                "degree=1",
+                "degree=3",
+            ),
+        ] {
+            let mut cache = model::Cache::new(&kernel);
+            let first = model::compile(source)?;
+            let prepared = cache.prepare(&first)?;
+            let geometry = std::sync::Arc::clone(&prepared.geometry[0]);
+            drop(prepared);
+            let same = model::compile(source)?;
+            let prepared = cache.prepare(&same)?;
+            assert_eq!(prepared.hits, 1);
+            assert!(std::sync::Arc::ptr_eq(&geometry, &prepared.geometry[0]));
+            drop(prepared);
+            let changed = model::compile(&source.replace(target, replacement))?;
+            let prepared = cache.prepare(&changed)?;
+            assert_eq!(prepared.hits, 0);
+            assert!(!std::sync::Arc::ptr_eq(&geometry, &prepared.geometry[0]));
+            assert!((prepared.geometry[0].volume_mm3 - geometry.volume_mm3).abs() > 0.1);
+            drop(prepared);
+            let changed = model::compile(
+                &source
+                    .replace("radius=2", "radius=3")
+                    .replace("radius=6", "radius=8"),
+            )?;
+            let prepared = cache.prepare(&changed)?;
+            assert_eq!(prepared.hits, 0);
+            assert!((prepared.geometry[0].volume_mm3 - geometry.volume_mm3).abs() > 0.1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn curved_examples_build_closed_solids_and_hollow_bends() -> Result<(), String> {
+        for source in [
+            include_str!("../../models/curved-loft.luau"),
+            include_str!("../../models/smooth-sweep.luau"),
+        ] {
+            let snapshot = crate::build_script_snapshot(source, 1)?;
+            snapshot.scene.world_mesh().validate()?;
+            assert!(snapshot.volume_mm3 > 1.0);
+            assert!(snapshot.scene.bounds[0].z.abs() < 0.001);
+        }
+        let source = include_str!("../../models/smooth-sweep.luau");
+        let compiled = model::compile(source)?;
+        let kernel = Kernel::new()?;
+        let mut bodies = compiled.build(&kernel)?;
+        let expected =
+            std::f64::consts::PI * (36.0 - 20.25) * (90.0 - 40.0 + std::f64::consts::PI * 10.0);
+        assert!((bodies[0].volume()? - expected).abs() < expected * 1e-5);
+        assert!(
+            bodies[0]
+                .step_data("hollow-elbow")?
+                .contains("CLOSED_SHELL")
+        );
+        Ok(())
+    }
 
     #[test]
     fn exact_circle_sweeps_preserve_volume_centering_closed_mesh_and_step() -> Result<(), String> {

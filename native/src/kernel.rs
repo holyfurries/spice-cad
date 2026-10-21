@@ -98,6 +98,7 @@ mod ffi {
             curves: &SmCurveArray,
             section_count: usize,
             edge_count: usize,
+            degree: u32,
             result: &mut *mut SmBrep,
         ) -> Result<i64>;
         unsafe fn spice_shell(
@@ -118,6 +119,13 @@ mod ffi {
             radius: f64,
             start_deg: f64,
             end_deg: f64,
+        ) -> Result<UniquePtr<SmCurve>>;
+        fn spice_path_arc(
+            center: &SmVector3d,
+            x_axis: &SmVector3d,
+            y_axis: &SmVector3d,
+            radius: f64,
+            angle_deg: f64,
         ) -> Result<UniquePtr<SmCurve>>;
         fn GetMemoryUsed(self: &SmBrep, allocated: &mut u64) -> u64;
         fn IsManifoldSolid(self: &SmBrep) -> i32;

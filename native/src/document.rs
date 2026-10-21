@@ -140,6 +140,8 @@ impl Drop for Watcher {
 
 #[derive(Clone, Copy)]
 pub enum Example {
+    CurvedLoft,
+    SmoothSweep,
     MiteredPipe,
     ShapeOperations,
     FitGauge,
@@ -163,6 +165,14 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             .join(".local/share"),
     };
     let (name, source) = match example {
+        Example::CurvedLoft => (
+            "curved-loft.luau",
+            include_str!("../../models/curved-loft.luau"),
+        ),
+        Example::SmoothSweep => (
+            "smooth-sweep.luau",
+            include_str!("../../models/smooth-sweep.luau"),
+        ),
         Example::MiteredPipe => (
             "mitered-pipe.luau",
             include_str!("../../models/mitered-pipe.luau"),

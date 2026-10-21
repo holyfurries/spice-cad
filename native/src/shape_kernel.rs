@@ -38,14 +38,20 @@ impl Kernel {
     pub fn path_sweep(
         &self,
         section: &crate::shape_operation::SweepProfile,
-        path: &[[f64; 3]],
+        path: &crate::shape_operation::SweepPath,
     ) -> Result<Body<'_>, String> {
+        let crate::shape_operation::SweepPath::Mitered(path) = path else {
+            let crate::shape_operation::SweepPath::Smooth(segments) = path else {
+                unreachable!()
+            };
+            return self.smooth_sweep(section, segments);
+        };
         let line_count = match section {
             crate::shape_operation::SweepProfile::Polygon(polygon) => polygon.points.len(),
             crate::shape_operation::SweepProfile::Circle { .. } => 0,
         };
         let mut lines = Vec::with_capacity(line_count + path.len());
-        let mut arcs = Vec::with_capacity(if line_count == 0 { 2 } else { 0 });
+        let mut arcs = Vec::with_capacity(usize::from(line_count == 0) * 2);
         let mut profile = ffi::spice_curve_array().map_err(|error| error.to_string())?;
         let mut route = ffi::spice_curve_array().map_err(|error| error.to_string())?;
         match section {
@@ -83,29 +89,180 @@ impl Kernel {
         self.shape_result(result, status, "sweep")
     }
 
-    pub fn loft(&self, sections: &[crate::shape_operation::Section]) -> Result<Body<'_>, String> {
+    fn smooth_sweep(
+        &self,
+        section: &crate::shape_operation::SweepProfile,
+        segments: &[crate::shape_operation::PathSegment],
+    ) -> Result<Body<'_>, String> {
+        use crate::shape_operation::{PathSegment, SweepProfile};
+        assert!(!segments.is_empty());
+        assert!(segments.len() <= 125);
+        let first_tangent = match segments[0] {
+            PathSegment::Line { start, end } => (end - start).normalize(),
+            _ => unreachable!("Smooth paths begin with a straight span"),
+        };
+        let normal = segments
+            .iter()
+            .find_map(|segment| match segment {
+                PathSegment::Arc { x_axis, y_axis, .. } => Some(x_axis.cross(*y_axis).normalize()),
+                _ => None,
+            })
+            .unwrap_or_else(|| first_tangent.any_orthonormal_vector());
+        let vector = |point: glam::DVec3| Vector {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        };
+        let points = match section {
+            SweepProfile::Polygon(polygon) => {
+                let mut minimum = glam::DVec2::splat(f64::INFINITY);
+                let mut maximum = glam::DVec2::splat(f64::NEG_INFINITY);
+                for &point in &polygon.points {
+                    minimum = minimum.min(glam::DVec2::from_array(point));
+                    maximum = maximum.max(glam::DVec2::from_array(point));
+                }
+                let center = (minimum + maximum) * 0.5;
+                polygon
+                    .points
+                    .iter()
+                    .map(|&point| glam::DVec2::from_array(point) - center)
+                    .collect::<Vec<_>>()
+            }
+            SweepProfile::Circle { .. } => Vec::new(),
+        };
+        let mut lines = Vec::with_capacity(points.len());
+        let mut arcs = Vec::with_capacity(usize::from(points.is_empty()) * 2);
+        let mut transformed = [[0.0; 3]; crate::profile::POINT_COUNT_MAX];
+        let mut body: Option<Body<'_>> = None;
+        for segment in segments {
+            lines.clear();
+            arcs.clear();
+            let (origin, tangent) = match segment {
+                PathSegment::Line { start, end } => (*start, (*end - *start).normalize()),
+                PathSegment::Arc {
+                    center,
+                    x_axis,
+                    y_axis,
+                    radius,
+                    ..
+                } => (*center + *x_axis * *radius, *y_axis),
+            };
+            let y_axis = tangent.cross(normal).normalize();
+            let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
+            match section {
+                SweepProfile::Polygon(_) => {
+                    for (target, point) in transformed.iter_mut().zip(&points) {
+                        *target = (origin + normal * point.x + y_axis * point.y).to_array();
+                    }
+                    add_lines(&transformed[..points.len()], true, &mut curves, &mut lines)?;
+                }
+                SweepProfile::Circle { radius } => {
+                    for sense in [1.0, -1.0] {
+                        let arc = ffi::spice_path_arc(
+                            &vector(origin),
+                            &vector(normal * sense),
+                            &vector(y_axis * sense),
+                            *radius,
+                            180.0,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        if arc.is_null() {
+                            return Err("SMLib smooth sweep section failed".into());
+                        }
+                        unsafe { curves.pin_mut().Add(arc.as_ptr().cast_mut()) }
+                            .map_err(|error| error.to_string())?;
+                        arcs.push(arc);
+                    }
+                }
+            }
+            let mut result = std::ptr::null_mut();
+            let status = unsafe {
+                match segment {
+                    PathSegment::Line { start, end } => ffi::SmApiCreateLinearSweep(
+                        &curves,
+                        &vector(tangent),
+                        start.distance(*end),
+                        1,
+                        &mut result,
+                    ),
+                    PathSegment::Arc {
+                        center,
+                        x_axis,
+                        y_axis,
+                        angle,
+                        ..
+                    } => ffi::SmApiCreateRotationalSweep(
+                        &curves,
+                        &vector(*center),
+                        &vector(x_axis.cross(*y_axis)),
+                        angle.to_degrees(),
+                        1,
+                        &mut result,
+                    ),
+                }
+            };
+            let next = self.shape_result(result, status, "smooth sweep span")?;
+            if let Some(body) = body.as_mut() {
+                body.union(next)?;
+            } else {
+                body = Some(next);
+            }
+        }
+        let body = body.expect("Nonempty smooth path");
+        if body.shape.IsManifoldSolid() != 1 || body.volume()? <= 1e-8 {
+            return Err("Smooth sweep did not produce a closed manifold solid".into());
+        }
+        Ok(body)
+    }
+
+    pub fn loft(
+        &self,
+        sections: &[crate::shape_operation::Section],
+        degree: u32,
+    ) -> Result<Body<'_>, String> {
         assert!((2..=16).contains(&sections.len()));
+        assert!((1..=3).contains(&degree));
         let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
-        let mut lines = Vec::with_capacity(sections.len() * sections[0].polygon.points.len());
+        let edge_count = sections[0].profile.segments().len();
+        let mut lines = Vec::with_capacity(sections.len() * edge_count);
+        let mut arcs = Vec::with_capacity(sections.len() * edge_count);
         for section in sections {
             let [x, y, z] = section.position;
-            let points: Vec<_> = section
-                .polygon
-                .points
-                .iter()
-                .map(|point| [point[0] + x, point[1] + y, z])
-                .collect();
-            add_lines(&points, true, &mut curves, &mut lines)?;
+            for segment in section.profile.segments() {
+                if let Some(center) = segment.center {
+                    let arc = ffi::spice_profile_arc(
+                        &Vector {
+                            x: center.x + x,
+                            y: center.y + y,
+                            z,
+                        },
+                        segment.radius(),
+                        segment.start_angle().to_degrees(),
+                        (segment.start_angle() + segment.angle).to_degrees(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if arc.is_null() {
+                        return Err("SMLib loft arc creation failed".into());
+                    }
+                    unsafe { curves.pin_mut().Add(arc.as_ptr().cast_mut()) }
+                        .map_err(|error| error.to_string())?;
+                    arcs.push(arc);
+                } else {
+                    add_lines(
+                        &[
+                            [segment.start.x + x, segment.start.y + y, z],
+                            [segment.end.x + x, segment.end.y + y, z],
+                        ],
+                        false,
+                        &mut curves,
+                        &mut lines,
+                    )?;
+                }
+            }
         }
         let mut result = std::ptr::null_mut();
-        let status = unsafe {
-            ffi::spice_loft(
-                &curves,
-                sections.len(),
-                sections[0].polygon.points.len(),
-                &mut result,
-            )
-        };
+        let status =
+            unsafe { ffi::spice_loft(&curves, sections.len(), edge_count, degree, &mut result) };
         self.shape_result(result, status, "loft")
     }
 

@@ -12,17 +12,18 @@ fn main() {
 #include <SmFilletExecutive.h>
 #include <SmApiCurves.h>
 #include <SmBSplineCurve.h>
+#include <SmAxis2Placement.h>
 #include <cstddef>
 #include <memory>
 using SmFailureArray = SmTArray<SmTessellationFailure>;
 using SmCurveArray = SmTArray<SmCurve*>;
-inline long spice_loft(const SmCurveArray& curves, size_t section_count, size_t edge_count, SmBrep*& result) {
-    if (section_count < 2 || section_count > 16 || edge_count < 3 || edge_count > 128 || curves.GetSize() != section_count * edge_count) { return SM_ERR_INVALID_INPUT; }
+inline long spice_loft(const SmCurveArray& curves, size_t section_count, size_t edge_count, unsigned int degree, SmBrep*& result) {
+    if (section_count < 2 || section_count > 16 || edge_count < 2 || edge_count > 256 || curves.GetSize() != section_count * edge_count || degree < 1 || degree > 3 || degree >= section_count) { return SM_ERR_INVALID_INPUT; }
     SmTArray<ULONG> counts;
     SmTArray<const SmCurve*> sections;
     for (size_t index = 0; index < section_count; ++index) { counts.Add(edge_count); }
     for (size_t index = 0; index < curves.GetSize(); ++index) { sections.Add(curves[index]); }
-    return SmApiCreateSkinPrimitive(counts, sections, 1, TRUE, result, nullptr, nullptr, nullptr);
+    return SmApiCreateSkinPrimitive(counts, sections, degree, TRUE, result, nullptr, nullptr, nullptr);
 }
 inline long spice_shell(const SmBrep* body, double thickness, const SmFace* opening, SmBrep*& result) {
     SmTArray<const SmFace*> openings;
@@ -43,6 +44,11 @@ inline std::unique_ptr<SmCurve> spice_profile_arc(const SmVector3d& center, doub
         if (status != SM_SUCCESS) { delete curve; return {}; }
     }
     return std::unique_ptr<SmCurve>(curve);
+}
+inline std::unique_ptr<SmCurve> spice_path_arc(const SmVector3d& center, const SmVector3d& x_axis, const SmVector3d& y_axis, double radius, double angle_deg) {
+    auto curve = spice_profile_arc(SmVector3d(0, 0, 0), radius, 0, angle_deg);
+    if (!curve || curve->Transform(SmAxis2Placement(center, x_axis, y_axis)) != SM_SUCCESS) { return {}; }
+    return curve;
 }
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());

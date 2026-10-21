@@ -5,7 +5,7 @@ pub const POINT_COUNT_MAX: usize = 128;
 
 #[path = "analytic_profile.rs"]
 mod analytic;
-pub use analytic::{LOOP_COUNT_MAX, Profile, dense_count};
+pub use analytic::{LOOP_COUNT_MAX, Profile, Segment, dense_count};
 
 #[derive(Clone, PartialEq)]
 pub struct Polygon {

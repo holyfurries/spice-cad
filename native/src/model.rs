@@ -529,11 +529,15 @@ pub fn compile_project_cached(
     cad.set(
         "sweep",
         lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
-            options_fields(&options, &["path"])?;
+            options_fields(&options, &["path", "bend_radius"])?;
             let profile = crate::shape_operation::SweepProfile::from_profile(
                 &state.borrow().profiles[profile.borrow::<Profile>()?.0],
             )?;
-            let path = crate::shape_operation::path(options.get("path")?, &profile)?;
+            let path = crate::shape_operation::path(
+                options.get("path")?,
+                &profile,
+                options.get("bend_radius")?,
+            )?;
             let mut recipe = state.borrow_mut();
             let index = recipe.shapes.len();
             recipe
@@ -548,8 +552,20 @@ pub fn compile_project_cached(
     let state = Rc::clone(&recipe);
     cad.set(
         "loft",
-        lua.create_function(move |_, sections: Table| {
+        lua.create_function(move |_, (sections, options): (Table, Option<Table>)| {
             let count = crate::shape_operation::array_count(&sections, 2, 16)?;
+            let degree = if let Some(options) = options {
+                options_fields(&options, &["degree"])?;
+                options.get::<Option<f64>>("degree")?.unwrap_or(1.0)
+            } else {
+                1.0
+            };
+            if !(1.0..=3.0).contains(&degree) || degree.fract() != 0.0 || degree as usize >= count {
+                return Err(mlua::Error::runtime(
+                    "Loft degree must be 1–3 with at least degree + 1 sections",
+                ));
+            }
+            let degree = degree as u32;
             let mut values = Vec::<crate::shape_operation::Section>::with_capacity(count);
             for index in 1..=count {
                 let section: Table = sections.raw_get(index)?;
@@ -559,33 +575,26 @@ pub fn compile_project_cached(
                     .get::<AnyUserData>("profile")?
                     .borrow::<Profile>()?
                     .0;
-                let polygon = state.borrow().profiles[profile]
-                    .polygon()
-                    .map_err(mlua::Error::runtime)?
-                    .clone();
+                let profile = state.borrow().profiles[profile].clone();
                 if let Some(previous) = values.last() {
                     if position[2] - previous.position[2] < 0.01 {
                         return Err(mlua::Error::runtime(
                             "Loft section heights must strictly increase by at least 0.01 mm",
                         ));
                     }
-                    if polygon.points.len() != previous.polygon.points.len() {
-                        return Err(mlua::Error::runtime(
-                            "Loft profiles must have equal vertex counts and matching vertex order",
-                        ));
-                    }
                 }
-                crate::shape_operation::validate_loft_polygon(
-                    &polygon,
-                    values.last().map(|section| &section.polygon),
+                crate::shape_operation::validate_loft_profile(
+                    &profile,
+                    values.last().map(|section| &section.profile),
                 )?;
-                values.push(crate::shape_operation::Section { polygon, position });
+                values.push(crate::shape_operation::Section { profile, position });
             }
             let mut recipe = state.borrow_mut();
             let index = recipe.shapes.len();
-            recipe
-                .shapes
-                .push(crate::shape_operation::Recipe::Loft(values));
+            recipe.shapes.push(crate::shape_operation::Recipe::Loft {
+                sections: values,
+                degree,
+            });
             drop(recipe);
             push_operation(&state, Operation::Shape(index))
         })
@@ -1048,7 +1057,9 @@ impl Model {
                         crate::shape_operation::Recipe::Sweep { profile, path } => {
                             kernel.path_sweep(profile, path)?
                         }
-                        crate::shape_operation::Recipe::Loft(sections) => kernel.loft(sections)?,
+                        crate::shape_operation::Recipe::Loft { sections, degree } => {
+                            kernel.loft(sections, *degree)?
+                        }
                     });
                 }
                 Operation::Profile { profile, sweep } => {
