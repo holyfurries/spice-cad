@@ -216,6 +216,7 @@ impl State {
     }
 
     fn insert(&mut self, source: &mut Buffer, text: &str) {
+        self.modal.prepare_insert_undo(source);
         let selection = self.selection(source);
         let removed =
             source.rope.char_to_byte(selection.end) - source.rope.char_to_byte(selection.start);
@@ -225,6 +226,7 @@ impl State {
         }
         let cursor = selection.start + text.chars().count();
         if source.replace(selection, text, self.cursor) {
+            self.modal.merge_insert_undo(source);
             self.error = None;
             self.cursor = cursor;
             self.anchor = cursor;
@@ -287,7 +289,10 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
     let focus_allowed = ui
         .ctx()
         .memory(|memory| memory.is_above_modal_layer(ui.layer_id()));
-    if focus_allowed && (response.clicked() || response.drag_started()) {
+    if focus_allowed
+        && (response.clicked_by(egui::PointerButton::Primary) || response.drag_started())
+    {
+        state.modal.break_insert_undo();
         response.request_focus();
         state.focus_request = FocusRequest::None;
     } else {
@@ -365,6 +370,14 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                             .modal
                             .text(&text, source, &mut state.cursor, &mut state.anchor);
                     state.reveal = true;
+                }
+                egui::Event::Paste(text)
+                    if state.modal.enabled && state.modal.mode == crate::modal::Mode::Command =>
+                {
+                    state.action =
+                        state
+                            .modal
+                            .text(&text, source, &mut state.cursor, &mut state.anchor);
                 }
                 egui::Event::Text(text) | egui::Event::Paste(text) => state.insert(source, &text),
                 egui::Event::Copy | egui::Event::Cut => {
@@ -500,11 +513,10 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                                     continue;
                                 }
                                 if key == egui::Key::R {
-                                    if let Some(cursor) = source.undo(true) {
-                                        state.cursor = cursor;
-                                        state.anchor = cursor;
-                                        state.reveal = true;
-                                    }
+                                    state
+                                        .modal
+                                        .redo(source, &mut state.cursor, &mut state.anchor);
+                                    state.reveal = true;
                                     continue;
                                 }
                                 if key == egui::Key::H {
@@ -692,6 +704,19 @@ pub fn show(ui: &mut egui::Ui, source: &mut Buffer, state: &mut State) -> bool {
                             _ => moved = false,
                         }
                         if moved {
+                            if matches!(
+                                key,
+                                egui::Key::ArrowLeft
+                                    | egui::Key::ArrowRight
+                                    | egui::Key::ArrowUp
+                                    | egui::Key::ArrowDown
+                                    | egui::Key::Home
+                                    | egui::Key::End
+                                    | egui::Key::PageUp
+                                    | egui::Key::PageDown
+                            ) {
+                                state.modal.break_insert_undo();
+                            }
                             if !modifiers.shift {
                                 state.anchor = state.cursor;
                             }
@@ -1152,13 +1177,97 @@ mod tests {
             egui::Pos2::ZERO,
             egui::vec2(740.0, 600.0),
         ));
-        context.memory_mut(|memory| memory.request_focus(egui::Id::unique("luau_source")));
+        context.memory_mut(|memory| {
+            let id = egui::Id::unique("luau_source");
+            if !memory.has_focus(id) {
+                memory.request_focus(id);
+            }
+        });
         state.route_vim_clipboard(context, &mut input);
         context
             .run_ui(input, |ui| {
                 show(ui, source, state);
             })
             .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn command_line_paste_does_not_edit_the_document_or_undo_history() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("unchanged");
+        let revision = source.revision;
+        let mut state = State::default();
+        state.modal.enable(true);
+        modal_frame(
+            &context,
+            &mut source,
+            &mut state,
+            egui::RawInput {
+                events: vec![
+                    egui::Event::Text(":".into()),
+                    egui::Event::Paste("w".into()),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(state.modal.command, "w");
+        assert_eq!(source.revision, revision);
+        assert_eq!(source.to_string(), "unchanged");
+        assert!(source.undo(false).is_none());
+    }
+
+    #[test]
+    fn vim_insert_sessions_include_newlines_deletions_and_split_on_arrow_movement() {
+        let context = egui::Context::default();
+        let mut source = Buffer::from("");
+        let mut state = State::default();
+        state.modal.enable(true);
+        let text = |value: &str| egui::RawInput {
+            events: vec![egui::Event::Text(value.into())],
+            ..Default::default()
+        };
+        let key = |key| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        for input in [
+            text("i"),
+            text("a"),
+            text("b"),
+            key(egui::Key::Backspace),
+            text("c"),
+            key(egui::Key::Enter),
+            text("d"),
+            text("e"),
+            key(egui::Key::Escape),
+            text("u"),
+        ] {
+            modal_frame(&context, &mut source, &mut state, input);
+        }
+        assert!(source.is_empty(), "Remaining source: {source}");
+        modal_frame(&context, &mut source, &mut state, control(egui::Key::R));
+        assert_eq!(source.to_string(), "ac\nde");
+        assert_eq!(state.cursor, 0);
+        for input in [
+            text("A"),
+            text("x"),
+            key(egui::Key::ArrowLeft),
+            text("y"),
+            text("z"),
+            key(egui::Key::Escape),
+            text("u"),
+        ] {
+            modal_frame(&context, &mut source, &mut state, input);
+        }
+        assert_eq!(source.to_string(), "acx\nde");
+        modal_frame(&context, &mut source, &mut state, text("u"));
+        assert_eq!(source.to_string(), "ac\nde");
     }
 
     #[test]

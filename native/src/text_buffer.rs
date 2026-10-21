@@ -189,6 +189,12 @@ impl Buffer {
         self.history_index = self.history.len();
     }
 
+    pub fn redo_change(&mut self) -> Option<usize> {
+        let cursor = self.history.get(self.history_index)?.before_cursor;
+        self.undo(true)?;
+        Some(cursor.min(self.rope.len_chars()))
+    }
+
     pub fn undo(&mut self, redo: bool) -> Option<usize> {
         self.change = None;
         let edit = if redo {

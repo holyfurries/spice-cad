@@ -55,8 +55,43 @@ pub struct State {
     linewise: bool,
     pub command: String,
     pub error: Option<&'static str>,
+    insert_undo: Option<(u64, u64)>,
 }
 impl State {
+    pub fn break_insert_undo(&mut self) {
+        self.insert_undo = None;
+    }
+
+    pub fn prepare_insert_undo(&mut self, source: &Buffer) {
+        if self.enabled && self.mode == Mode::Insert {
+            if self
+                .insert_undo
+                .is_none_or(|(_, latest)| latest != source.revision)
+            {
+                self.insert_undo = Some((source.revision, source.revision));
+            }
+        }
+    }
+
+    pub fn merge_insert_undo(&mut self, source: &mut Buffer) {
+        if let Some((first, _)) = self
+            .insert_undo
+            .filter(|_| self.enabled && self.mode == Mode::Insert)
+        {
+            source.merge_undo(first);
+            self.insert_undo = Some((first, source.revision));
+        }
+    }
+
+    pub fn redo(&mut self, source: &mut Buffer, cursor: &mut usize, anchor: &mut usize) {
+        for _ in 0..self.take_count(1) {
+            let Some(position) = source.redo_change() else {
+                break;
+            };
+            *cursor = normal_cursor(source, position);
+            *anchor = *cursor;
+        }
+    }
     pub fn take_count(&mut self, default: usize) -> usize {
         assert!(default > 0);
         self.pending = Pending::None;
@@ -127,6 +162,7 @@ impl State {
     }
 
     pub fn enable(&mut self, enabled: bool) {
+        self.break_insert_undo();
         self.enabled = enabled;
         self.mode = if enabled { Mode::Normal } else { Mode::Insert };
         self.pending = Pending::None;
@@ -163,6 +199,7 @@ impl State {
         }
     }
     pub fn escape(&mut self, source: &Buffer, cursor: &mut usize, anchor: &mut usize) {
+        self.break_insert_undo();
         if self.mode == Mode::Insert
             && *cursor > source.rope.line_to_char(source.rope.char_to_line(*cursor))
         {
@@ -209,9 +246,11 @@ impl State {
                 continue;
             }
             if self.mode == Mode::Insert {
+                self.prepare_insert_undo(source);
                 let text = &text[offset..];
                 let range = (*cursor).min(*anchor)..(*cursor).max(*anchor);
                 if source.replace(range.clone(), text, *cursor) {
+                    self.merge_insert_undo(source);
                     *cursor = range.start + text.chars().count();
                     *anchor = *cursor;
                 } else {
@@ -412,14 +451,17 @@ impl State {
                     };
                     *anchor = *cursor;
                     self.mode = Mode::Insert;
+                    self.insert_undo = Some((source.revision, source.revision));
                 }
                 'o' | 'O' => {
                     let (start, end) = line_bounds(source, *cursor);
                     let insertion = if character == 'o' { end } else { start };
+                    let revision = source.revision;
                     if source.replace(insertion..insertion, "\n", *cursor) {
                         *cursor = insertion + usize::from(character == 'o');
                         *anchor = *cursor;
                         self.mode = Mode::Insert;
+                        self.insert_undo = Some((revision, source.revision));
                     }
                 }
                 'v' | 'V' => {
@@ -536,8 +578,8 @@ impl State {
                         let Some(position) = source.undo(false) else {
                             break;
                         };
-                        *cursor = position;
-                        *anchor = position;
+                        *cursor = normal_cursor(source, position);
+                        *anchor = *cursor;
                     }
                 }
                 'K' => return Some(Action::Hover),
@@ -565,6 +607,7 @@ impl State {
     ) {
         assert!(range.start <= range.end);
         assert!(range.end <= source.rope.len_chars());
+        let revision = source.revision;
         self.register = source.rope.slice(range.clone()).to_string();
         self.linewise = linewise;
         if !matches!(operator, Operator::Yank) {
@@ -589,6 +632,21 @@ impl State {
         } else {
             Mode::Normal
         };
+        self.insert_undo = if self.mode == Mode::Insert {
+            Some((revision, source.revision))
+        } else {
+            None
+        };
+    }
+}
+
+fn normal_cursor(source: &Buffer, position: usize) -> usize {
+    let position = position.min(source.rope.len_chars());
+    let (start, end) = line_bounds(source, position);
+    if position >= end && end > start {
+        end - 1
+    } else {
+        position
     }
 }
 
@@ -898,6 +956,99 @@ mod tests {
         state.text(":w", &mut source, &mut cursor, &mut anchor);
         assert!(matches!(state.command_enter(), Some(Action::Save)));
     }
+    #[test]
+    fn insert_and_change_commands_undo_as_blocks_and_counted_redo_restores_them() {
+        for (command, redo_cursor) in [
+            ("i", 0),
+            ("a", 1),
+            ("I", 0),
+            ("A", 8),
+            ("cw", 0),
+            ("cc", 0),
+            ("o", 0),
+            ("O", 0),
+        ] {
+            let mut source = Buffer::from("old text\n");
+            let mut state = State::default();
+            state.enable(true);
+            let (mut cursor, mut anchor) = (0, 0);
+            state.text(command, &mut source, &mut cursor, &mut anchor);
+            for text in ["n", "é", "w"] {
+                state.text(text, &mut source, &mut cursor, &mut anchor);
+            }
+            let changed = source.to_string();
+            let revision = source.revision;
+            state.escape(&source, &mut cursor, &mut anchor);
+            state.text("u", &mut source, &mut cursor, &mut anchor);
+            assert_eq!(source.to_string(), "old text\n", "{command}");
+            assert_eq!(cursor, anchor);
+            state.redo(&mut source, &mut cursor, &mut anchor);
+            assert_eq!(source.to_string(), changed, "{command}");
+            assert_eq!(source.revision, revision);
+            assert_eq!(cursor, anchor);
+            assert_eq!(cursor, redo_cursor, "{command}");
+        }
+        let mut source = Buffer::from("");
+        let mut state = State::default();
+        state.enable(true);
+        let (mut cursor, mut anchor) = (0, 0);
+        for input in ["ione", "Atwo", "Athree"] {
+            state.text(input, &mut source, &mut cursor, &mut anchor);
+            state.escape(&source, &mut cursor, &mut anchor);
+        }
+        state.text("2u", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "one");
+        state.text("2", &mut source, &mut cursor, &mut anchor);
+        state.redo(&mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "onetwothree");
+        assert!(cursor < source.rope.len_chars());
+    }
+
+    #[test]
+    fn insert_blocks_split_at_movements_and_unrelated_source_edits() {
+        let mut source = Buffer::from("");
+        let mut state = State::default();
+        state.enable(true);
+        let (mut cursor, mut anchor) = (0, 0);
+        state.text("iabc", &mut source, &mut cursor, &mut anchor);
+        state.break_insert_undo();
+        cursor = 2;
+        anchor = 2;
+        state.text("de", &mut source, &mut cursor, &mut anchor);
+        state.escape(&source, &mut cursor, &mut anchor);
+        state.text("u", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "abc");
+        state.text("u", &mut source, &mut cursor, &mut anchor);
+        assert!(source.is_empty());
+        state.text("ix", &mut source, &mut cursor, &mut anchor);
+        source.replace(0..0, "external", 0);
+        cursor = source.rope.len_chars();
+        anchor = cursor;
+        state.text("yz", &mut source, &mut cursor, &mut anchor);
+        state.escape(&source, &mut cursor, &mut anchor);
+        state.text("u", &mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.to_string(), "externalx");
+    }
+
+    #[test]
+    fn long_insert_sessions_keep_their_start_beyond_the_history_entry_limit() {
+        let mut source = Buffer::from("");
+        let mut state = State::default();
+        state.enable(true);
+        let (mut cursor, mut anchor) = (0, 0);
+        state.text("i", &mut source, &mut cursor, &mut anchor);
+        for _ in 0..2048 {
+            state.text("x", &mut source, &mut cursor, &mut anchor);
+        }
+        state.escape(&source, &mut cursor, &mut anchor);
+        state.text("u", &mut source, &mut cursor, &mut anchor);
+        assert!(source.is_empty());
+        assert!(source.undo(false).is_none());
+        state.redo(&mut source, &mut cursor, &mut anchor);
+        assert_eq!(source.rope.len_chars(), 2048);
+        assert_eq!(cursor, 0);
+    }
+
     #[test]
     fn operators_counts_visual_selection_and_undo_use_the_rope() {
         let mut source = Buffer::from("one two three\nsecond line\nlast\n");

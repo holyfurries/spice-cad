@@ -163,7 +163,8 @@ list. Drag the top edge of Diagnostics to resize its height. **Output** in the
 footer (or **View → Build output**) opens a full-width, resizable bottom dock
 with copyable build output. Both docks retain their chosen size instead of
 expanding when a message changes. Vim `:` commands appear in the existing
-footer; entering command mode does not move the file or viewport.
+footer in an accented COMMAND field with a cursor and Enter/Esc hints;
+entering command mode does not move the file or viewport.
 The footer also shows the current Vim mode, cursor position, and total line count. A viewport
 badge distinguishes a current preview from pending changes or errors. Update
 model previews unsaved edits; Save writes the file and updates the preview.
@@ -184,6 +185,10 @@ Escape enters Normal mode; `i`/`a` enter Insert, `v`/`V` select, and `h/j/k/l`,
 `w/b/e`, `0/^/$`, `gg/G` move with optional counts. Supported edits include
 `d/c/y` with motions, `dd/cc/yy`, `x`, `p/P`, `r` followed by a replacement
 character (including Visual and Visual Line selections), `u` and Ctrl+R.
+Insert sessions undo as one change, including newlines, indentation, and
+backspaces. `c` changes and `o/O` include their subsequent inserted text in the
+same undo block. Leaving Insert mode or moving its cursor starts a new block;
+counts work for both `u` and Ctrl+R. Redo restores the change-start cursor.
 Ctrl+A/X add/subtract a count from the integer under or after the cursor on the
 current line. Decimal signs, hexadecimal/binary prefixes, and leading zeroes
 are preserved; Visual selections change the first selected number on each line
