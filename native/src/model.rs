@@ -523,10 +523,11 @@ pub fn compile_cached(
                 let section: Table = sections.raw_get(index)?;
                 options_fields(&section, &["profile", "x", "y", "z"])?;
                 let position = crate::shape_operation::position(&section, false)?;
-                let polygon = state.borrow().profiles[section
+                let profile = section
                     .get::<AnyUserData>("profile")?
                     .borrow::<Profile>()?
-                    .0]
+                    .0;
+                let polygon = state.borrow().profiles[profile]
                     .polygon()
                     .map_err(mlua::Error::runtime)?
                     .clone();

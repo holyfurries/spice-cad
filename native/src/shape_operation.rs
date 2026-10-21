@@ -207,6 +207,15 @@ mod tests {
     use crate::{kernel::Kernel, model};
 
     #[test]
+    fn loft_profile_lookup_can_create_profiles_without_borrowing_recipe() -> Result<(), String> {
+        let source = "local a=cad.polygon({{x=0,y=0},{x=10,y=0},{x=10,y=10},{x=0,y=10}});local section:any=setmetatable({z=12},{__index=function(_,key) if key=='profile' then return cad.polygon({{x=0,y=0},{x=8,y=0},{x=8,y=8},{x=0,y=8}}) end;return nil end});cad.show('loft',cad.loft({{profile=a,z=0},section}))";
+        let compiled = model::compile(source)?;
+        assert_eq!(compiled.parts.len(), 1);
+        assert_eq!(compiled.parts[0].name, "loft");
+        Ok(())
+    }
+
+    #[test]
     fn shape_operations_make_closed_solids_with_exact_volume_and_step() -> Result<(), String> {
         let kernel = Kernel::new()?;
         for (source, expected) in [
