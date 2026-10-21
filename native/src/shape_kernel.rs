@@ -37,14 +37,38 @@ fn add_lines(
 impl Kernel {
     pub fn path_sweep(
         &self,
-        polygon: &crate::profile::Polygon,
+        section: &crate::shape_operation::SweepProfile,
         path: &[[f64; 3]],
     ) -> Result<Body<'_>, String> {
-        let mut lines = Vec::with_capacity(polygon.points.len() + path.len());
+        let line_count = match section {
+            crate::shape_operation::SweepProfile::Polygon(polygon) => polygon.points.len(),
+            crate::shape_operation::SweepProfile::Circle { .. } => 0,
+        };
+        let mut lines = Vec::with_capacity(line_count + path.len());
+        let mut arcs = Vec::with_capacity(if line_count == 0 { 2 } else { 0 });
         let mut profile = ffi::spice_curve_array().map_err(|error| error.to_string())?;
         let mut route = ffi::spice_curve_array().map_err(|error| error.to_string())?;
-        let points: Vec<_> = polygon.points.iter().map(|&[x, y]| [x, y, 0.0]).collect();
-        add_lines(&points, true, &mut profile, &mut lines)?;
+        match section {
+            crate::shape_operation::SweepProfile::Polygon(polygon) => {
+                let points: Vec<_> = polygon.points.iter().map(|&[x, y]| [x, y, 0.0]).collect();
+                add_lines(&points, true, &mut profile, &mut lines)?;
+            }
+            crate::shape_operation::SweepProfile::Circle { radius } => {
+                assert!(radius.is_finite());
+                assert!(*radius >= 0.01);
+                for start in [0.0, 180.0] {
+                    let arc =
+                        ffi::spice_profile_arc(&Vector::default(), *radius, start, start + 180.0)
+                            .map_err(|error| error.to_string())?;
+                    if arc.is_null() {
+                        return Err("SMLib sweep circle creation failed".into());
+                    }
+                    unsafe { profile.pin_mut().Add(arc.as_ptr().cast_mut()) }
+                        .map_err(|error| error.to_string())?;
+                    arcs.push(arc);
+                }
+            }
+        }
         add_lines(path, false, &mut route, &mut lines)?;
         let mut result = std::ptr::null_mut();
         let status = unsafe {

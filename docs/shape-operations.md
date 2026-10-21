@@ -9,12 +9,21 @@ edge treatments, measurements, previews, and STEP/STL/GLB export.
 
 `cad.sweep(profile, {path = {{x=0,y=0,z=0}, {x=0,y=0,z=30}, {x=30,y=0,z=30}}})`
 
-The profile must currently be a polygon. Its bounding-box center follows the
-path; the section turns perpendicular to the initial tangent. Paths contain
+The profile can be a polygon or a full `cad.circle({radius=5})`. Its
+bounding-box center follows the path; the section turns perpendicular to the
+initial tangent. Circle `x`/`y` offsets are recentered onto the path, just like
+polygon offsets. Tight-corner and segment-clearance guards use the circle's
+actual radius, independent of its source center. Mixed line/arc paths and
+nested profile loops are unsupported for sweeping. Paths contain
 2–64 three-dimensional points, must be planar and open, and use sharp mitered
 corners. Ends are capped. Segments below 0.01 mm, reversals, excessively tight
 corners, and nearby nonadjacent segments are rejected. Total length is at most
 4000 mm. Curved paths, twisting, scaling, and nonplanar paths are unsupported.
+
+For a hollow pipe, subtract two circle sweeps along the same path. Open
+`models/mitered-pipe.luau` for an editable example with exact circular sections
+and a sharp elbow. The straight-section volume is π × radius² × path length;
+circle boundaries remain exact NURBS until display/export tessellation.
 
 ## Loft
 

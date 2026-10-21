@@ -516,16 +516,15 @@ pub fn compile_cached(
         "sweep",
         lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
             options_fields(&options, &["path"])?;
-            let polygon = state.borrow().profiles[profile.borrow::<Profile>()?.0]
-                .polygon()
-                .map_err(mlua::Error::runtime)?
-                .clone();
-            let path = crate::shape_operation::path(options.get("path")?, &polygon)?;
+            let profile = crate::shape_operation::SweepProfile::from_profile(
+                &state.borrow().profiles[profile.borrow::<Profile>()?.0],
+            )?;
+            let path = crate::shape_operation::path(options.get("path")?, &profile)?;
             let mut recipe = state.borrow_mut();
             let index = recipe.shapes.len();
             recipe
                 .shapes
-                .push(crate::shape_operation::Recipe::Sweep { polygon, path });
+                .push(crate::shape_operation::Recipe::Sweep { profile, path });
             drop(recipe);
             push_operation(&state, Operation::Shape(index))
         })
@@ -1029,8 +1028,8 @@ impl Model {
             match self.recipe.operations[index] {
                 Operation::Shape(index) => {
                     bodies.push(match &self.recipe.shapes[index] {
-                        crate::shape_operation::Recipe::Sweep { polygon, path } => {
-                            kernel.path_sweep(polygon, path)?
+                        crate::shape_operation::Recipe::Sweep { profile, path } => {
+                            kernel.path_sweep(profile, path)?
                         }
                         crate::shape_operation::Recipe::Loft(sections) => kernel.loft(sections)?,
                     });

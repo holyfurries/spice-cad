@@ -10,10 +10,60 @@ pub struct Section {
 #[derive(PartialEq)]
 pub enum Recipe {
     Sweep {
-        polygon: crate::profile::Polygon,
+        profile: SweepProfile,
         path: Vec<[f64; 3]>,
     },
     Loft(Vec<Section>),
+}
+
+#[derive(Clone, PartialEq)]
+pub enum SweepProfile {
+    Polygon(crate::profile::Polygon),
+    Circle { radius: f64 },
+}
+
+impl SweepProfile {
+    pub fn from_profile(profile: &crate::profile::Profile) -> mlua::Result<Self> {
+        match profile {
+            crate::profile::Profile::Polygon(polygon) => Ok(Self::Polygon(polygon.clone())),
+            crate::profile::Profile::Curves(segments) if segments.len() == 2 => {
+                if let Some(center) = segments[0].center {
+                    if segments.iter().all(|segment| {
+                        segment
+                            .center
+                            .is_some_and(|other| other.distance(center) <= 1e-7)
+                            && (segment.angle - std::f64::consts::PI).abs() <= 1e-9
+                            && (segment.radius() - segments[0].radius()).abs() <= 1e-7
+                    }) {
+                        return Ok(Self::Circle {
+                            radius: segments[0].radius(),
+                        });
+                    }
+                }
+                Err(mlua::Error::runtime(
+                    "Sweep requires a polygon or a full circle; mixed arcs and nested loops are unsupported",
+                ))
+            }
+            _ => Err(mlua::Error::runtime(
+                "Sweep requires a polygon or a full circle; mixed arcs and nested loops are unsupported",
+            )),
+        }
+    }
+
+    fn footprint_radius(&self) -> f64 {
+        match self {
+            Self::Circle { radius } => *radius,
+            Self::Polygon(polygon) => {
+                let mut minimum = glam::DVec2::splat(f64::INFINITY);
+                let mut maximum = glam::DVec2::splat(f64::NEG_INFINITY);
+                for &point in &polygon.points {
+                    minimum = minimum.min(glam::DVec2::from_array(point));
+                    maximum = maximum.max(glam::DVec2::from_array(point));
+                }
+                (maximum - minimum).length() * 0.5
+            }
+        }
+    }
 }
 
 pub struct Shell {
@@ -98,7 +148,7 @@ pub fn position(table: &Table, require_xy: bool) -> mlua::Result<[f64; 3]> {
     Ok(values)
 }
 
-pub fn path(table: Table, polygon: &crate::profile::Polygon) -> mlua::Result<Vec<[f64; 3]>> {
+pub fn path(table: Table, profile: &SweepProfile) -> mlua::Result<Vec<[f64; 3]>> {
     let count = array_count(&table, 2, 64)?;
     let mut points = Vec::with_capacity(count);
     for index in 1..=count {
@@ -110,13 +160,7 @@ pub fn path(table: Table, polygon: &crate::profile::Polygon) -> mlua::Result<Vec
     let mut normal = None;
     let first = vectors[1] - vectors[0];
     let mut length = 0.0;
-    let mut minimum = DVec3::splat(f64::INFINITY);
-    let mut maximum = DVec3::splat(f64::NEG_INFINITY);
-    for point in &polygon.points {
-        minimum = minimum.min(DVec3::new(point[0], point[1], 0.0));
-        maximum = maximum.max(DVec3::new(point[0], point[1], 0.0));
-    }
-    let radius = (maximum - minimum).length() * 0.5;
+    let radius = profile.footprint_radius();
     for index in 1..count {
         let direction = vectors[index] - vectors[index - 1];
         if direction.length() < 0.01 {
@@ -205,6 +249,122 @@ pub fn path(table: Table, polygon: &crate::profile::Polygon) -> mlua::Result<Vec
 #[cfg(test)]
 mod tests {
     use crate::{kernel::Kernel, model};
+
+    #[test]
+    fn exact_circle_sweeps_preserve_volume_centering_closed_mesh_and_step() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        for (path, length, bounds) in [
+            (
+                "{{x=5,y=7,z=0},{x=5,y=7,z=20}}",
+                20.0,
+                Some([[2.0, 4.0, 0.0], [8.0, 10.0, 20.0]]),
+            ),
+            ("{{x=0,y=0,z=0},{x=0,y=0,z=20},{x=20,y=0,z=20}}", 40.0, None),
+        ] {
+            for center in ["", ",x=123,y=-27"] {
+                let source = format!(
+                    "local p=cad.circle({{radius=3{center}}});cad.show('tube',cad.sweep(p,{{path={path}}}))"
+                );
+                let model = model::compile(&source)?;
+                let mut bodies = model.build(&kernel)?;
+                let body = &mut bodies[0];
+                let expected = std::f64::consts::PI * 9.0 * length;
+                let volume = body.volume()?;
+                assert!(
+                    (volume - expected).abs() < expected * 1e-6,
+                    "center={center}, path={path}: volume {volume} != {expected}"
+                );
+                let mesh = body.mesh()?.mesh;
+                mesh.validate()?;
+                assert!(
+                    (mesh.volume_mm3() - expected).abs() < expected * 0.015,
+                    "Tessellated volume {} differs from exact {expected}",
+                    mesh.volume_mm3()
+                );
+                if let Some([minimum, maximum]) = bounds {
+                    let actual = body.bounds(true)?;
+                    assert!(
+                        (actual[0] - glam::DVec3::from_array(minimum))
+                            .abs()
+                            .max_element()
+                            < 0.001
+                    );
+                    assert!(
+                        (actual[1] - glam::DVec3::from_array(maximum))
+                            .abs()
+                            .max_element()
+                            < 0.001
+                    );
+                }
+                let step = body.step_data("circle-sweep")?;
+                assert!(step.contains("CLOSED_SHELL"));
+                assert!(step.contains("ISO-10303-21"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn circle_sweep_guards_use_the_centered_radius_and_reject_other_curves() -> Result<(), String> {
+        for profile in [
+            "cad.profile({loops={cad.circle({radius=3}),cad.circle({radius=1})}})",
+            "cad.path({start={x=0,y=-3},segments={{to={x=0,y=3},center={x=0,y=0}},{to={x=0,y=-3}}}})",
+        ] {
+            let source = format!(
+                "cad.show('bad',cad.sweep({profile},{{path={{{{x=0,y=0,z=0}},{{x=0,y=0,z=20}}}}}}))"
+            );
+            let error = model::compile(&source)
+                .err()
+                .ok_or("Expected unsupported profile error")?;
+            assert!(error.contains("polygon or a full circle"), "{error}");
+        }
+        for radius in [3, 4] {
+            let source = format!(
+                "local p=cad.circle({{radius={radius},x=100,y=-100}});cad.show('elbow',cad.sweep(p,{{path={{{{x=0,y=0,z=0}},{{x=0,y=0,z=7}},{{x=7,y=0,z=7}}}}}}))"
+            );
+            assert_eq!(model::compile(&source).is_ok(), radius == 3);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn circle_sweep_cache_includes_radius_and_reuses_equal_profiles() -> Result<(), String> {
+        let kernel = Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let source = "local p=cad.circle({radius=3});cad.show('pipe',cad.sweep(p,{path={{x=0,y=0,z=0},{x=0,y=0,z=20},{x=20,y=0,z=20}}}))";
+        let model = model::compile(source)?;
+        let prepared = cache.prepare(&model)?;
+        let original = std::sync::Arc::clone(&prepared.geometry[0]);
+        let volume = prepared.geometry[0].volume_mm3;
+        drop(prepared);
+        let equal = model::compile(source)?;
+        let prepared = cache.prepare(&equal)?;
+        assert_eq!(prepared.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(&original, &prepared.geometry[0]));
+        drop(prepared);
+        let centered = model::compile(&source.replace("radius=3", "radius=3,x=123,y=-27"))?;
+        let prepared = cache.prepare(&centered)?;
+        assert_eq!(prepared.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(&original, &prepared.geometry[0]));
+        drop(prepared);
+        let changed = model::compile(&source.replace("radius=3", "radius=4"))?;
+        let prepared = cache.prepare(&changed)?;
+        assert_eq!(prepared.hits, 0);
+        assert!(!std::sync::Arc::ptr_eq(&original, &prepared.geometry[0]));
+        assert!((prepared.geometry[0].volume_mm3 / volume - 16.0 / 9.0).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn hollow_circle_sweep_example_keeps_an_open_bore_and_closed_material() -> Result<(), String> {
+        let source = include_str!("../../models/mitered-pipe.luau");
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        let expected = std::f64::consts::PI * (25.0 - 12.25) * 60.0;
+        assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-6);
+        snapshot.scene.world_mesh().validate()?;
+        assert!(snapshot.scene.bounds[0].z.abs() < 0.001);
+        Ok(())
+    }
 
     #[test]
     fn loft_profile_lookup_can_create_profiles_without_borrowing_recipe() -> Result<(), String> {
