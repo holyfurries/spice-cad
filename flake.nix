@@ -181,6 +181,26 @@
           occt = occt_pkgs.opencascade-occt;
         in
         {
+          format = pkgs.mkShellNoCC {
+            packages = with pkgs; [
+              cargo
+              rustfmt
+              nixfmt
+              actionlint
+              yamlfmt
+            ];
+          };
+          ci = self.devShells.${system}.default.overrideAttrs (previous: {
+            nativeBuildInputs = previous.nativeBuildInputs ++ [ pkgs.lld ];
+            LD_LIBRARY_PATH =
+              previous.LD_LIBRARY_PATH
+              + ":${
+                pkgs.lib.makeLibraryPath [
+                  pkgs.stdenv.cc.cc.lib
+                  occt
+                ]
+              }";
+          });
           default = pkgs.mkShell {
             packages = with pkgs; [
               cargo

@@ -31,19 +31,31 @@ driver, and terminal error with startup failures.
 ## Build and validate
 
 ```sh
-nix develop -c cargo fmt --all -- --check
+nix develop .#format -c cargo fmt --all -- --check
 nix develop -c cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
 nix develop -c cargo test --locked --workspace --all-features
 nix build .#spice-cad-appimage
 ./result --appimage-extract-and-run --check-model models/mounting-bracket.luau
 ```
 
-CI runs these checks for pull requests and pushes to `main`, then uploads a
-download artifact with SHA-256 checksums and the exact application source.
-A container with no Nix installation checks that the AppImage can analyze,
-construct, and tessellate a model using its bundled dependencies. This is a
+CI runs formatting in a lightweight shell without building the CAD kernel.
+Pull requests and pushes to `main` run lint and all tests when native code,
+models, dependencies, or CI configuration change; documentation-only changes
+skip native builds. Nix tools/kernel and Cargo dependencies have separate caches.
+CI disables debug symbols and incremental compilation and uses lld for test
+linking; production release optimization is unchanged. Native tools are cached
+before Rust compilation so a later failure does not discard that build.
+
+AppImages are built only for version tags or **Actions → Build and package →
+Run workflow**. These runs upload a download artifact with SHA-256 checksums
+and the exact application source. A container with no Nix installation checks
+that the AppImage can analyze, construct, and tessellate a model using its bundled
+dependencies. This is a
 headless check that also exports STEP, STL, and GLB; it does not establish desktop
 or graphics-driver compatibility.
+The isolated test container runs as root with mount-namespace capability to avoid
+Ubuntu's restrictions on nested unprivileged UID mappings. It has no network and
+read-only access to the app and models.
 
 ## Cut a release
 
