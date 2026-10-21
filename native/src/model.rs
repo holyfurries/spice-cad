@@ -37,6 +37,7 @@ impl Part {
 
 #[derive(Clone, Copy)]
 enum Operation {
+    Shape(usize),
     Profile {
         profile: usize,
         sweep: ProfileSweep,
@@ -63,6 +64,7 @@ enum Operation {
 
 #[derive(Clone, Copy)]
 enum Modification {
+    Shell(usize),
     Translate([f64; 3]),
     Rotate { axis: [f64; 3], angle: f64 },
     EdgeTreatment(usize),
@@ -91,6 +93,8 @@ impl UserData for Edge {}
 
 #[derive(Default)]
 struct Recipe {
+    shapes: Vec<crate::shape_operation::Recipe>,
+    shells: Vec<crate::shape_operation::Shell>,
     face_features: Vec<crate::face_feature::Recipe>,
     holes: Vec<crate::hole::Recipe>,
     edges: Vec<crate::edge_reference::Reference>,
@@ -445,6 +449,101 @@ pub fn compile_cached(
     )
     .map_err(|error| error.to_string())?;
     let definitions = crate::dimensions::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
+        "sweep",
+        lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
+            options_fields(&options, &["path"])?;
+            let polygon = state.borrow().profiles[profile.borrow::<Profile>()?.0].clone();
+            let path = crate::shape_operation::path(options.get("path")?, &polygon)?;
+            let mut recipe = state.borrow_mut();
+            let index = recipe.shapes.len();
+            recipe
+                .shapes
+                .push(crate::shape_operation::Recipe::Sweep { polygon, path });
+            drop(recipe);
+            push_operation(&state, Operation::Shape(index))
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    cad.set(
+        "loft",
+        lua.create_function(move |_, sections: Table| {
+            let count = crate::shape_operation::array_count(&sections, 2, 16)?;
+            let mut values = Vec::<crate::shape_operation::Section>::with_capacity(count);
+            for index in 1..=count {
+                let section: Table = sections.raw_get(index)?;
+                options_fields(&section, &["profile", "x", "y", "z"])?;
+                let position = crate::shape_operation::position(&section, false)?;
+                let polygon = state.borrow().profiles[section
+                    .get::<AnyUserData>("profile")?
+                    .borrow::<Profile>()?
+                    .0]
+                    .clone();
+                if let Some(previous) = values.last() {
+                    if position[2] - previous.position[2] < 0.01 {
+                        return Err(mlua::Error::runtime(
+                            "Loft section heights must strictly increase by at least 0.01 mm",
+                        ));
+                    }
+                    if polygon.points.len() != previous.polygon.points.len() {
+                        return Err(mlua::Error::runtime(
+                            "Loft profiles must have equal vertex counts and matching vertex order",
+                        ));
+                    }
+                }
+                crate::shape_operation::validate_loft_polygon(
+                    &polygon,
+                    values.last().map(|section| &section.polygon),
+                )?;
+                values.push(crate::shape_operation::Section { polygon, position });
+            }
+            let mut recipe = state.borrow_mut();
+            let index = recipe.shapes.len();
+            recipe
+                .shapes
+                .push(crate::shape_operation::Recipe::Loft(values));
+            drop(recipe);
+            push_operation(&state, Operation::Shape(index))
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
+    let faces = Rc::clone(&definitions);
+    cad.set(
+        "shell",
+        lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
+            options_fields(&options, &["thickness", "open"])?;
+            let source = solid.borrow::<Solid>()?.0;
+            let thickness = dimension(&options, "thickness")?;
+            let opening = options
+                .get::<Option<AnyUserData>>("open")?
+                .map(|face| {
+                    faces
+                        .borrow_mut()
+                        .modeling_face(face.borrow::<crate::dimensions::Face>()?.0, source)
+                })
+                .transpose()?;
+            let mut recipe = state.borrow_mut();
+            let index = recipe.shells.len();
+            recipe
+                .shells
+                .push(crate::shape_operation::Shell { thickness, opening });
+            drop(recipe);
+            push_operation(
+                &state,
+                Operation::Modify {
+                    source,
+                    modification: Modification::Shell(index),
+                },
+            )
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     let faces = Rc::clone(&definitions);
     cad.set(
@@ -859,6 +958,14 @@ impl Model {
                 return Err("Model exceeds 512 evaluation steps; reduce repeated subtrees".into());
             }
             match self.recipe.operations[index] {
+                Operation::Shape(index) => {
+                    bodies.push(match &self.recipe.shapes[index] {
+                        crate::shape_operation::Recipe::Sweep { polygon, path } => {
+                            kernel.path_sweep(polygon, path)?
+                        }
+                        crate::shape_operation::Recipe::Loft(sections) => kernel.loft(sections)?,
+                    });
+                }
                 Operation::Profile { profile, sweep } => {
                     let polygon = self
                         .recipe
@@ -880,6 +987,10 @@ impl Model {
                     if visited {
                         let mut body = bodies.pop().ok_or("Missing modification operand")?;
                         match modification {
+                            Modification::Shell(index) => {
+                                let shell = &self.recipe.shells[index];
+                                body.shell(shell.thickness, shell.opening.as_ref())?;
+                            }
                             Modification::Translate(offset) => body.translate(offset)?,
                             Modification::Rotate { axis, angle } => body.rotate(axis, angle)?,
                             Modification::Hole(index) => {

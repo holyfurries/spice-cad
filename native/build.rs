@@ -7,12 +7,26 @@ fn main() {
         r#"
 #include <SmApiBrep.h>
 #include <SmApiGeneral.h>
+#include <SmApiPrimitives.h>
 #include <SmVector3d.h>
 #include <SmFilletExecutive.h>
 #include <cstddef>
 #include <memory>
 using SmFailureArray = SmTArray<SmTessellationFailure>;
 using SmCurveArray = SmTArray<SmCurve*>;
+inline long spice_loft(const SmCurveArray& curves, size_t section_count, size_t edge_count, SmBrep*& result) {
+    if (section_count < 2 || section_count > 16 || edge_count < 3 || edge_count > 128 || curves.GetSize() != section_count * edge_count) { return SM_ERR_INVALID_INPUT; }
+    SmTArray<ULONG> counts;
+    SmTArray<const SmCurve*> sections;
+    for (size_t index = 0; index < section_count; ++index) { counts.Add(edge_count); }
+    for (size_t index = 0; index < curves.GetSize(); ++index) { sections.Add(curves[index]); }
+    return SmApiCreateSkinPrimitive(counts, sections, 1, TRUE, result, nullptr, nullptr, nullptr);
+}
+inline long spice_shell(const SmBrep* body, double thickness, const SmFace* opening, SmBrep*& result) {
+    SmTArray<const SmFace*> openings;
+    if (opening) { openings.Add(opening); }
+    return SmApiShellBrepFull(body, -thickness, TRUE, TRUE, FALSE, openings, result);
+}
 inline std::unique_ptr<SmCurveArray> spice_curve_array() {
     return std::unique_ptr<SmCurveArray>(new (*SmApiGetOrCreateContext()) SmCurveArray());
 }

@@ -474,6 +474,7 @@ fn cache_matches(
             return false;
         }
         match (first.operations[a], second.operations[b]) {
+            (Operation::Shape(a), Operation::Shape(b)) if first.shapes[a] == second.shapes[b] => {}
             (
                 Operation::Box {
                     minimum: a,
@@ -531,6 +532,18 @@ fn cache_matches(
                 },
             ) => {
                 match (b, d) {
+                    (Modification::Shell(a), Modification::Shell(b)) => {
+                        let a = &first.shells[a];
+                        let b = &second.shells[b];
+                        if a.thickness != b.thickness {
+                            return false;
+                        }
+                        match (&a.opening, &b.opening) {
+                            (None, None) => {}
+                            (Some(a), Some(b)) if a.geometry_matches(b) => {}
+                            _ => return false,
+                        }
+                    }
                     (Modification::FaceFeature(a), Modification::FaceFeature(b)) => {
                         let a = &first.face_features[a];
                         let b = &second.face_features[b];

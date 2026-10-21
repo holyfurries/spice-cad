@@ -14,6 +14,8 @@ pub enum ProfileSweep {
     Extrude { height_mm: f64 },
     Revolve { angle_deg: f64 },
 }
+#[path = "shape_kernel.rs"]
+mod shape_operations;
 #[path = "step.rs"]
 mod step;
 
@@ -92,7 +94,27 @@ mod ffi {
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
         fn spice_copy_brep(body: &SmBrep) -> Result<UniquePtr<SmBrep>>;
+        unsafe fn spice_loft(
+            curves: &SmCurveArray,
+            section_count: usize,
+            edge_count: usize,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
+        unsafe fn spice_shell(
+            body: *const SmBrep,
+            thickness: f64,
+            opening: *const SmFace,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
+        unsafe fn SmApiCreateSweepAlongPlanarPath(
+            profile: Pin<&mut SmCurveArray>,
+            path: Pin<&mut SmCurveArray>,
+            center: i32,
+            caps: i32,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
         fn GetMemoryUsed(self: &SmBrep, allocated: &mut u64) -> u64;
+        fn IsManifoldSolid(self: &SmBrep) -> i32;
         unsafe fn spice_treat_edges(
             body: *mut SmBrep,
             edges: *const *mut SmEdge,
@@ -846,6 +868,23 @@ impl Body<'_> {
     ) -> Result<glam::DVec3, String> {
         assert!(selector.axis < 3);
         assert!(offset.iter().all(|value| value.is_finite()));
+        let (face, bounds) = self.planar_feature_face(selector)?;
+        let axes = match selector.axis {
+            0 => [1, 2],
+            1 => [0, 2],
+            2 => [0, 1],
+            _ => unreachable!(),
+        };
+        let mut center = (bounds[0] + bounds[1]) * 0.5;
+        center[axes[0]] += offset[0];
+        center[axes[1]] += offset[1];
+        self.planar_feature_center(face, center)
+    }
+
+    fn planar_feature_face(
+        &self,
+        selector: &crate::dimensions::Selector,
+    ) -> Result<(*mut ffi::SmFace, [glam::DVec3; 2]), String> {
         let mut candidates = Vec::new();
         let mut face_count = 0u32;
         for region in unsafe { topology_list(children(self.shape.as_ptr())) }? {
@@ -916,16 +955,14 @@ impl Body<'_> {
             }
             Ok((face, bounds))
         });
-        let (face, bounds) = selector.resolve_candidates(bounds)?;
-        let axes = match selector.axis {
-            0 => [1, 2],
-            1 => [0, 2],
-            2 => [0, 1],
-            _ => unreachable!(),
-        };
-        let mut center = (bounds[0] + bounds[1]) * 0.5;
-        center[axes[0]] += offset[0];
-        center[axes[1]] += offset[1];
+        selector.resolve_candidates(bounds)
+    }
+
+    fn planar_feature_center(
+        &self,
+        face: *mut ffi::SmFace,
+        center: glam::DVec3,
+    ) -> Result<glam::DVec3, String> {
         let point = Vector {
             x: center.x,
             y: center.y,
