@@ -61,6 +61,7 @@ struct Entry<'kernel> {
     steps: usize,
     body: Rc<Body<'kernel>>,
     geometry: Arc<Geometry>,
+    shading: crate::shading::Shading,
     quality: DisplayQuality,
     presentations: [Option<Arc<Presentation>>; 2],
     planes: Option<Arc<crate::dimensions::Planes>>,
@@ -377,7 +378,7 @@ impl<'kernel> Cache<'kernel> {
                     &mut self.comparisons,
                 )
             });
-            let entry = if let Some(entry) = found {
+            let mut entry = if let Some(entry) = found {
                 prepared.hits += 1;
                 steps += entry.steps;
                 if steps > EVALUATION_COUNT_MAX {
@@ -391,6 +392,7 @@ impl<'kernel> Cache<'kernel> {
                     steps: entry.steps,
                     body: Rc::clone(&entry.body),
                     geometry: Arc::clone(&entry.geometry),
+                    shading: entry.shading,
                     quality: entry.quality,
                     presentations: entry.presentations.clone(),
                     planes: entry.planes.clone(),
@@ -404,7 +406,8 @@ impl<'kernel> Cache<'kernel> {
                         volume_mm3,
                     } = quality.mesh(&mut body)?;
                     self.checkpoint()?;
-                    mesh.smooth_normals();
+                    part.shading.apply(&mut mesh);
+                    reused.shading = part.shading;
                     reused.geometry = Arc::new(Geometry {
                         mesh,
                         edges: body.edges()?,
@@ -437,7 +440,7 @@ impl<'kernel> Cache<'kernel> {
                     volume_mm3,
                 } = quality.mesh(&mut body)?;
                 self.checkpoint()?;
-                mesh.smooth_normals();
+                part.shading.apply(&mut mesh);
                 let geometry = Arc::new(Geometry {
                     mesh,
                     edges: body.edges()?,
@@ -451,11 +454,18 @@ impl<'kernel> Cache<'kernel> {
                     steps: steps - before,
                     body: Rc::new(body),
                     geometry,
+                    shading: part.shading,
                     quality,
                     presentations: Default::default(),
                     planes: None,
                 }
             };
+            if entry.shading != part.shading {
+                part.shading
+                    .apply(&mut Arc::make_mut(&mut entry.geometry).mesh);
+                entry.shading = part.shading;
+                entry.presentations = Default::default();
+            }
             vertices += entry.geometry.mesh.vertices.len();
             if vertices > 300000 {
                 return Err("Assembly exceeds its 100000 triangle budget".into());

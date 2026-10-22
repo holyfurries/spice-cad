@@ -23,6 +23,7 @@ pub struct Part {
     pub line: usize,
     pub name: String,
     pub material: crate::material::Material,
+    pub shading: crate::shading::Shading,
     solid: usize,
 }
 
@@ -115,6 +116,7 @@ pub struct Model {
     pub script_ms: f64,
 }
 
+#[derive(Clone)]
 pub struct Geometry {
     pub mesh: crate::mesh::Mesh,
     pub edges: crate::inspection::Edges,
@@ -487,10 +489,12 @@ pub fn compile_project_cached(
                 ));
             }
             let mut material = crate::material::Material::default();
+            let mut shading = crate::shading::Shading::default();
             let mut assembly = crate::placement::Placement::default();
             let mut print = None;
             if let Some(options) = options {
-                options_fields(&options, &["material", "assembly", "print"])?;
+                options_fields(&options, &["material", "assembly", "print", "shading"])?;
+                if let Some(options) = options.get::<Option<Table>>("shading")? { shading = crate::shading::Shading::from_table(options)?; }
                 if let Some(options) = options.get::<Option<Table>>("assembly")? { assembly = crate::placement::Placement::from_table(options)?; }
                 if let Some(options) = options.get::<Option<Table>>("print")? { print = Some(crate::placement::Placement::from_table(options)?); }
                 if let Some(value) = options.get::<Option<AnyUserData>>("material")? {
@@ -511,7 +515,7 @@ pub fn compile_project_cached(
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
             let line = crate::project::source_line(lua);
-            state.outputs.push(Part { assembly, print, line, name, material, solid });
+            state.outputs.push(Part { assembly, print, line, name, material, shading, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,
@@ -991,7 +995,7 @@ impl Model {
             if count > 300000 {
                 return Err("Assembly exceeds its 100000 triangle budget".into());
             }
-            mesh.smooth_normals();
+            part.shading.apply(&mut mesh);
             let color = crate::mesh::vertex_color(part.material.base_color);
             for vertex in &mut mesh.vertices {
                 vertex.color = color;

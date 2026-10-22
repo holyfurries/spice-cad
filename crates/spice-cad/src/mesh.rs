@@ -27,6 +27,7 @@ pub struct Vertex {
 
 const _: () = assert!(std::mem::size_of::<Vertex>() == 32);
 
+#[derive(Clone)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub face_count: u32,

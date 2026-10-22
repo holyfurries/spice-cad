@@ -290,6 +290,48 @@ budget or automatic LOD generation. UVs, textures, collision meshes, rigging, an
 animation are unsupported. [Printing](printing.md) uses finer tessellation and
 separate bed placements.
 
+## Bevels and mesh shading
+
+Open **File → Examples → Bevels and shading** for a beveled block beside flat
+and smooth cylinders. Bevel width and crease angle are editable properties.
+
+```lua
+local block = cad.chamfer(cad.box({width=30, depth=30, height=30}), {width=1})
+cad.show("Block", block, {shading={mode="flat"}})
+cad.show("Pipe", cad.cylinder({radius=15, height=30, x=55}), {
+    shading={mode="smooth", crease_angle=40},
+})
+```
+
+`cad.chamfer` creates a single planar bevel along all edges, or selected named
+edges with `edges={edge}`. It changes the exact CAD solid, including STEP/STL
+exports and measurements. This reuses the existing kernel operation; a separate
+mesh-only bevel modifier is not implemented. Use small widths that fit the solid.
+
+`cad.show` accepts an optional `shading` table:
+
+| Mode | Normals |
+| --- | --- |
+| `cad` (default) | Smooth within each CAD face; hard boundaries between faces. |
+| `flat` | One geometric normal per triangle, including curved tessellation. |
+| `smooth` | Area-weighted normals across shared mesh edges below the crease angle. |
+
+`crease_angle` is in degrees, defaults to 60, and accepts 0–180 only in smooth
+mode. Smoothing groups connect through edges, never just a coincident point;
+nonmanifold edges remain split. Matching uses exact vertex coordinates with
+signed zero normalized, without welding nearby surfaces. At 40 degrees, a
+cylinder's sides smooth while its caps remain hard.
+
+Shading affects the live viewport and exported GLB normals without changing
+positions, face identifiers, triangle counts, dimensions, or print geometry.
+Shading-only edits reuse cached bodies and tessellation; unchanged shading also
+reuses display buffers. No per-frame normal calculation is added. Inline
+thumbnails and diagram renders remain color-only previews.
+
+```sh
+nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.luau output/bevels
+```
+
 ## Low-poly game asset study
 
 Open **File → Examples → Low-poly farmstead** for a recreation of the farmstead

@@ -48,6 +48,7 @@ mod raster;
 mod render_views;
 mod save;
 mod search;
+mod shading;
 mod shape_operation;
 mod splash_frames;
 mod studio;
@@ -1956,6 +1957,9 @@ impl eframe::App for Editor {
                         Navigation::Materials => {
                             example_requested = Some(document::Example::Materials)
                         }
+                        Navigation::BevelsAndShading => {
+                            example_requested = Some(document::Example::BevelsAndShading)
+                        }
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
                         }
@@ -2091,6 +2095,7 @@ impl eframe::App for Editor {
                         for (label, example) in [
                             ("Rounded cube", document::Example::Cube),
                             ("Materials", document::Example::Materials),
+                            ("Bevels and shading", document::Example::BevelsAndShading),
                             ("Low-poly farmstead", document::Example::Farmstead),
                             ("Spice rack · four parts", document::Example::RackParts),
                             ("Mounting bracket", document::Example::MountingBracket),

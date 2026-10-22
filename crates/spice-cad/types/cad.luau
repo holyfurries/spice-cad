@@ -3,6 +3,7 @@ type Face = { _face: "Face" }
 type Profile = { _profile: "Profile" }
 type Edge = { _edge: "Edge" }
 type Material = { _material: "Material" }
+type Shading = { mode: "cad" | "flat" | "smooth", crease_angle: number? }
 type Point = { x: number, y: number, z: number }
 type Point2 = { x: number, y: number }
 type Placement =
@@ -68,7 +69,7 @@ local cad: {
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
-	show: (string, Solid, { material: Material?, assembly: Placement?, print: Placement? }?) -> (),
+	show: (string, Solid, { material: Material?, assembly: Placement?, print: Placement?, shading: Shading? }?) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number?, near: Point? }) -> Face,
 	measure: (string, { from: Face, to: Face, min: number?, max: number?, parameter: string? }) -> (),
 } =

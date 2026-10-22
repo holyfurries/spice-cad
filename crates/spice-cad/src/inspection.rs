@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 const TOLERANCE_MM: f32 = 0.001;
 
+#[derive(Clone)]
 pub struct Edges {
     pub segments: Vec<crate::mesh::EdgeSegment>,
     pub items: Vec<Edge>,
