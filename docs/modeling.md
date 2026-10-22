@@ -223,6 +223,39 @@ budget or automatic LOD generation. UVs, textures, collision meshes, rigging, an
 animation are unsupported. [Printing](printing.md) uses finer tessellation and
 separate bed placements.
 
+## Low-poly game asset study
+
+Open **File → Examples → Low-poly farmstead** for a recreation of the farmstead
+from Holy Furries' Crowns Adrift project. Its four separately colored parts use
+only boxes and an extruded triangular roof. The Scale slider changes the whole
+model proportionally. No booleans or curved tessellation are needed.
+
+```sh
+nix develop -c cargo run --locked -- --export-game examples/farmstead.luau output/farmstead
+```
+
+At Scale 1 the body is 100 mm wide; the exported GLB is 44 triangles and about
+6 KB. Import at uniform scale 10 to match the original game's one-unit-wide
+building. This miniature authoring scale keeps every profile below the current
+1,000 mm width/depth limit, including at the slider's maximum. Exported objects
+share the ground-centred source origin. Colors convert the original sRGB palette
+to linear RGB for glTF materials.
+
+![Original Tribute farmstead beside the Spice CAD GLB rendered in Bevy](images/farmstead-comparison.png)
+
+The comparison uses Tribute's original sprite camera, lighting, transparent
+128 × 128 render target, and Bevy's glTF loader in a temporary copy of its art
+study. Images are enlarged without filtering. The silhouette matches; shading
+differs because Spice currently exports fixed roughness 0.7 while the original
+uses roughness 1 and zero reflectance. The game and sprites are unchanged.
+This is a static asset check, not a persistent import integration or a new sprite
+exporter in Spice CAD.
+
+For Bevy 0.19, enable `bevy_gltf` and use `WorldAssetRoot` with
+`GltfAssetLabel::Scene(0)` to load `model.glb`; apply
+`Transform::from_scale(Vec3::splat(10.0))` to the root. Apply game placement to
+that root so the four parts keep their shared origin.
+
 ## Execution limits
 
 The editor accepts up to 16 MiB of UTF-8. Luau execution has an 8 MiB VM budget

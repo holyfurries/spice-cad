@@ -1947,6 +1947,9 @@ impl eframe::App for Editor {
                             self.camera.pitch = 1.55;
                         }
                         Navigation::Cube => example_requested = Some(document::Example::Cube),
+                        Navigation::Farmstead => {
+                            example_requested = Some(document::Example::Farmstead)
+                        }
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
                         }
@@ -2081,6 +2084,7 @@ impl eframe::App for Editor {
                     ui.menu_button("Examples", |ui| {
                         for (label, example) in [
                             ("Rounded cube", document::Example::Cube),
+                            ("Low-poly farmstead", document::Example::Farmstead),
                             ("Spice rack · four parts", document::Example::RackParts),
                             ("Mounting bracket", document::Example::MountingBracket),
                             ("Measured block", document::Example::MeasuredBlock),

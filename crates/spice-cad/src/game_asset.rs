@@ -115,6 +115,61 @@ mod tests {
     }
 
     #[test]
+    fn farmstead_exports_four_colored_low_poly_parts_at_game_scale() -> Result<(), String> {
+        let source = include_str!("../../../examples/farmstead.luau");
+        let folder = std::env::temp_dir().join(format!("spice-farmstead-{}", std::process::id()));
+        for scale in [0.25_f64, 1.0, 2.0] {
+            let source = source.replace("cad.number(1,", &format!("cad.number({scale},"));
+            let target = folder.join(scale.to_string());
+            export::model_files(&source, &target, export::Target::Game)?;
+            let bytes =
+                std::fs::read(target.join("model.glb")).map_err(|error| error.to_string())?;
+            let json_size = word(&bytes, 12) as usize;
+            let document: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_size])
+                .map_err(|error| error.to_string())?;
+            let nodes = document["nodes"].as_array().unwrap();
+            assert_eq!(nodes.len(), 4);
+            let mut triangles = 0;
+            let mut minimum = [f64::INFINITY; 3];
+            let mut maximum = [f64::NEG_INFINITY; 3];
+            for (index, name) in [
+                "Plaster body",
+                "Terracotta roof",
+                "Timber door",
+                "Plaster chimney",
+            ]
+            .iter()
+            .enumerate()
+            {
+                assert_eq!(nodes[index]["name"], *name);
+                let accessor = &document["accessors"][index * 3];
+                for axis in 0..3 {
+                    minimum[axis] = minimum[axis].min(accessor["min"][axis].as_f64().unwrap());
+                    maximum[axis] = maximum[axis].max(accessor["max"][axis].as_f64().unwrap());
+                }
+                triangles += document["accessors"][index * 3 + 2]["count"]
+                    .as_u64()
+                    .unwrap()
+                    / 3;
+            }
+            assert_eq!(triangles, 44);
+            for (axis, (low, high)) in [(-0.0575, 0.0575), (0.0, 0.1155), (-0.05, 0.05)]
+                .into_iter()
+                .enumerate()
+            {
+                assert!((minimum[axis] - low * scale).abs() < 1e-7);
+                assert!((maximum[axis] - high * scale).abs() < 1e-7);
+            }
+            let plaster = document["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][0]
+                .as_f64()
+                .unwrap();
+            assert!((plaster - ((238.0_f64 / 255.0 + 0.055) / 1.055).powf(2.4)).abs() < 1e-6);
+        }
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
     fn assembly_exports_named_colored_objects_and_independent_print_parts() -> Result<(), String> {
         let source = include_str!("../../../examples/rocket-engine.luau");
         let model = model::compile(source)?;

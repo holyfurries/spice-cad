@@ -50,6 +50,10 @@ press **F** over the viewport to frame the model.
 | ![Exploded spice rack with four colored parts and dovetail joints](docs/images/spice-rack.png) | ![Rocket engine with a chamber, nozzle, and mounting plate](docs/images/rocket-engine.png) |
 | [Rack source](examples/rack-parts.luau)                                                          | [Engine source](examples/rocket-engine.luau)                                                 |
 
+For a small game-art example, open **File → Examples → Low-poly farmstead**.
+The [farmstead study](docs/modeling.md#low-poly-game-asset-study) compares its
+44-triangle GLB with the original Crowns Adrift asset rendered in Bevy.
+
 Use **File → Export**:
 
 - **3D print · STEP + STL** writes separate parts in their print placements.
