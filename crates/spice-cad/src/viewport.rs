@@ -232,9 +232,9 @@ impl Instance {
             matrix: matrix.to_cols_array(),
             color: [color[0], color[1], color[2], 1.0],
             surface: [
-                material.roughness,
-                material.metallic,
-                material.specular,
+                material.specular_roughness,
+                material.base_metalness,
+                material.effective_ior(),
                 0.0,
             ],
         }
@@ -402,6 +402,13 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; output.part=part;
  if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
 }
+fn dielectric_fresnel(cosine:f32, ior:f32)->f32 {
+ if ior==1.0 {return 0.0;}
+ let c=clamp(cosine,0.0,1.0); let transmitted=sqrt(max(1.0-(1.0-c*c)/(ior*ior),0.0));
+ let perpendicular=(c-ior*transmitted)/max(c+ior*transmitted,0.00000001);
+ let parallel=(ior*c-transmitted)/max(ior*c+transmitted,0.00000001);
+ return 0.5*(perpendicular*perpendicular+parallel*parallel);
+}
 fn illuminate(base:vec3<f32>, surface:vec3<f32>, normal:vec3<f32>, view:vec3<f32>, light:vec3<f32>)->vec3<f32> {
  let nl=max(dot(normal,light),0.0); let nv=max(dot(normal,view),0.001);
  let halfway=light+view; let half_vector=halfway*inverseSqrt(max(dot(halfway,halfway),0.00000001));
@@ -411,7 +418,7 @@ fn illuminate(base:vec3<f32>, surface:vec3<f32>, normal:vec3<f32>, view:vec3<f32
  let distribution=alpha_squared/max(3.14159265*denominator*denominator,0.000000000001);
  let visibility=0.5/max(nl*sqrt(nv*nv*(1.0-alpha_squared)+alpha_squared)+nv*sqrt(nl*nl*(1.0-alpha_squared)+alpha_squared),0.00001);
  let fresnel_weight=pow(1.0-vh,5.0);
- let dielectric=(0.04+0.96*fresnel_weight)*surface.z;
+ let dielectric=dielectric_fresnel(vh,surface.z);
  let metal=base+(vec3<f32>(1.0)-base)*fresnel_weight;
  let fresnel=mix(vec3<f32>(dielectric),metal,surface.y);
  let diffuse=(1.0-dielectric)*(1.0-surface.y)*base/3.14159265;

@@ -38,9 +38,10 @@ local cad: {
 		string,
 		{
 			base_color: { r: number, g: number, b: number }?,
-			roughness: number?,
-			metallic: number?,
-			specular: number?,
+			specular_roughness: number?,
+			base_metalness: number?,
+			specular_weight: number?,
+			specular_ior: number?,
 		}
 	) -> Material,
 	print_options: ({ minimum_wall: number?, minimum_clearance: number? }) -> (),

@@ -197,8 +197,7 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             include_str!("../../../examples/fit-gauge.luau"),
         ),
         Example::ModularBracket => {
-            let directory = directory.join("spice-cad/models/modular");
-            for (name, source) in [
+            let files = [
                 (
                     "components/foot.luau",
                     include_str!("../../../examples/modular/components/foot.luau"),
@@ -211,10 +210,8 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
                     "main.luau",
                     include_str!("../../../examples/modular/main.luau"),
                 ),
-            ] {
-                create_example_model(directory.join(name), source)?;
-            }
-            return Ok(directory.join("main.luau"));
+            ];
+            return install_example(&directory, &files, "main.luau");
         }
         Example::RackParts => (
             "spice-rack-measurements.luau",
@@ -253,7 +250,30 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             include_str!("../../../examples/mounting-bracket.luau"),
         ),
     };
-    create_example_model(directory.join("spice-cad/models").join(name), source)
+    install_example(&directory, &[(name, source)], name)
+}
+
+fn install_example(
+    directory: &std::path::Path,
+    files: &[(&str, &str)],
+    entry: &str,
+) -> Result<PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    assert!(!files.is_empty());
+    assert!(files.len() <= 32);
+    assert!(files.iter().any(|(name, _)| *name == entry));
+    let mut version = std::collections::hash_map::DefaultHasher::new();
+    for (name, source) in files {
+        name.hash(&mut version);
+        source.hash(&mut version);
+    }
+    let directory = directory
+        .join("spice-cad/models/examples")
+        .join(format!("{:016x}", version.finish()));
+    for (name, source) in files {
+        create_example_model(directory.join(name), source)?;
+    }
+    Ok(directory.join(entry))
 }
 
 fn create_example_model(path: PathBuf, source: &str) -> Result<PathBuf, String> {
@@ -575,6 +595,69 @@ mod tests {
         assert!(document.read_error.is_none());
         assert_eq!(document.buffer.to_string(), "local width = 30");
         drop(watcher);
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn updated_farmstead_uses_current_source_without_overwriting_older_copies() -> Result<(), String>
+    {
+        let folder = std::env::temp_dir().join(format!(
+            "spice-cad-farmstead-install-{}",
+            std::process::id()
+        ));
+        let stale = "local m=cad.material('old',{roughness=1,specular=0});cad.show('box',cad.box({width=1,depth=1,height=1}),{material=m})";
+        assert!(model::compile(stale).is_err());
+        let legacy = folder.join("spice-cad/models/farmstead.luau");
+        create_example_model(legacy.clone(), stale)?;
+        let previous = install_example(&folder, &[("farmstead.luau", stale)], "farmstead.luau")?;
+        let source = include_str!("../../../examples/farmstead.luau");
+        let current = install_example(&folder, &[("farmstead.luau", source)], "farmstead.luau")?;
+        assert_ne!(previous, current);
+        assert_ne!(legacy, current);
+        assert_eq!(model::read_source(&legacy)?, stale);
+        assert_eq!(model::read_source(&previous)?, stale);
+        assert_eq!(model::read_source(&current)?, source);
+        assert_eq!(
+            model::compile(&model::read_source(&current)?)?.parts.len(),
+            4
+        );
+        std::fs::write(&current, "user edits").map_err(|error| error.to_string())?;
+        assert_eq!(
+            install_example(&folder, &[("farmstead.luau", source)], "farmstead.luau")?,
+            current
+        );
+        assert_eq!(model::read_source(&current)?, "user edits");
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn example_version_includes_imported_sources_and_preserves_module_layout() -> Result<(), String>
+    {
+        let folder =
+            std::env::temp_dir().join(format!("spice-cad-module-install-{}", std::process::id()));
+        let entry = "local part=require('./components/part');cad.show('part',part)";
+        let previous = install_example(
+            &folder,
+            &[("main.luau", entry), ("components/part.luau", "old module")],
+            "main.luau",
+        )?;
+        let current = install_example(
+            &folder,
+            &[("main.luau", entry), ("components/part.luau", "new module")],
+            "main.luau",
+        )?;
+        assert_ne!(previous, current);
+        assert_eq!(model::read_source(&current)?, entry);
+        assert_eq!(
+            model::read_source(&previous.parent().unwrap().join("components/part.luau"))?,
+            "old module"
+        );
+        assert_eq!(
+            model::read_source(&current.parent().unwrap().join("components/part.luau"))?,
+            "new module"
+        );
         std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         Ok(())
     }

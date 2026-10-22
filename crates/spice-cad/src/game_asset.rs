@@ -65,11 +65,27 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
                 let material = &part.material;
                 let [r, g, b] = material.base_color;
                 let mut definition = json!({"name": material.name, "pbrMetallicRoughness": {
-                    "baseColorFactor": [r, g, b, 1.0], "metallicFactor": material.metallic, "roughnessFactor": material.roughness
-                }});
-                if material.specular != 1.0 {
-                    definition["extensions"] =
-                        json!({"KHR_materials_specular": {"specularFactor": material.specular}});
+                    "baseColorFactor": [r, g, b, 1.0], "metallicFactor": material.base_metalness, "roughnessFactor": material.specular_roughness
+                }, "extras": {"spice_cad": {"openpbr_version": "1.1.1", "openpbr": {
+                    "base_color": [r,g,b], "base_metalness": material.base_metalness,
+                    "specular_roughness": material.specular_roughness, "specular_weight": material.specular_weight,
+                    "specular_ior": material.specular_ior
+                }}}});
+                let mut extensions = serde_json::Map::new();
+                if material.effective_ior() != 1.5 {
+                    extensions.insert(
+                        "KHR_materials_ior".into(),
+                        json!({"ior": material.effective_ior()}),
+                    );
+                }
+                if material.effective_ior() == 1.0 {
+                    extensions.insert(
+                        "KHR_materials_specular".into(),
+                        json!({"specularFactor": 0.0}),
+                    );
+                }
+                if !extensions.is_empty() {
+                    definition["extensions"] = extensions.into();
                 }
                 materials.push(definition);
                 material_keys.push(material);
@@ -103,11 +119,22 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
         "buffers": [{"byteLength": binary.len()}],
         "bufferViews": views, "accessors": accessors
     });
+    let mut extensions = Vec::with_capacity(2);
     if material_keys
         .iter()
-        .any(|material| material.specular != 1.0)
+        .any(|material| material.effective_ior() != 1.5)
     {
-        document["extensionsUsed"] = json!(["KHR_materials_specular"]);
+        extensions.push("KHR_materials_ior");
+    }
+    if material_keys
+        .iter()
+        .any(|material| material.effective_ior() == 1.0)
+    {
+        extensions.push("KHR_materials_specular");
+    }
+    if !extensions.is_empty() {
+        document["extensionsUsed"] = json!(extensions);
+        document["extensionsRequired"] = json!(extensions);
     }
     let mut json = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
     json.resize(json.len().next_multiple_of(4), b' ');
@@ -138,6 +165,69 @@ mod tests {
     }
 
     #[test]
+    fn openpbr_exports_map_weight_to_ior_and_preserve_source_parameters() -> Result<(), String> {
+        let folder = std::env::temp_dir().join(format!("spice-openpbr-{}", std::process::id()));
+        for (index, (ior, weight, expected)) in [
+            (1.5, 1.0, 1.5),
+            (1.5, 0.25, 1.2222222222),
+            (2.0, 0.25, 1.4),
+            (1.5, 0.0, 1.0),
+            (1.0, 1.0, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = format!(
+                "local m=cad.material('reference',{{specular_ior={ior},specular_weight={weight},specular_roughness=0.6}});cad.show('box',cad.box({{width=1,depth=1,height=1}}),{{material=m}})"
+            );
+            let target = folder.join(index.to_string());
+            export::model_files(&source, &target, export::Target::Game)?;
+            let bytes =
+                std::fs::read(target.join("model.glb")).map_err(|error| error.to_string())?;
+            let json_size = word(&bytes, 12) as usize;
+            let document: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_size])
+                .map_err(|error| error.to_string())?;
+            let material = &document["materials"][0];
+            let metadata = &material["extras"]["spice_cad"];
+            assert_eq!(metadata["openpbr_version"], "1.1.1");
+            assert_eq!(metadata["openpbr"]["specular_ior"], ior);
+            assert_eq!(metadata["openpbr"]["specular_weight"], weight);
+            assert!(
+                (material["pbrMetallicRoughness"]["roughnessFactor"]
+                    .as_f64()
+                    .unwrap()
+                    - 0.6)
+                    .abs()
+                    < 1e-6
+            );
+            if index == 0 {
+                assert!(material["extensions"].is_null());
+                assert!(document["extensionsUsed"].is_null());
+            } else {
+                let actual = material["extensions"]["KHR_materials_ior"]["ior"]
+                    .as_f64()
+                    .unwrap();
+                assert!((actual - expected).abs() < 1e-6);
+                assert_eq!(document["extensionsUsed"], document["extensionsRequired"]);
+                assert_eq!(document["extensionsUsed"][0], "KHR_materials_ior");
+            }
+            if expected == 1.0 {
+                assert_eq!(
+                    material["extensions"]["KHR_materials_specular"]["specularFactor"],
+                    0.0
+                );
+            } else {
+                assert!(material["extensions"]["KHR_materials_specular"].is_null());
+            }
+            let notes = std::fs::read_to_string(target.join("GAME_ASSET.md"))
+                .map_err(|error| error.to_string())?;
+            assert!(notes.contains("Mapping is lossy"));
+        }
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
     fn farmstead_exports_four_colored_low_poly_parts_at_game_scale() -> Result<(), String> {
         let source = include_str!("../../../examples/farmstead.luau");
         let folder = std::env::temp_dir().join(format!("spice-farmstead-{}", std::process::id()));
@@ -155,7 +245,7 @@ mod tests {
             assert_eq!(document["materials"].as_array().unwrap().len(), 3);
             assert_eq!(
                 document["extensionsUsed"],
-                json!(["KHR_materials_specular"])
+                json!(["KHR_materials_ior", "KHR_materials_specular"])
             );
             assert_eq!(document["meshes"][3]["primitives"][0]["material"], 0);
             for material in document["materials"].as_array().unwrap() {
@@ -239,8 +329,8 @@ mod tests {
             );
             assert_eq!(document["materials"][index]["name"], part.material.name);
             for (field, expected) in [
-                ("roughnessFactor", part.material.roughness),
-                ("metallicFactor", part.material.metallic),
+                ("roughnessFactor", part.material.specular_roughness),
+                ("metallicFactor", part.material.base_metalness),
             ] {
                 let actual = document["materials"][index]["pbrMetallicRoughness"][field]
                     .as_f64()

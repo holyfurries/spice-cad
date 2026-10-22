@@ -7,7 +7,9 @@
 `cargo run --release --locked` launches the native application from `nix develop`.
 Installed builds run without the checkout. The first launch opens a rounded
 cube; **File → Examples** opens other bundled models while preserving
-existing personal copies.
+existing personal copies. Each bundled source revision installs into its own
+directory, so updated examples use current APIs without replacing older files or
+your edits. Module examples are versioned together with their dependencies.
 
 | Action | Shortcut |
 | --- | --- |

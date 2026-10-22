@@ -3939,6 +3939,7 @@ mod tests {
         for (index, source) in [
             source.replace("cad.number(0.3,", "cad.number(0.8,"),
             source.replace("cad.number(1,", "cad.number(0,"),
+            source.replace("cad.number(1.5,", "cad.number(2,"),
         ]
         .into_iter()
         .enumerate()
@@ -4463,6 +4464,58 @@ mod tests {
             assert!(error.contains(message), "{error}");
             assert!(!folder.exists());
         }
+    }
+
+    #[test]
+    fn all_bundled_examples_build_with_valid_default_geometry() -> Result<(), String> {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut entries = Vec::with_capacity(32);
+        for (index, entry) in std::fs::read_dir(&directory)
+            .map_err(|error| error.to_string())?
+            .take(65)
+            .enumerate()
+        {
+            assert!(index < 64, "Example directory exceeds its entry budget");
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            if kind.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "luau")
+            {
+                entries.push(path);
+            } else if kind.is_dir() {
+                let entry = path.join("main.luau");
+                if entry.is_file() {
+                    entries.push(entry);
+                }
+            }
+        }
+        assert!(!entries.is_empty());
+        entries.sort();
+        let kernel = kernel::Kernel::new()?;
+        for path in entries {
+            let source = model::read_source(&path)?;
+            let project = project::Project::load_if_imported(&path, &source)?;
+            let snapshot = build_script_snapshot_project(
+                source,
+                1,
+                &mut model::Cache::new(&kernel),
+                model::ThumbnailMode::Complete,
+                project.as_ref(),
+            )
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+            assert!(!snapshot.parts.is_empty(), "{}", path.display());
+            assert!(snapshot.volume_mm3 > 0.0, "{}", path.display());
+            for part in &snapshot.scene.display.parts {
+                part.geometry
+                    .mesh
+                    .validate()
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+            }
+        }
+        Ok(())
     }
 
     #[test]

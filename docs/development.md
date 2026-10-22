@@ -32,6 +32,11 @@ stylua --check --syntax Luau examples crates/spice-cad/types
 nixfmt --check flake.nix
 ```
 
+The native test suite discovers every top-level Luau example and each example
+directory's `main.luau`, resolves imports, and builds its default geometry. It
+checks that every part has a closed valid mesh. Keep this gate passing when
+changing the public CAD API or adding examples; CI runs it through `cargo test`.
+
 `nix develop .#format` provides lightweight formatting and workflow tools without
 building the CAD kernel. Use it for `actionlint` and `yamlfmt -lint
 .github/workflows/build.yml`. Format changed Rust with `cargo fmt --all`, Luau

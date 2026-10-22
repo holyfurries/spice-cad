@@ -175,11 +175,12 @@ impl State {
                                 .truncate(),
                         );
                         let response = response.on_hover_text(format!(
-                            "{} · roughness {:.2} · metalness {:.2} · weight {:.2}",
+                            "{} · roughness {:.2} · metalness {:.2} · weight {:.2} · IOR {:.2}",
                             part.material.name,
-                            part.material.roughness,
-                            part.material.metallic,
-                            part.material.specular
+                            part.material.specular_roughness,
+                            part.material.base_metalness,
+                            part.material.specular_weight,
+                            part.material.specular_ior
                         ));
                         if response.clicked() && visible {
                             action = Some(Action::Select(index));

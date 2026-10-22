@@ -45,18 +45,70 @@ an earlier solid are invalid after another modeling operation.
 
 ## Materials
 
-Define reusable named surfaces with `cad.material(name, options)` and pass them
-to `cad.show` using `{ material = surface }`. Options are linear RGB `base_color`,
-`roughness` (default 0.7), `metallic` (default 0), and dielectric `specular` strength
-(default 1). All channels and values must be finite and between 0 and 1.
-The previous `color` option is replaced by material definitions.
+Define a named material once and share it between parts:
+
+```lua
+local roughness: number = cad.number(0.3, { label = "Roughness", min = 0, max = 1, step = 0.01 })
+local plaster = cad.material("Plaster", {
+    base_color = { r = 0.85, g = 0.72, b = 0.45 },
+    specular_roughness = roughness,
+    base_metalness = 0,
+    specular_weight = 0,
+})
+cad.show("Wall", cad.box({ width = 40, depth = 5, height = 30 }), { material = plaster })
+```
+
+Spice implements an opaque, isotropic, in-air parameter subset of
+[OpenPBR Surface 1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/),
+with explicit renderer and export approximations. This is not full OpenPBR BSDF
+conformance or a MaterialX importer. Materials are immutable reusable values.
+`cad.show` takes `material`, replacing the former `color` option.
+
+| OpenPBR parameter | Supported values | Default |
+| --- | --- | --- |
+| `base_color` | Linear RGB channels in [0, 1], not sRGB | (0.8, 0.8, 0.8) |
+| `base_metalness` | [0, 1] | 0 |
+| `specular_roughness` | [0, 1]; microfacet alpha = roughness² | 0.3 |
+| `specular_weight` | [0, 1]; must equal 1 if metalness > 0 | 1 |
+| `specular_ior` | [1, 3] | 1.5 |
+
+All numbers must be finite. The weight modulates normal-incidence dielectric
+reflectivity by changing IOR, as specified by OpenPBR; it is **not** glTF's
+`specularFactor`. For reference IOR `n`, `F0 = ((n-1)/(n+1))²`,
+`e = sqrt(specular_weight * F0)`, and effective IOR is `(1+e)/(1-e)`.
+Weight 0 gives effective IOR 1 and no dielectric specular reflection. IOR 1.5
+with weight 0.25 gives effective IOR 1.222222 and F0 0.01.
+
+The profile fixes base weight to 1, diffuse roughness to 0, specular tint to
+white, and anisotropy, transmission, subsurface, coat, fuzz, and emission to 0.
+Unsupported parameters are rejected even when explicitly set to neutral values.
+Non-unit metallic specular weight is rejected because glTF's specular factor
+does not weight its metallic lobe. Weights above 1 and IORs outside [1, 3] are
+also outside this subset. The earlier `roughness`/`metallic`/`specular` aliases
+are removed so their different semantics cannot be mixed accidentally.
 
 **File → Examples → Materials** compares ceramic, bronze, and matte plaster.
-Its sliders update surface properties without rebuilding solids or replacing
-viewport geometry buffers. The studio preview uses GGX and fixed lighting;
-inline thumbnails and headless view renders remain color-only diagrams.
-GLB preserves shared materials and uses `KHR_materials_specular` for non-default
-specular strength. This is a small glTF-style PBR model, not OpenPBR compatibility.
+Its top-level numeric controls edit surface properties without rebuilding solids,
+retessellating, or replacing the viewport geometry buffers. Hover a part in
+Properties to inspect its material name and values.
+
+![Material controls and studio preview in Spice CAD](images/materials.png)
+
+The viewport uses exact dielectric Fresnel at the effective IOR and isotropic
+GGX, with fixed studio lights. Roughness is clamped to 0.045 for preview stability.
+It omits OpenPBR's multiple-scattering compensation and layered diffuse-albedo
+normalization, as well as environment reflections. Inline thumbnails and headless
+view renders remain color-only diagrams.
+
+GLB maps base color, metalness, and roughness directly. Effective IOR uses
+`KHR_materials_ior`; effective IOR 1 additionally uses `KHR_materials_specular` factor 0
+to preserve a purely diffuse surface in Schlick-based engines. Necessary
+extensions are marked required. Original supported parameters and spec version
+are retained in `materials[].extras.spice_cad` as application metadata, not a
+standard OpenPBR interchange extension. `GAME_ASSET.md` explains that glTF's
+Schlick Fresnel and engine-dependent compensation make general shading lossy;
+rendered appearance equivalence is not claimed. Regression tests cover defaults,
+reference IOR/F0 values, GLB mappings, metadata, and unsupported cases.
 
 ## Profiles, extrusions, and revolutions
 
@@ -264,7 +316,12 @@ study. Images are enlarged without filtering. The example declares roughness 1
 and zero specular to match the game's matte materials. The imported GLB sprite
 matched the original pixel-for-pixel in this 128 × 128 comparison. This checks one
 asset under fixed lighting, not appearance equivalence across all renderers.
-The production game and its existing sprites are unchanged.
+For the required-extension export, the temporary study copy needs a one-line
+`gltf-json` 1.4.1 validator allowlist correction for `KHR_materials_specular`.
+Bevy implements this material extension, but its pinned validator otherwise
+rejects the required flag. Validation stays enabled in the corrected study.
+The production game and its existing sprites are unchanged; its unpatched
+importer cannot yet load these required-extension exports.
 This is a static asset check, not a persistent import integration or a new sprite
 exporter in Spice CAD.
 

@@ -9,15 +9,15 @@ end
 
 local plaster = cad.material(
 	"Plaster",
-	{ base_color = { r = linear(238), g = linear(221), b = linear(179) }, roughness = 1, specular = 0 }
+	{ base_color = { r = linear(238), g = linear(221), b = linear(179) }, specular_roughness = 1, specular_weight = 0 }
 )
 local terracotta = cad.material(
 	"Terracotta",
-	{ base_color = { r = linear(160), g = linear(76), b = linear(49) }, roughness = 1, specular = 0 }
+	{ base_color = { r = linear(160), g = linear(76), b = linear(49) }, specular_roughness = 1, specular_weight = 0 }
 )
 local wood = cad.material(
 	"Wood",
-	{ base_color = { r = linear(101), g = linear(76), b = linear(49) }, roughness = 1, specular = 0 }
+	{ base_color = { r = linear(101), g = linear(76), b = linear(49) }, specular_roughness = 1, specular_weight = 0 }
 )
 
 local body = cad.box({
