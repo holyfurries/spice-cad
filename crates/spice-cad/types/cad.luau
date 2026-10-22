@@ -2,6 +2,7 @@ type Solid = { _solid: "Solid" }
 type Face = { _face: "Face" }
 type Profile = { _profile: "Profile" }
 type Edge = { _edge: "Edge" }
+type Material = { _material: "Material" }
 type Point = { x: number, y: number, z: number }
 type Point2 = { x: number, y: number }
 type Placement =
@@ -33,6 +34,15 @@ type HoleOptions = {
 	countersink: { radius: number, angle: number? }?,
 }
 local cad: {
+	material: (
+		string,
+		{
+			base_color: { r: number, g: number, b: number }?,
+			roughness: number?,
+			metallic: number?,
+			specular: number?,
+		}
+	) -> Material,
 	print_options: ({ minimum_wall: number?, minimum_clearance: number? }) -> (),
 	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
 	toggle: (boolean, { label: string? }) -> boolean,
@@ -57,11 +67,7 @@ local cad: {
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
-	show: (
-		string,
-		Solid,
-		{ color: { r: number, g: number, b: number }?, assembly: Placement?, print: Placement? }?
-	) -> (),
+	show: (string, Solid, { material: Material?, assembly: Placement?, print: Placement? }?) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number?, near: Point? }) -> Face,
 	measure: (string, { from: Face, to: Face, min: number?, max: number?, parameter: string? }) -> (),
 } =

@@ -375,7 +375,10 @@ pub fn report(
             sample_count,
         });
         if model.print_options.minimum_clearance_mm > 0.0 {
-            let placed = mesh.placed(part.placement(Layout::Assembly).matrix(), part.color);
+            let placed = mesh.placed(
+                part.placement(Layout::Assembly).matrix(),
+                part.material.base_color,
+            );
             bounds.push(mesh_bounds(&placed, glam::Mat4::IDENTITY));
             assembly.push(placed);
         }

@@ -22,7 +22,7 @@ pub struct Part {
     pub print: Option<crate::placement::Placement>,
     pub line: usize,
     pub name: String,
-    pub color: [f32; 3],
+    pub material: crate::material::Material,
     solid: usize,
 }
 
@@ -486,22 +486,15 @@ pub fn compile_project_cached(
                     "Output name must contain 1–80 bytes without control characters".into(),
                 ));
             }
-            let mut color = crate::mesh::DEFAULT_COLOR;
+            let mut material = crate::material::Material::default();
             let mut assembly = crate::placement::Placement::default();
             let mut print = None;
             if let Some(options) = options {
-                options_fields(&options, &["color", "assembly", "print"])?;
+                options_fields(&options, &["material", "assembly", "print"])?;
                 if let Some(options) = options.get::<Option<Table>>("assembly")? { assembly = crate::placement::Placement::from_table(options)?; }
                 if let Some(options) = options.get::<Option<Table>>("print")? { print = Some(crate::placement::Placement::from_table(options)?); }
-                if let Some(rgb) = options.get::<Option<Table>>("color")? {
-                    options_fields(&rgb, &["r", "g", "b"])?;
-                    for (index, key) in ["r", "g", "b"].into_iter().enumerate() {
-                        let value: f64 = rgb.get(key)?;
-                        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                            return Err(mlua::Error::RuntimeError("Part color channels must be finite and between 0 and 1".into()));
-                        }
-                        color[index] = value as f32;
-                    }
+                if let Some(value) = options.get::<Option<AnyUserData>>("material")? {
+                    material = value.borrow::<crate::material::Material>()?.clone();
                 }
             }
             let solid = solid.borrow::<Solid>()?.0;
@@ -518,12 +511,13 @@ pub fn compile_project_cached(
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
             let line = crate::project::source_line(lua);
-            state.outputs.push(Part { assembly, print, line, name, color, solid });
+            state.outputs.push(Part { assembly, print, line, name, material, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    crate::material::register(&lua, &cad).map_err(|error| error.to_string())?;
     let definitions = crate::dimensions::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
@@ -998,7 +992,7 @@ impl Model {
                 return Err("Assembly exceeds its 100000 triangle budget".into());
             }
             mesh.smooth_normals();
-            let color = crate::mesh::vertex_color(part.color);
+            let color = crate::mesh::vertex_color(part.material.base_color);
             for vertex in &mut mesh.vertices {
                 vertex.color = color;
             }
@@ -1169,7 +1163,7 @@ impl Model {
 mod tests {
     #[test]
     fn touching_parts_preserve_faces_colors_edges_and_volume() -> Result<(), String> {
-        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=10});cad.show('red',a,{color={r=1,g=0,b=0}});cad.show('blue',b,{color={r=0,g=0,b=1}})";
+        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=10});cad.show('red',a,{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}})});cad.show('blue',b,{material = cad.material('Surface', {base_color = {r=0,g=0,b=1}})})";
         let snapshot = crate::build_script_snapshot(source, 1)?;
         assert_eq!(snapshot.parts.len(), 2);
         assert_eq!(snapshot.parts[0].name, "red");
@@ -1192,7 +1186,7 @@ mod tests {
                 .expect("Part owns face");
             assert_eq!(
                 vertex.color,
-                crate::mesh::vertex_color(snapshot.parts[index].color)
+                crate::mesh::vertex_color(snapshot.parts[index].material.base_color)
             );
             assert!(snapshot.scene.faces.contains_key(&vertex.face_id));
         }
@@ -1235,10 +1229,10 @@ mod tests {
         for suffix in [
             "cad.show('same',a);cad.show('same',b)",
             "cad.show('first',a);cad.show('second',a)",
-            "cad.show('bad',a,{color={r=-0.1,g=0,b=0}})",
-            "cad.show('bad',a,{color={r=1.1,g=0,b=0}})",
-            "cad.show('bad',a,{color={r=0/0,g=0,b=0}})",
-            "cad.show('bad',a,{color={r=1/0,g=0,b=0}})",
+            "cad.show('bad',a,{material = cad.material('Surface', {base_color = {r=-0.1,g=0,b=0}})})",
+            "cad.show('bad',a,{material = cad.material('Surface', {base_color = {r=1.1,g=0,b=0}})})",
+            "cad.show('bad',a,{material = cad.material('Surface', {base_color = {r=0/0,g=0,b=0}})})",
+            "cad.show('bad',a,{material = cad.material('Surface', {base_color = {r=1/0,g=0,b=0}})})",
         ] {
             assert!(
                 super::compile(&format!("{prefix}{suffix}")).is_err(),
@@ -1275,7 +1269,7 @@ mod tests {
 
     #[test]
     fn options_can_call_cad_functions_without_reentrant_recipe_borrows() -> Result<(), String> {
-        let source = "local a=cad.box({width=10,depth=10,height=10});local options:any=setmetatable({},{__index=function(_,key) if key=='color' then cad.show('nested',cad.translate(a,{x=20}));return {r=1,g=0,b=0} end;return nil end});cad.show('outer',a,options)";
+        let source = "local a=cad.box({width=10,depth=10,height=10});local options:any=setmetatable({},{__index=function(_,key) if key=='material' then cad.show('nested',cad.translate(a,{x=20}));return cad.material('red',{base_color={r=1,g=0,b=0}}) end;return nil end});cad.show('outer',a,options)";
         assert_eq!(crate::build_script_snapshot(source, 1)?.parts.len(), 2);
         let source = "local point:any=setmetatable({y=0},{__index=function(_,key) if key=='x' then cad.polygon({{x=0,y=0},{x=1,y=0},{x=0,y=1}});return 0 end;return nil end});local profile=cad.polygon({point,{x=10,y=0},{x=0,y=10}});cad.show('profile',cad.extrude(profile,{height=2}))";
         assert!((crate::build_script_snapshot(source, 1)?.volume_mm3 - 100.0).abs() < 0.001);

@@ -297,7 +297,7 @@ impl<'kernel> Cache<'kernel> {
             let orientation = part.placement(layout).orientation();
             let cached = &mut entry.presentations[slot];
             if cached.as_ref().is_none_or(|previous| {
-                previous.orientation != orientation || previous.color != part.color
+                previous.orientation != orientation || previous.color != part.material.base_color
             }) {
                 let bounds = if orientation == crate::placement::Placement::default() {
                     entry.geometry.bounds
@@ -306,7 +306,10 @@ impl<'kernel> Cache<'kernel> {
                     orientation.apply(&mut body, false)?;
                     body.bounds(true)?.map(|point| point.as_vec3())
                 };
-                let mesh = entry.geometry.mesh.placed(orientation.matrix(), part.color);
+                let mesh = entry
+                    .geometry
+                    .mesh
+                    .placed(orientation.matrix(), part.material.base_color);
                 let faces = crate::inspection::faces(&mesh)?;
                 let thumbnail = if thumbnails == ThumbnailMode::Complete {
                     self.thumbnail_renders += 1;
@@ -318,7 +321,7 @@ impl<'kernel> Cache<'kernel> {
                 };
                 *cached = Some(Arc::new(Presentation {
                     orientation,
-                    color: part.color,
+                    color: part.material.base_color,
                     bounds,
                     faces,
                     thumbnail,
@@ -326,7 +329,10 @@ impl<'kernel> Cache<'kernel> {
             }
             let presentation = cached.as_mut().expect("Prepared presentation");
             if thumbnails == ThumbnailMode::Complete && presentation.thumbnail.pending() {
-                let mesh = entry.geometry.mesh.placed(orientation.matrix(), part.color);
+                let mesh = entry
+                    .geometry
+                    .mesh
+                    .placed(orientation.matrix(), part.material.base_color);
                 self.thumbnail_renders += 1;
                 let image = crate::thumbnail::render(&mesh, presentation.bounds, &mut remaining)
                     .map(Arc::new);
@@ -1061,7 +1067,7 @@ mod tests {
             "-- comment\nlocal unused=cad.box({{width=1,depth=1,height=1}});{}",
             source.replace(
                 "'plate',cut,{print={}}",
-                "'renamed',cut,{color={r=1,g=0,b=0},assembly={position={x=50}},print={}}"
+                "'renamed',cut,{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}}),assembly={position={x=50}},print={}}"
             )
         );
         let second = cache.prepare(&super::super::compile(&edited)?)?;

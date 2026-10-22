@@ -151,9 +151,12 @@ impl State {
                         }
                         let (swatch, _) =
                             ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                        let color: egui::Color32 =
-                            egui::Rgba::from_rgb(part.color[0], part.color[1], part.color[2])
-                                .into();
+                        let color: egui::Color32 = egui::Rgba::from_rgb(
+                            part.material.base_color[0],
+                            part.material.base_color[1],
+                            part.material.base_color[2],
+                        )
+                        .into();
                         ui.painter().rect_filled(
                             swatch,
                             2.0,
@@ -171,6 +174,13 @@ impl State {
                                 .frame_when_inactive(selected == Some(index))
                                 .truncate(),
                         );
+                        let response = response.on_hover_text(format!(
+                            "{} · roughness {:.2} · metalness {:.2} · weight {:.2}",
+                            part.material.name,
+                            part.material.roughness,
+                            part.material.metallic,
+                            part.material.specular
+                        ));
                         if response.clicked() && visible {
                             action = Some(Action::Select(index));
                         }

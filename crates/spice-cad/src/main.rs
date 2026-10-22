@@ -29,6 +29,7 @@ mod inspection;
 mod interface;
 mod kernel;
 mod lsp;
+mod material;
 mod mesh;
 mod modal;
 mod model;
@@ -734,7 +735,9 @@ fn build_scene(
             model
                 .parts
                 .iter()
-                .map(|part| viewport::Instance::new(part.placement(layout).matrix(), part.color))
+                .map(|part| {
+                    viewport::Instance::new(part.placement(layout).matrix(), &part.material)
+                })
                 .collect(),
         ),
         layout,
@@ -1950,6 +1953,9 @@ impl eframe::App for Editor {
                         Navigation::Farmstead => {
                             example_requested = Some(document::Example::Farmstead)
                         }
+                        Navigation::Materials => {
+                            example_requested = Some(document::Example::Materials)
+                        }
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
                         }
@@ -2084,6 +2090,7 @@ impl eframe::App for Editor {
                     ui.menu_button("Examples", |ui| {
                         for (label, example) in [
                             ("Rounded cube", document::Example::Cube),
+                            ("Materials", document::Example::Materials),
                             ("Low-poly farmstead", document::Example::Farmstead),
                             ("Spice rack · four parts", document::Example::RackParts),
                             ("Mounting bracket", document::Example::MountingBracket),
@@ -3920,6 +3927,32 @@ mod tests {
         assert_eq!(changed.cached_parts, 0);
         assert!(!Arc::ptr_eq(&third.scene.display, &changed.scene.display));
         assert!(changed.volume_mm3 > third.volume_mm3);
+        Ok(())
+    }
+
+    #[test]
+    fn material_edits_reuse_geometry_and_update_only_instance_surface_data() -> Result<(), String> {
+        let source = include_str!("../../../examples/materials.luau");
+        let kernel = kernel::Kernel::new()?;
+        let mut cache = model::Cache::new(&kernel);
+        let initial = build_script_snapshot_cached(source.into(), 1, &mut cache)?;
+        for (index, source) in [
+            source.replace("cad.number(0.3,", "cad.number(0.8,"),
+            source.replace("cad.number(1,", "cad.number(0,"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let current = build_script_snapshot_cached(source, index as u64 + 2, &mut cache)?;
+            assert_eq!(current.cached_parts, 3);
+            assert_eq!(initial.thumbnail_renders, current.thumbnail_renders);
+            assert_eq!(initial.volume_mm3, current.volume_mm3);
+            assert!(Arc::ptr_eq(&initial.scene.display, &current.scene.display));
+            assert_ne!(
+                bytemuck::cast_slice::<_, u8>(initial.scene.instances.as_slice()),
+                bytemuck::cast_slice::<_, u8>(current.scene.instances.as_slice())
+            );
+        }
         Ok(())
     }
 

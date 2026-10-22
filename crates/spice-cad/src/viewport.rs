@@ -208,11 +208,12 @@ struct Segment {
 pub struct Instance {
     matrix: [f32; 16],
     color: [f32; 4],
+    surface: [f32; 4],
 }
 
 const _: () = assert!(std::mem::size_of::<Vertex>() == 32);
 const _: () = assert!(std::mem::size_of::<Segment>() == 28);
-const _: () = assert!(std::mem::size_of::<Instance>() == 80);
+const _: () = assert!(std::mem::size_of::<Instance>() == 96);
 
 impl Instance {
     pub fn matrix(&self) -> Mat4 {
@@ -223,12 +224,19 @@ impl Instance {
         [self.color[0], self.color[1], self.color[2]]
     }
 
-    pub fn new(matrix: Mat4, color: [f32; 3]) -> Self {
+    pub fn new(matrix: Mat4, material: &crate::material::Material) -> Self {
+        let color = material.base_color;
         assert!(matrix.is_finite());
         assert!(color.iter().all(|value| value.is_finite()));
         Self {
             matrix: matrix.to_cols_array(),
             color: [color[0], color[1], color[2], 1.0],
+            surface: [
+                material.roughness,
+                material.metallic,
+                material.specular,
+                0.0,
+            ],
         }
     }
 }
@@ -382,7 +390,7 @@ pub fn initialize(context: &eframe::CreationContext<'_>) -> Result<(), String> {
     let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor { label:Some("CAD viewport"),source:wgpu::ShaderSource::Wgsl(r#"
 struct Uniforms { matrix:mat4x4<f32>, selection:vec4<f32>, eye:vec4<f32>, edges:vec4<f32>, part:vec4<f32> }
 @group(0) @binding(0) var<uniform> uniforms:Uniforms;
-struct Instance { matrix:mat4x4<f32>, color:vec4<f32> }
+struct Instance { matrix:mat4x4<f32>, color:vec4<f32>, surface:vec4<f32> }
 @group(0) @binding(1) var<uniform> instances:array<Instance,32>;
 fn part_visible(part:u32)->bool {
  let mask=u32(uniforms.part.z)|(u32(uniforms.part.w)<<16u);
@@ -394,19 +402,41 @@ struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<
  var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; output.part=part;
  if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
 }
-@fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
+fn illuminate(base:vec3<f32>, surface:vec3<f32>, normal:vec3<f32>, view:vec3<f32>, light:vec3<f32>)->vec3<f32> {
+ let nl=max(dot(normal,light),0.0); let nv=max(dot(normal,view),0.001);
+ let halfway=light+view; let half_vector=halfway*inverseSqrt(max(dot(halfway,halfway),0.00000001));
+ let nh=max(dot(normal,half_vector),0.0); let vh=max(dot(view,half_vector),0.0);
+ let alpha=pow(max(surface.x,0.045),2.0); let alpha_squared=alpha*alpha;
+ let denominator=nh*nh*(alpha_squared-1.0)+1.0;
+ let distribution=alpha_squared/max(3.14159265*denominator*denominator,0.000000000001);
+ let visibility=0.5/max(nl*sqrt(nv*nv*(1.0-alpha_squared)+alpha_squared)+nv*sqrt(nl*nl*(1.0-alpha_squared)+alpha_squared),0.00001);
+ let fresnel_weight=pow(1.0-vh,5.0);
+ let dielectric=(0.04+0.96*fresnel_weight)*surface.z;
+ let metal=base+(vec3<f32>(1.0)-base)*fresnel_weight;
+ let fresnel=mix(vec3<f32>(dielectric),metal,surface.y);
+ let diffuse=(1.0-dielectric)*(1.0-surface.y)*base/3.14159265;
+ return (diffuse+distribution*visibility*fresnel)*nl;
+}
+fn surface_color(input:Output)->vec3<f32> {
  let normal=normalize(input.normal);
  let view=normalize(uniforms.eye.xyz-input.world);
  let key=normalize(vec3<f32>(-0.35,-0.55,0.85));
  let fill=normalize(vec3<f32>(0.8,0.4,0.3));
- let light=0.24+0.62*max(dot(normal,key),0.0)+0.16*max(dot(normal,fill),0.0);
- let specular=0.20*pow(max(dot(normal,normalize(key+view)),0.0),48.0);
- let rim=0.07*pow(1.0-max(dot(normal,view),0.0),3.0);
+ let surface=instances[input.part].surface.xyz;
  let selected_parts=u32(uniforms.part.x)|(u32(uniforms.part.y)<<16u);
  var color=input.color; if (selected_parts&(1u<<input.part))!=0u {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
- return vec4<f32>(color*light+vec3<f32>(specular+rim),1.0);
+ let ambient=color*0.20*(1.0-0.6*surface.y);
+ return ambient+3.0*illuminate(color,surface,normal,view,key)+0.8*illuminate(color,surface,normal,view,fill);
+}
+@fragment fn fragment_main(input:Output)->@location(0) vec4<f32> {
+ let linear=clamp(surface_color(input),vec3<f32>(0.0),vec3<f32>(1.0));
+ let gamma=select(1.055*pow(linear,vec3<f32>(1.0/2.4))-vec3<f32>(0.055),12.92*linear,linear<=vec3<f32>(0.0031308));
+ return vec4<f32>(gamma,1.0);
+}
+@fragment fn fragment_linear(input:Output)->@location(0) vec4<f32> {
+ return vec4<f32>(surface_color(input),1.0);
 }
 struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32, @location(1) @interpolate(flat) selected:u32 }
 @vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@location(2) part:u32,@builtin(vertex_index) index:u32,@builtin(instance_index) segment:u32)->LineOutput {
@@ -445,7 +475,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -475,7 +505,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fragment_main"),
+            entry_point: Some(if state.target_format.is_srgb() { "fragment_linear" } else { "fragment_main" }),
             compilation_options: Default::default(),
             targets: &[Some(state.target_format.into())],
         }),
@@ -888,7 +918,7 @@ mod tests {
     #[test]
     fn gpu_instances_match_cpu_positions_normals_edges_and_face_ids_in_both_layouts()
     -> Result<(), String> {
-        let source = "local a=cad.box({width=10,depth=20,height=30});local b=cad.cylinder({radius=5,height=15});cad.show('a',a,{color={r=1,g=0,b=0},assembly={rotation={x=25,y=40,z=10},position={x=40,y=-10}},print={position={x=20}}});cad.show('b',b,{color={r=0,g=1,b=0},assembly={rotation={y=90},position={z=20}},print={rotation={x=90},position={y=30,z=5}}})";
+        let source = "local a=cad.box({width=10,depth=20,height=30});local b=cad.cylinder({radius=5,height=15});cad.show('a',a,{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}}),assembly={rotation={x=25,y=40,z=10},position={x=40,y=-10}},print={position={x=20}}});cad.show('b',b,{material = cad.material('Surface', {base_color = {r=0,g=1,b=0}}),assembly={rotation={y=90},position={z=20}},print={rotation={x=90},position={y=30,z=5}}})";
         let mut snapshot = crate::build_script_snapshot(source, 1)?;
         let geometry = Arc::clone(&snapshot.scene.display);
         for layout in [

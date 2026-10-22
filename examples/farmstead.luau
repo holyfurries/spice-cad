@@ -7,9 +7,18 @@ local function linear(channel: number): number
 	return if value <= 0.04045 then value / 12.92 else ((value + 0.055) / 1.055) ^ 2.4
 end
 
-local plaster = { r = linear(238), g = linear(221), b = linear(179) }
-local terracotta = { r = linear(160), g = linear(76), b = linear(49) }
-local wood = { r = linear(101), g = linear(76), b = linear(49) }
+local plaster = cad.material(
+	"Plaster",
+	{ base_color = { r = linear(238), g = linear(221), b = linear(179) }, roughness = 1, specular = 0 }
+)
+local terracotta = cad.material(
+	"Terracotta",
+	{ base_color = { r = linear(160), g = linear(76), b = linear(49) }, roughness = 1, specular = 0 }
+)
+local wood = cad.material(
+	"Wood",
+	{ base_color = { r = linear(101), g = linear(76), b = linear(49) }, roughness = 1, specular = 0 }
+)
 
 local body = cad.box({
 	width = 100 * scale,
@@ -18,7 +27,7 @@ local body = cad.box({
 	x = -50 * scale,
 	y = -42.5 * scale,
 })
-cad.show("Plaster body", body, { color = plaster })
+cad.show("Plaster body", body, { material = plaster })
 
 local gable = cad.polygon({
 	{ x = -57.5 * scale, y = 0 },
@@ -27,7 +36,7 @@ local gable = cad.polygon({
 })
 local roof = cad.rotate(cad.extrude(gable, { height = 100 * scale }), { axis = "x", angle = 90 })
 roof = cad.translate(roof, { y = 50 * scale, z = 68 * scale })
-cad.show("Terracotta roof", roof, { color = terracotta })
+cad.show("Terracotta roof", roof, { material = terracotta })
 
 local door = cad.box({
 	width = 23 * scale,
@@ -36,7 +45,7 @@ local door = cad.box({
 	x = -5.5 * scale,
 	y = -44.3 * scale,
 })
-cad.show("Timber door", door, { color = wood })
+cad.show("Timber door", door, { material = wood })
 
 local chimney = cad.box({
 	width = 16 * scale,
@@ -46,4 +55,4 @@ local chimney = cad.box({
 	y = 5 * scale,
 	z = 60.5 * scale,
 })
-cad.show("Plaster chimney", chimney, { color = plaster })
+cad.show("Plaster chimney", chimney, { material = plaster })

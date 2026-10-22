@@ -35,4 +35,8 @@ local floor = cad.profile({
 local base = cad.extrude(floor, { height = wall })
 local walls = cad.translate(cad.extrude(sides, { height = height - wall }), { z = wall })
 local enclosure = cad.union(base, walls)
-cad.show("rounded-enclosure", enclosure, { color = { r = 0.58, g = 0.72, b = 0.88 } })
+cad.show(
+	"rounded-enclosure",
+	enclosure,
+	{ material = cad.material("Surface", { base_color = { r = 0.58, g = 0.72, b = 0.88 } }) }
+)

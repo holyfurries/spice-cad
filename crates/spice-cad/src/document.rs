@@ -142,6 +142,7 @@ impl Drop for Watcher {
 pub enum Example {
     Cube,
     Farmstead,
+    Materials,
     CurvedLoft,
     SmoothSweep,
     MiteredPipe,
@@ -167,6 +168,10 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
     };
     let (name, source) = match example {
         Example::Cube => ("cube.luau", include_str!("../../../examples/cube.luau")),
+        Example::Materials => (
+            "materials.luau",
+            include_str!("../../../examples/materials.luau"),
+        ),
         Example::Farmstead => (
             "farmstead.luau",
             include_str!("../../../examples/farmstead.luau"),

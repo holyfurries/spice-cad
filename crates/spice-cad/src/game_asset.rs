@@ -12,6 +12,7 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
     let mut binary = Vec::with_capacity(count * 28);
     let mut nodes = Vec::with_capacity(parts.len());
     let mut materials = Vec::with_capacity(parts.len());
+    let mut material_keys = Vec::with_capacity(parts.len());
     let mut output_meshes = Vec::with_capacity(parts.len());
     let mut views = Vec::with_capacity(parts.len() * 2);
     let mut accessors = Vec::with_capacity(parts.len() * 3);
@@ -55,14 +56,30 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
         let view = views.len();
         let accessor = accessors.len();
         nodes.push(json!({"name": part.name, "mesh": index}));
+        let material_index = match material_keys
+            .iter()
+            .position(|material| *material == &part.material)
+        {
+            Some(index) => index,
+            None => {
+                let material = &part.material;
+                let [r, g, b] = material.base_color;
+                let mut definition = json!({"name": material.name, "pbrMetallicRoughness": {
+                    "baseColorFactor": [r, g, b, 1.0], "metallicFactor": material.metallic, "roughnessFactor": material.roughness
+                }});
+                if material.specular != 1.0 {
+                    definition["extensions"] =
+                        json!({"KHR_materials_specular": {"specularFactor": material.specular}});
+                }
+                materials.push(definition);
+                material_keys.push(material);
+                materials.len() - 1
+            }
+        };
         output_meshes.push(json!({"name": part.name, "primitives": [{
             "attributes": {"POSITION": accessor, "NORMAL": accessor + 1},
-            "indices": accessor + 2, "mode": 4, "material": index
+            "indices": accessor + 2, "mode": 4, "material": material_index
         }]}));
-        let [r, g, b] = part.color;
-        materials.push(json!({"name": part.name, "pbrMetallicRoughness": {
-            "baseColorFactor": [r, g, b, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.7
-        }}));
         views.push(json!({"buffer": 0, "byteOffset": vertex_start,
             "byteLength": vertex_bytes, "byteStride": 24, "target": 34962}));
         views.push(json!({"buffer": 0, "byteOffset": index_start,
@@ -79,13 +96,19 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
             "count": indices.len(), "type": "SCALAR"}));
     }
     let scene_nodes: Vec<_> = (0..nodes.len()).collect();
-    let document = json!({
+    let mut document = json!({
         "asset": {"version": "2.0", "generator": "Spice CAD"},
         "scene": 0, "scenes": [{"nodes": scene_nodes}],
         "nodes": nodes, "meshes": output_meshes, "materials": materials,
         "buffers": [{"byteLength": binary.len()}],
         "bufferViews": views, "accessors": accessors
     });
+    if material_keys
+        .iter()
+        .any(|material| material.specular != 1.0)
+    {
+        document["extensionsUsed"] = json!(["KHR_materials_specular"]);
+    }
     let mut json = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
     json.resize(json.len().next_multiple_of(4), b' ');
     let length = 12 + 8 + json.len() + 8 + binary.len();
@@ -129,6 +152,19 @@ mod tests {
                 .map_err(|error| error.to_string())?;
             let nodes = document["nodes"].as_array().unwrap();
             assert_eq!(nodes.len(), 4);
+            assert_eq!(document["materials"].as_array().unwrap().len(), 3);
+            assert_eq!(
+                document["extensionsUsed"],
+                json!(["KHR_materials_specular"])
+            );
+            assert_eq!(document["meshes"][3]["primitives"][0]["material"], 0);
+            for material in document["materials"].as_array().unwrap() {
+                assert_eq!(material["pbrMetallicRoughness"]["roughnessFactor"], 1.0);
+                assert_eq!(
+                    material["extensions"]["KHR_materials_specular"]["specularFactor"],
+                    0.0
+                );
+            }
             let mut triangles = 0;
             let mut minimum = [f64::INFINITY; 3];
             let mut maximum = [f64::NEG_INFINITY; 3];
@@ -201,13 +237,23 @@ mod tests {
                 document["meshes"][index]["primitives"][0]["material"],
                 index
             );
+            assert_eq!(document["materials"][index]["name"], part.material.name);
+            for (field, expected) in [
+                ("roughnessFactor", part.material.roughness),
+                ("metallicFactor", part.material.metallic),
+            ] {
+                let actual = document["materials"][index]["pbrMetallicRoughness"][field]
+                    .as_f64()
+                    .unwrap();
+                assert!((actual - f64::from(expected)).abs() < 1e-7);
+            }
             for channel in 0..3 {
                 assert!(
                     (document["materials"][index]["pbrMetallicRoughness"]["baseColorFactor"]
                         [channel]
                         .as_f64()
                         .unwrap()
-                        - f64::from(part.color[channel]))
+                        - f64::from(part.material.base_color[channel]))
                     .abs()
                         < 1e-7
                 );

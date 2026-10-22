@@ -111,13 +111,15 @@ fn write_model(
         canonical_meshes
             .iter()
             .zip(&model.parts)
-            .map(|(mesh, part)| mesh.placed(part.placement(layout).matrix(), part.color))
+            .map(|(mesh, part)| {
+                mesh.placed(part.placement(layout).matrix(), part.material.base_color)
+            })
             .collect()
     };
     let mut files = Vec::new();
     if target == Target::Game {
         files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));
-        files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object with its own color material. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. All parts preserve the source origin as their pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with smooth normals within CAD faces and hard boundaries between faces. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
+        files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object. Named materials share linear base color, roughness, metallic and specular strength; non-default specular uses KHR_materials_specular. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. All parts preserve the source origin as their pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with smooth normals within CAD faces and hard boundaries between faces. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
     } else {
         let print_bounds = bodies
             .iter()

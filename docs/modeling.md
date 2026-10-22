@@ -43,6 +43,21 @@ to=...})` handles and pass `edges={handle}` to fillet or chamfer. Endpoints use
 source-local coordinates. Select handles on the exact input solid; handles from
 an earlier solid are invalid after another modeling operation.
 
+## Materials
+
+Define reusable named surfaces with `cad.material(name, options)` and pass them
+to `cad.show` using `{ material = surface }`. Options are linear RGB `base_color`,
+`roughness` (default 0.7), `metallic` (default 0), and dielectric `specular` strength
+(default 1). All channels and values must be finite and between 0 and 1.
+The previous `color` option is replaced by material definitions.
+
+**File → Examples → Materials** compares ceramic, bronze, and matte plaster.
+Its sliders update surface properties without rebuilding solids or replacing
+viewport geometry buffers. The studio preview uses GGX and fixed lighting;
+inline thumbnails and headless view renders remain color-only diagrams.
+GLB preserves shared materials and uses `KHR_materials_specular` for non-default
+specular strength. This is a small glTF-style PBR model, not OpenPBR compatibility.
+
 ## Profiles, extrusions, and revolutions
 
 ```lua
@@ -213,7 +228,7 @@ cargo run --release --locked -- --export-game examples/rocket-engine.luau output
 
 Run Cargo from `nix develop`. Output directories must be new. Game export writes
 `model.glb`, the source graph, and `GAME_ASSET.md`. GLB uses separate named objects,
-part colors, and hard boundaries between CAD faces. Coordinates convert to
+shared PBR materials, and hard boundaries between CAD faces. Coordinates convert to
 right-handed Y-up metres: `(x,y,z)` becomes `(x,z,-y)/1000`. The source origin
 remains the pivot. It has no print-bed requirement; closed meshes and declared
 checks still apply.
@@ -245,9 +260,11 @@ to linear RGB for glTF materials.
 
 The comparison uses Tribute's original sprite camera, lighting, transparent
 128 × 128 render target, and Bevy's glTF loader in a temporary copy of its art
-study. Images are enlarged without filtering. The silhouette matches; shading
-differs because Spice currently exports fixed roughness 0.7 while the original
-uses roughness 1 and zero reflectance. The game and sprites are unchanged.
+study. Images are enlarged without filtering. The example declares roughness 1
+and zero specular to match the game's matte materials. The imported GLB sprite
+matched the original pixel-for-pixel in this 128 × 128 comparison. This checks one
+asset under fixed lighting, not appearance equivalence across all renderers.
+The production game and its existing sprites are unchanged.
 This is a static asset check, not a persistent import integration or a new sprite
 exporter in Spice CAD.
 

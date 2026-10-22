@@ -252,7 +252,7 @@ fn write_png(path: &Path, image: &ColorImage) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const SOURCE: &str = "local box=cad.box({width=40,depth=20,height=30})\ncad.show('front',box,{color={r=0,g=1,b=0},assembly={position={x=100,y=-30,z=50}}})\ncad.show('back',cad.box({width=20,depth=20,height=10,x=10,z=10}),{color={r=1,g=0,b=0},assembly={position={x=100,y=30,z=50}}})\n";
+    const SOURCE: &str = "local box=cad.box({width=40,depth=20,height=30})\ncad.show('front',box,{material = cad.material('Surface', {base_color = {r=0,g=1,b=0}}),assembly={position={x=100,y=-30,z=50}}})\ncad.show('back',cad.box({width=20,depth=20,height=10,x=10,z=10}),{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}}),assembly={position={x=100,y=30,z=50}}})\n";
 
     #[test]
     fn frames_all_corners_with_cad_view_orientations() {

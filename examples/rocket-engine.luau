@@ -22,11 +22,14 @@ local bell = cad.revolve(bell_section, {})
 local mount = cad.box({ width = 56, depth = 56, height = 5, x = -28, y = -28, z = chamber_top })
 mount = cad.subtract(mount, cad.cylinder({ radius = throat_radius, height = 7, z = chamber_top - 1 }))
 cad.show("Combustion chamber", chamber, {
-	color = { r = 0.24, g = 0.30, b = 0.38 },
+	material = cad.material("Steel", { base_color = { r = 0.24, g = 0.30, b = 0.38 }, metallic = 1, roughness = 0.35 }),
 	print = { position = { x = 60, z = -chamber_bottom } },
 })
-cad.show("Bell nozzle", bell, { color = { r = 0.58, g = 0.26, b = 0.10 }, print = {} })
+cad.show("Bell nozzle", bell, {
+	material = cad.material("Copper", { base_color = { r = 0.58, g = 0.26, b = 0.10 }, metallic = 1, roughness = 0.3 }),
+	print = {},
+})
 cad.show("Mount plate", mount, {
-	color = { r = 0.90, g = 0.50, b = 0.12 },
+	material = cad.material("Paint", { base_color = { r = 0.90, g = 0.50, b = 0.12 }, roughness = 0.6 }),
 	print = { position = { x = 120, z = -chamber_top } },
 })

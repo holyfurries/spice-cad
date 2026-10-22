@@ -39,6 +39,7 @@ Edits update the preview automatically. All model lengths are millimetres.
 - Name faces, inspect dimensions, and add holes, pockets, and bosses.
 - Edit with Vim-style keys, syntax highlighting, completion, and diagnostics.
 - Give parts separate assembly and print placements without rebuilding geometry.
+- Share named materials with color, roughness, metallic, and specular controls.
 
 Drag to orbit, Shift-drag to pan, and scroll to zoom. Click a face to inspect it;
 press **F** over the viewport to frame the model.

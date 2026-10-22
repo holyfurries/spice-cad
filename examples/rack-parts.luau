@@ -154,7 +154,7 @@ for side = 0, 1 do
 			then (if section == 0 then { r = 0.25, g = 0.48, b = 0.68 } else { r = 0.30, g = 0.62, b = 0.44 })
 			else (if section == 0 then { r = 0.80, g = 0.45, b = 0.18 } else { r = 0.60, g = 0.35, b = 0.65 })
 		cad.show(name, part, {
-			color = color,
+			material = cad.material(name, { base_color = color }),
 			assembly = { position = { x = side * separation, y = section * separation } },
 			print = {
 				rotation = { y = if side == 0 then -90 else 90 },
