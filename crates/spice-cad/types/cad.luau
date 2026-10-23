@@ -49,6 +49,7 @@ local cad: {
 	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
 	toggle: (boolean, { label: string? }) -> boolean,
 	polygon: ({ { x: number, y: number } }) -> Profile,
+	regular_polygon: ({ radius: number, sides: number, rotation: number? }) -> Profile,
 	circle: ({ radius: number, x: number?, y: number? }) -> Profile,
 	path: ({ start: Point2, segments: { { to: Point2, center: Point2?, clockwise: boolean? } } }) -> Profile,
 	profile: ({ loops: { Profile } }) -> Profile,

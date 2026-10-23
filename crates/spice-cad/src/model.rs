@@ -215,26 +215,32 @@ pub fn compile_project_cached(
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let state = Rc::clone(&recipe);
-    cad.set(
-        "polygon",
-        lua.create_function(move |_, points: Table| {
-            let polygon = crate::profile::Polygon::from_table(points)?;
-            let mut recipe = state.borrow_mut();
-            if recipe.profiles.len() >= OPERATION_COUNT_MAX {
-                return Err(mlua::Error::RuntimeError(
-                    "Model exceeds 256 profiles".into(),
-                ));
-            }
-            let index = recipe.profiles.len();
-            recipe
-                .profiles
-                .push(crate::profile::Profile::Polygon(polygon));
-            Ok(Profile(index))
-        })
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    for name in ["polygon", "regular_polygon"] {
+        let state = Rc::clone(&recipe);
+        cad.set(
+            name,
+            lua.create_function(move |_, points: Table| {
+                let polygon = if name == "regular_polygon" {
+                    crate::profile::Polygon::regular(points)?
+                } else {
+                    crate::profile::Polygon::from_table(points)?
+                };
+                let mut recipe = state.borrow_mut();
+                if recipe.profiles.len() >= OPERATION_COUNT_MAX {
+                    return Err(mlua::Error::RuntimeError(
+                        "Model exceeds 256 profiles".into(),
+                    ));
+                }
+                let index = recipe.profiles.len();
+                recipe
+                    .profiles
+                    .push(crate::profile::Profile::Polygon(polygon));
+                Ok(Profile(index))
+            })
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
     for name in ["circle", "path", "profile"] {
         let state = Rc::clone(&recipe);
         cad.set(

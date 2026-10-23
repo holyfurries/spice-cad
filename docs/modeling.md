@@ -290,6 +290,19 @@ budget or automatic LOD generation. UVs, textures, collision meshes, rigging, an
 animation are unsupported. [Printing](printing.md) uses finer tessellation and
 separate bed placements.
 
+## Explicit low-poly profiles
+
+`cad.regular_polygon({radius=10, sides=8, rotation=22.5})` creates a centred
+polygon profile with exactly eight sides. Radius is the distance to a corner in
+millimetres; rotation is in degrees and defaults to zero. Side counts must be
+integers from 3–128, radius must be 0.01–500 mm, and the usual profile limits
+still apply (including a 0.01 mm minimum edge length).
+
+Extrude it for faceted cylinders or connect profiles with `cad.loft` for tapered
+torsos, helmets, and equipment. Polygon sides remain authored geometry in the
+viewport, STEP/STL, and GLB; curved-surface tessellation does not choose their
+side count. Use `shading={mode="flat"}` for visible facets.
+
 ## Bevels and mesh shading
 
 Open **File → Examples → Bevels and shading** for a beveled block beside flat

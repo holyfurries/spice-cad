@@ -13,6 +13,39 @@ pub struct Polygon {
 }
 
 impl Polygon {
+    pub fn regular(options: Table) -> mlua::Result<Self> {
+        crate::model::options_fields(&options, &["radius", "sides", "rotation"])?;
+        let radius: f64 = options.get("radius")?;
+        let sides: f64 = options.get("sides")?;
+        let rotation: f64 = options.get::<Option<f64>>("rotation")?.unwrap_or(0.0);
+        if !radius.is_finite() || !(0.01..=500.0).contains(&radius) {
+            return Err(mlua::Error::runtime(
+                "Polygon radius must be finite and within 0.01–500 mm",
+            ));
+        }
+        if !sides.is_finite()
+            || !(3.0..=POINT_COUNT_MAX as f64).contains(&sides)
+            || sides.fract() != 0.0
+        {
+            return Err(mlua::Error::runtime(
+                "Polygon sides must be an integer within 3–128",
+            ));
+        }
+        if !rotation.is_finite() || rotation.abs() > 360000.0 {
+            return Err(mlua::Error::runtime(
+                "Polygon rotation must be finite and within ±360000 degrees",
+            ));
+        }
+        let points = (0..sides as u32)
+            .map(|index| {
+                let angle = rotation.rem_euclid(360.0).to_radians()
+                    + std::f64::consts::TAU * f64::from(index) / sides;
+                [radius * angle.cos(), radius * angle.sin()]
+            })
+            .collect();
+        Self::new(points).map_err(mlua::Error::runtime)
+    }
+
     pub fn validate_revolve(&self) -> Result<(), String> {
         assert!((3..=POINT_COUNT_MAX).contains(&self.points.len()));
         if self
@@ -141,6 +174,49 @@ fn polygon_segments_intersect(first: DVec2, second: DVec2, third: DVec2, fourth:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn regular_polygons_keep_explicit_sides_and_analytic_prism_volume() -> Result<(), String> {
+        let kernel = crate::kernel::Kernel::new()?;
+        for sides in [3, 8, 128] {
+            let source = format!(
+                "local p=cad.regular_polygon({{radius=10,sides={sides},rotation=22.5}});cad.show('prism',cad.extrude(p,{{height=20}}))"
+            );
+            let model = crate::model::compile(&source)?;
+            let mut bodies = model.build(&kernel)?;
+            let volume =
+                f64::from(sides) * 1000.0 * (std::f64::consts::TAU / f64::from(sides)).sin();
+            assert!((bodies[0].volume()? - volume).abs() < 1e-6);
+            let meshes = model.meshes(&mut bodies, true)?;
+            meshes[0].validate()?;
+            assert!(meshes[0].vertices.len() / 3 <= sides as usize * 8);
+            assert!(meshes[0].face_count >= sides as u32 + 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn regular_polygons_reject_invalid_counts_dimensions_and_options() {
+        for options in [
+            "{radius=10,sides=2}",
+            "{radius=10,sides=129}",
+            "{radius=10,sides=3.5}",
+            "{radius=10,sides=0/0}",
+            "{radius=10,sides=math.huge}",
+            "{radius=0,sides=8}",
+            "{radius=501,sides=8}",
+            "{radius=0/0,sides=8}",
+            "{radius=10,sides=8,rotation=math.huge}",
+            "{radius=10,sides=8,rotation=360001}",
+            "{radius=10,sides=8,segments=8}",
+            "{radius=10}",
+        ] {
+            let source = format!(
+                "cad.show('prism',cad.extrude(cad.regular_polygon({options}),{{height=20}}))"
+            );
+            assert!(crate::model::compile(&source).is_err(), "{options}");
+        }
+    }
+
     use super::*;
 
     #[test]
