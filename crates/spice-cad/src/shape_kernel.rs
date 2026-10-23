@@ -266,7 +266,7 @@ impl Kernel {
         self.shape_result(result, status, "loft")
     }
 
-    fn shape_result(
+    pub(super) fn shape_result(
         &self,
         result: *mut ffi::SmBrep,
         status: Result<i64, cxx::Exception>,

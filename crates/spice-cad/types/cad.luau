@@ -61,6 +61,8 @@ local cad: {
 	cylinder: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
 	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
 	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,
+	sphere: ({ radius: number, x: number?, y: number?, z: number? }) -> Solid,
+	capsule: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
 	fillet: (Solid, { radius: number, edges: { Edge }? }) -> Solid,
 	chamfer: (Solid, { width: number, edges: { Edge }? }) -> Solid,
 	edge: (Solid, { name: string, from: Point, to: Point }) -> Edge,

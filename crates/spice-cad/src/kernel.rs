@@ -266,6 +266,11 @@ mod ffi {
             height: f64,
             result: &mut *mut SmBrep,
         ) -> Result<i64>;
+        unsafe fn SmApiCreateSphere(
+            origin: &SmVector3d,
+            radius: f64,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
         unsafe fn SmApiTranslate(object: *mut SmObject, offset: &SmVector3d) -> Result<i64>;
         unsafe fn SmApiRotate(
             object: *mut SmObject,
@@ -348,6 +353,91 @@ pub struct Tessellation {
 }
 
 impl Kernel {
+    pub fn sphere(&self, origin: [f64; 3], radius: f64) -> Result<Body<'_>, String> {
+        assert!(origin.iter().all(|value| value.is_finite()));
+        assert!(radius.is_finite() && radius > 0.0);
+        let center = Vector {
+            x: origin[0],
+            y: origin[1],
+            z: origin[2],
+        };
+        let mut result = std::ptr::null_mut();
+        let status = unsafe { ffi::SmApiCreateSphere(&center, radius, &mut result) };
+        self.shape_result(result, status, "sphere")
+    }
+
+    pub fn capsule(&self, radius: f64, height: f64) -> Result<Body<'_>, String> {
+        assert!(radius.is_finite() && radius > 0.0);
+        assert!(height.is_finite() && height >= radius * 2.0);
+        if height == radius * 2.0 {
+            return self.sphere([0.0, 0.0, radius], radius);
+        }
+        let vector = |point: [f64; 3]| Vector {
+            x: point[0],
+            y: point[1],
+            z: point[2],
+        };
+        let mut curves = ffi::spice_curve_array().map_err(|error| error.to_string())?;
+        let mut arcs = Vec::with_capacity(2);
+        for (center, x_axis, y_axis) in [
+            ([0.0, 0.0, radius], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]),
+            (
+                [0.0, 0.0, height - radius],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ),
+        ] {
+            let arc = ffi::spice_path_arc(
+                &vector(center),
+                &vector(x_axis),
+                &vector(y_axis),
+                radius,
+                90.0,
+            )
+            .map_err(|error| error.to_string())?;
+            if arc.is_null() {
+                return Err("SMLib capsule arc creation failed".into());
+            }
+            arcs.push(arc);
+        }
+        let mut lines = Vec::with_capacity(2);
+        for (start, end) in [
+            ([radius, 0.0, radius], [radius, 0.0, height - radius]),
+            ([0.0, 0.0, height], [0.0; 3]),
+        ] {
+            let mut raw = std::ptr::null_mut();
+            let status =
+                unsafe { ffi::SmApiCreateLineSegment(&vector(start), &vector(end), &mut raw) };
+            let line = unsafe { UniquePtr::from_raw(raw) };
+            let status = status.map_err(|error| error.to_string())?;
+            if status != 1000 || line.is_null() {
+                return Err(format!("SMLib capsule edge failed: {status}"));
+            }
+            lines.push(line);
+        }
+        for pointer in [
+            arcs[0].as_ptr(),
+            lines[0].as_ptr().cast(),
+            arcs[1].as_ptr(),
+            lines[1].as_ptr().cast(),
+        ] {
+            unsafe { curves.pin_mut().Add(pointer.cast_mut()) }
+                .map_err(|error| error.to_string())?;
+        }
+        let mut result = std::ptr::null_mut();
+        let status = unsafe {
+            ffi::SmApiCreateRotationalSweep(
+                &curves,
+                &Vector::default(),
+                &vector([0.0, 0.0, 1.0]),
+                360.0,
+                1,
+                &mut result,
+            )
+        };
+        self.shape_result(result, status, "capsule")
+    }
+
     pub fn new() -> Result<Self, String> {
         let context = CONTEXT.lock().map_err(|error| error.to_string())?;
         ffi::SmApiCreateContext().map_err(|error| error.to_string())?;

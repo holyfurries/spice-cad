@@ -39,6 +39,15 @@ impl Part {
 #[derive(Clone, Copy)]
 enum Operation {
     Shape(usize),
+    Sphere {
+        origin: [f64; 3],
+        radius: f64,
+    },
+    Capsule {
+        origin: [f64; 3],
+        radius: f64,
+        height: f64,
+    },
     Profile {
         profile: usize,
         sweep: ProfileSweep,
@@ -402,6 +411,30 @@ pub fn compile_project_cached(
     for name in ["translate", "rotate", "fillet", "chamfer"] {
         let state = Rc::clone(&recipe);
         cad.set(
+    for name in ["sphere", "capsule"] {
+        let state = Rc::clone(&recipe);
+        cad.set(name, lua.create_function(move |_, options: Table| {
+            let fields: &[&str] = if name == "sphere" { &["radius", "x", "y", "z"] } else { &["radius", "height", "x", "y", "z"] };
+            options_fields(&options, fields)?;
+            let radius = dimension(&options, "radius")?;
+            if radius > 500.0 { return Err(mlua::Error::runtime("Rounded primitive radius must not exceed 500 mm")); }
+            let origin = coordinates(&options)?;
+            let operation = if name == "sphere" { Operation::Sphere { origin, radius } } else {
+                let height = dimension(&options, "height")?;
+                if height < radius * 2.0 { return Err(mlua::Error::runtime("Capsule height includes both caps and must be at least twice its radius")); }
+                Operation::Capsule { origin, radius, height }
+            };
+            let (bottom, top) = match operation {
+                Operation::Sphere { .. } => (origin[2] - radius, origin[2] + radius),
+                Operation::Capsule { height, .. } => (origin[2], origin[2] + height),
+                _ => unreachable!(),
+            };
+            if [origin[0] - radius, origin[0] + radius, origin[1] - radius, origin[1] + radius, bottom, top].iter().any(|value| value.abs() > 2000.0) {
+                return Err(mlua::Error::runtime("Rounded primitive bounds must remain within ±2000 mm"));
+            }
+            push_operation(&state, operation)
+        }).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    }
             name,
             lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
                 let source = solid.borrow::<Solid>()?.0;
@@ -1088,6 +1121,18 @@ impl Model {
                         let mut body = bodies.pop().ok_or("Missing modification operand")?;
                         match modification {
                             Modification::Shell(index) => {
+                Operation::Sphere { origin, radius } => bodies.push(kernel.sphere(origin, radius)?),
+                Operation::Capsule {
+                    origin,
+                    radius,
+                    height,
+                } => {
+                    let mut body = kernel.capsule(radius, height)?;
+                    if origin != [0.0; 3] {
+                        body.translate(origin)?;
+                    }
+                    bodies.push(body);
+                }
                                 let shell = &self.recipe.shells[index];
                                 body.shell(shell.thickness, shell.opening.as_ref())?;
                             }
@@ -1185,6 +1230,60 @@ mod tests {
         assert_eq!(
             snapshot.scene.bounds,
             [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
+    use super::{Cache, Kernel, compile};
+    #[test]
+    fn rounded_primitives_have_exact_volume_closed_meshes_and_cached_geometry() -> Result<(), String>
+    {
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        for (shape, expected) in [
+            (
+                "cad.sphere({radius=5})",
+                4.0 / 3.0 * std::f64::consts::PI * 125.0,
+            ),
+            (
+                "cad.capsule({radius=5,height=20})",
+                std::f64::consts::PI * (250.0 + 500.0 / 3.0),
+            ),
+            (
+                "cad.capsule({radius=5,height=10})",
+                4.0 / 3.0 * std::f64::consts::PI * 125.0,
+            ),
+        ] {
+            let source = format!("cad.show('rounded',{shape})");
+            let model = cache.compile(&source)?;
+            let prepared = cache.prepare(&model)?;
+            assert!((prepared.bodies[0].volume()? - expected).abs() < 1e-4);
+            prepared.geometry[0].mesh.validate()?;
+            let mut working = prepared.bodies[0].try_clone()?;
+            assert!(!working.step_data("rounded")?.is_empty());
+            let repeated = cache.prepare(&model)?;
+            assert_eq!(repeated.hits, 1);
+            assert!(std::sync::Arc::ptr_eq(
+                &prepared.geometry[0],
+                &repeated.geometry[0]
+            ));
+            let mut bodies = model.build(&kernel)?;
+            model.meshes(&mut bodies, true)?[0].validate()?;
+        }
+        for shape in [
+            "cad.sphere({radius=0})",
+            "cad.sphere({radius=501})",
+            "cad.sphere({radius=0/0})",
+            "cad.capsule({radius=5,height=9})",
+            "cad.capsule({radius=5,height=1/0})",
+            "cad.sphere({radius=5,height=20})",
+            "cad.sphere({radius=5,x=1998})",
+            "cad.capsule({radius=5,height=20,z=1990})",
+        ] {
+            assert!(
+                compile(&format!("cad.show('bad',{shape})")).is_err(),
+                "{shape}"
+            );
+        }
+        Ok(())
+    }
+
         );
         for vertex in &snapshot.scene.world_mesh().vertices {
             let index = snapshot

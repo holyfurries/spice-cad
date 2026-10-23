@@ -504,6 +504,28 @@ fn cache_matches(
         match (first.operations[a], second.operations[b]) {
             (Operation::Shape(a), Operation::Shape(b)) if first.shapes[a] == second.shapes[b] => {}
             (
+                Operation::Sphere {
+                    origin: a,
+                    radius: b,
+                },
+                Operation::Sphere {
+                    origin: c,
+                    radius: d,
+                },
+            ) if a == c && b == d => {}
+            (
+                Operation::Capsule {
+                    origin: a,
+                    radius: b,
+                    height: c,
+                },
+                Operation::Capsule {
+                    origin: d,
+                    radius: e,
+                    height: f,
+                },
+            ) if a == d && b == e && c == f => {}
+            (
                 Operation::Box {
                     minimum: a,
                     maximum: b,

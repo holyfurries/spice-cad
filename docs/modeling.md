@@ -295,6 +295,20 @@ budget or automatic LOD generation. UVs, textures, collision meshes, rigging, an
 animation are unsupported. [Printing](printing.md) uses finer tessellation and
 separate bed placements.
 
+## Rounded primitives
+
+`cad.sphere({radius=7})` creates an exact sphere centred at the source origin.
+Optional `x`, `y`, and `z` position its centre. `cad.capsule({radius=9, height=34})`
+creates a Z-aligned cylinder with hemispherical ends; its origin is the bottom
+tip, and height includes both caps. Height must be at least twice the radius;
+equality creates a sphere centred one radius above the base.
+
+Radii accept 0.01–500 mm, capsule height accepts up to 1,000 mm, and primitive
+bounds must remain within ±2,000 mm. Capsules use one analytic rotational sweep
+without boolean unions. Both primitives support normal CAD operations, exact
+volume queries, STEP/STL exports, and cached preview geometry. Display and game
+meshes use the existing tessellation tolerances; no fixed polygon count is implied.
+
 ## Explicit low-poly profiles
 
 `cad.regular_polygon({radius=10, sides=8, rotation=22.5})` creates a centred
