@@ -20,8 +20,8 @@ cad.asset({
 })
 ```
 
-`display_width` is the intended X extent in exported world metres, not gameplay
-tile size. It records intent; it does not transform geometry. Approval is an
+`display_width` is an optional author suggestion for the X extent in exported
+world metres. It does not transform geometry or set gameplay sizing policy. Approval is an
 authored declaration: `unreviewed`, `trial`, or `approved`. Omitted provenance
 stays null. Without an authored ID, identity derives from sorted semantic
 hierarchy paths; renaming or reparenting changes that generated identity.
@@ -61,8 +61,11 @@ The farmstead's default miniature export needs display scale 10 for the tested
 cad.model_options({ game = { preset = "crowns_adrift", scale = 10 } })
 ```
 
-That export needs an identity import wrapper. The preset itself never guesses
-asset dimensions or display scale.
+Crowns Adrift now derives its wrapper scale from its own target width divided
+by `bounds.size[0]`; it ignores display suggestions. The preset above happens
+to derive scale 1. Neutral, unit-correct exports are equally valid. For troops,
+choose a body/reference extent rather than fitting weapons into a universal
+box. The preset itself never guesses asset dimensions or display scale.
 
 ## Integrity and compatibility
 

@@ -1,0 +1,40 @@
+diff --git a/crates/client/examples/diorama.rs b/crates/client/examples/diorama.rs
+index cb32e20..ba2eb90 100644
+--- a/crates/client/examples/diorama.rs
++++ b/crates/client/examples/diorama.rs
+@@ -21,5 +21,7 @@ mod assets;
+ const GROUND: f32 = 0.72;
+ const FARMSTEAD_WIDTH: f64 = 1.15;
++const LEVY_REFERENCE_HEIGHT: f32 = 1.025;
++const INFANTRY_REFERENCE_HEIGHT_METRES: f32 = 0.0546;
+ const VIEW_HEIGHT: f32 = 13.0;
+ const OUTLINE: [[f32; 2]; 18] = [
+     [-4.6, -1.8],
+@@ -364,7 +366,26 @@ fn setup(
+                 _ => (128, 1.65),
+             };
+             let base = Vec3::new(x, 0.0, 0.0);
+-            if let Some((directory, scale)) = &spice && name == "farmstead" {
++            if std::env::var_os("DIORAMA_INFANTRY").is_some() && name.starts_with("levy") {
++                let pose = if name.ends_with("-left") {
++                    "step-left"
++                } else if name.ends_with("-right") {
++                    "step-right"
++                } else {
++                    "idle"
++                };
++                let path = format!("infantry-{pose}/model.glb");
++                let scale = LEVY_REFERENCE_HEIGHT / INFANTRY_REFERENCE_HEIGHT_METRES;
++                commands
++                    .spawn((
++                        WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(path))),
++                        Transform::from_translation(base).with_scale(Vec3::splat(scale)),
++                        PendingImport,
++                    ))
++                    .observe(|event: On<WorldInstanceReady>, mut commands: Commands| {
++                        commands.entity(event.entity).remove::<PendingImport>();
++                    });
++            } else if let Some((directory, scale)) = &spice && name == "farmstead" {
+                 commands
+                     .spawn((
+                         WorldAssetRoot(

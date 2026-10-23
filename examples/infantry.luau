@@ -13,6 +13,7 @@ local body_height: number = cad.number(26.3, { label = "Body height", unit = "mm
 local heading: number = cad.number(0, { label = "Heading", unit = "deg", min = -180, max = 180, step = 1 })
 local lean: number = cad.number(0, { label = "Body lean", unit = "deg", min = -15, max = 15, step = 1 })
 local grip: number = cad.number(-8, { label = "Grip pose", unit = "deg", min = -40, max = 40, step = 1 })
+local stride: number = cad.number(0, { label = "Stride", min = -1, max = 1, step = 1 })
 local helmet_visible: boolean = cad.toggle(true, { label = "Helmet" })
 local shield_visible: boolean = cad.toggle(true, { label = "Shield" })
 local spear_visible: boolean = cad.toggle(true, { label = "Spear" })
@@ -30,18 +31,25 @@ local ash = cad.material("Ash shaft", {
 	specular_roughness = 1,
 })
 
-local unit = cad.group("Unit rig", { assembly = { rotation = { z = heading } } })
+local unit = cad.group("Unit rig", { assembly = { position = { z = 4 }, rotation = { z = heading } } })
 local body_pose =
 	cad.group("Body pose", { parent = unit, assembly = { position = { z = 14 }, rotation = { x = lean } } })
-local head_mount =
-	cad.group("Head mount", { parent = body_pose, assembly = { position = { z = body_height + 9.3 - 14 } } })
+local head_mount = cad.group(
+	"Head mount",
+	{ parent = body_pose, attachment = "head", assembly = { position = { z = body_height + 9.3 - 14 } } }
+)
 local left_grip = cad.group("Left grip", {
 	parent = body_pose,
-	assembly = { position = { x = -body_width * 0.5 - 2.7, y = -2 }, rotation = { x = grip * 0.35, y = -8 } },
+	attachment = "shield_grip",
+	assembly = {
+		position = { x = -body_width * 0.5 - 2.7, y = -2 },
+		rotation = { x = grip * 0.35 - stride * 7, y = -8 },
+	},
 })
 local right_grip = cad.group("Right grip", {
 	parent = body_pose,
-	assembly = { position = { x = body_width * 0.5 + 2.7, y = -2 }, rotation = { x = grip, y = 8 } },
+	attachment = "weapon_grip",
+	assembly = { position = { x = body_width * 0.5 + 2.7, y = -2 }, rotation = { x = grip + stride * 7, y = 8 } },
 })
 
 local shoulder_sections = {
@@ -155,4 +163,23 @@ if spear_visible then
 	local blade = cad.polygon({ { x = 0, y = 0 }, { x = 1.9, y = 3 }, { x = 0, y = 9 }, { x = -1.9, y = 3 } })
 	local tip = cad.rotate(cad.extrude(blade, { height = 0.8 }), { axis = "x", angle = 90 })
 	cad.show("Spear tip", tip, { parent = right_grip, material = ivory, assembly = { position = { y = 0.4, z = 27 } } })
+end
+
+for _, side in { -1, 1 } do
+	cad.show(
+		if side == -1 then "Left boot" else "Right boot",
+		cad.box({
+			width = 5,
+			depth = 8,
+			height = 5,
+			x = -2.5,
+			y = -5,
+			z = -4,
+		}),
+		{
+			parent = unit,
+			material = trim,
+			assembly = { position = { x = side * 4.5, y = side * stride * 3.2 } },
+		}
+	)
 end

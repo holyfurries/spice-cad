@@ -5,6 +5,10 @@ Reviewed 2026-10-23 against the current Spice CAD exports and the local
 
 ## Readiness
 
+For the current six-frame infantry candidate, use the
+[levy sprite handoff](infantry-levy-handoff.md). The original infantry measurements
+below describe the preserved legacy export, before boots and stride controls.
+
 The farmstead passes strict Bevy 0.19.1 loading with the supplied validator
 correction. Both the miniature export at import scale 10 and the game-preset
 export with an identity wrapper match the procedural 128×128 RGBA sprite

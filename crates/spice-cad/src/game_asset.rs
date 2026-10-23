@@ -621,15 +621,16 @@ mod tests {
             let mut cache = model::Cache::new(&kernel);
             let first = cache.compile(source)?;
             let initial = cache.prepare(&first)?;
-            assert_eq!(first.parts.len(), 11);
+            assert_eq!(first.parts.len(), 13);
             assert_eq!(first.groups.len(), 5);
             let display = cache.display(&initial.geometry)?;
-            let posed_source = source
-                .replace("cad.number(-8,", "cad.number(30,")
-                .replace("cad.number(0,", "cad.number(10,");
+            let posed_source = source.replace("cad.number(-8,", "cad.number(30,").replace(
+                "cad.number(0, { label = \"Heading\"",
+                "cad.number(10, { label = \"Heading\"",
+            );
             let posed = cache.compile(&posed_source)?;
             let prepared = cache.prepare(&posed)?;
-            assert_eq!(prepared.hits, 11);
+            assert_eq!(prepared.hits, 13);
             assert_eq!(prepared.build_ms, 0.0);
             assert_eq!(prepared.tessellation_ms, 0.0);
             assert!(std::sync::Arc::ptr_eq(
@@ -647,13 +648,31 @@ mod tests {
                     .zip(&posed.parts)
                     .any(|(first, posed)| first.assembly != posed.assembly)
             );
+            for stride in [-1, 1] {
+                let source = source.replace(
+                    "local stride: number = cad.number(0,",
+                    &format!("local stride: number = cad.number({stride},"),
+                );
+                let posed = cache.compile(&source)?;
+                let prepared = cache.prepare(&posed)?;
+                assert_eq!(prepared.hits, 13);
+                assert_eq!(prepared.tessellation_ms, 0.0);
+                for (index, geometry) in prepared.geometry.iter().enumerate() {
+                    assert!(std::sync::Arc::ptr_eq(geometry, &initial.geometry[index]));
+                }
+                for index in [11, 12] {
+                    let boot = &posed.parts[index];
+                    assert!((boot.assembly.translation().z - 4.0).abs() < 1e-6);
+                    assert!((boot.assembly.translation().y.abs() - 3.2).abs() < 1e-6);
+                }
+            }
             for (width, height) in [(14.0, 22.0), (24.0, 32.0)] {
                 let source = source
                     .replace("cad.number(18.6,", &format!("cad.number({width},"))
                     .replace("cad.number(26.3,", &format!("cad.number({height},"));
                 let resized = cache.compile(&source)?;
                 let prepared = cache.prepare(&resized)?;
-                assert_eq!(prepared.hits, 10);
+                assert_eq!(prepared.hits, 12);
                 let bounds = prepared.geometry[0].bounds;
                 assert!((f64::from(bounds[1].x - bounds[0].x) - width).abs() < 1e-4);
                 assert!((f64::from(bounds[1].z - bounds[0].z) - height).abs() < 1e-4);
@@ -661,14 +680,14 @@ mod tests {
                     &initial.geometry[0],
                     &prepared.geometry[0]
                 ));
-                for index in 1..11 {
+                for index in 1..13 {
                     assert!(std::sync::Arc::ptr_eq(
                         &initial.geometry[index],
                         &prepared.geometry[index]
                     ));
                 }
                 assert!(
-                    (f64::from(resized.parts[1].assembly.translation().z) - height - 9.3).abs()
+                    (f64::from(resized.parts[1].assembly.translation().z) - height - 13.3).abs()
                         < 1e-5
                 );
                 prepared.geometry[0].mesh.validate()?;
@@ -694,7 +713,7 @@ mod tests {
                         .map_err(|error| error.to_string())?;
                 assert_eq!(
                     document["nodes"].as_array().unwrap().len(),
-                    if equipment { 16 } else { 9 }
+                    if equipment { 18 } else { 11 }
                 );
                 let triangles: u64 = document["accessors"]
                     .as_array()

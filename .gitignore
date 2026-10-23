@@ -29,10 +29,12 @@
 !/tools/**/Cargo.toml
 !/tools/**/build.rs
 !/tools/**/src/**/*.rs
+!/tools/**/examples/**/*.rs
 !/tools/verification/fixtures/*.luau
 !/tools/game-import/Cargo.lock
 !/tools/game-import/tests/**/*.rs
 !/tools/game-import/fixtures/*.luau
+!/tools/game-import/fixtures/*.patch
 !/tools/game-import/vendor/gltf-json/Cargo.toml
 !/tools/game-import/vendor/gltf-json/LICENSE-*
 !/tools/game-import/vendor/gltf-json/src/**/*.rs
