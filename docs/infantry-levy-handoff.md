@@ -50,10 +50,18 @@ The back view changes the camera, not the model's handedness or equipment.
 
 ## Reproduce
 
-Use a graphical session and an isolated game worktree at `45df40f`. Apply
+Use a graphical session and an isolated game worktree at `d3d72ef`. Apply
 `tools/game-import/fixtures/infantry-baker.patch` there; the existing strict
 validator correction is already included in that game revision. Build its
-`tribute-client` diorama example with `--features diorama` under its Nix shell.
+`crowns-adrift-client` diorama example with `--features diorama` under its Nix shell:
+
+```sh
+nix develop -c cargo build -p crowns-adrift-client --example diorama --features diorama
+```
+
+The archived bundle remains pinned to `45df40f`, where the package was named
+`tribute-client`. Its original README and checksums are historical provenance;
+use the current command above with the renamed game checkout.
 
 From Spice CAD, build the exporter, validator, and recipe:
 
@@ -70,3 +78,25 @@ The recipe copies three bundles into its `art/source/spice/`, strictly validates
 them, invokes the patched baker, and selects only the six levy sprites. It
 rejects empty, duplicate, clipped, or incorrectly sized PNGs and bounds each
 subprocess to 120 seconds. Generated assets stay outside Git.
+
+## Game-side palette and encounter trial
+
+The game's `art/infantry-levy-trial` branch now retains these source bundles and
+bakes the six levy sprites with its existing blue tunic, bronze equipment, linen
+shield, skin and wood palette. Original GLB materials and the archived handoff
+remain unchanged. Palette assignments and display scale belong to the game baker.
+
+That branch already includes the infantry adapter. Do not reapply the fixture
+patch or copy bundles over its tracked sources. Bake directly from the game:
+
+```sh
+DIORAMA_INFANTRY=1 DIORAMA_EXPORT=/tmp/levy-bake nix develop -c cargo run -p crowns-adrift-client --features diorama --example diorama
+```
+
+Only copy the six `units/levy*.png` outputs. The game records source/license
+provenance, corrected PNG hashes, pose previews and sampled active-encounter
+captures in `docs/spice-infantry-trial.md`. The natural veterans-policy replay
+uses Mycenae, seed 1, at action 20 before ending year four, with a friendly levy
+and two coastal raiders. Its 21 resulting action hashes match the baseline.
+Foot motion remains subtle at army scale; sampled captures establish movement
+and return to idle, not full-frame-rate smoothness or final art approval.
