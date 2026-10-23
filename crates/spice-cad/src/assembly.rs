@@ -4,6 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 pub struct Group {
     pub name: String,
+    pub attachment: Option<String>,
     pub parent: Option<usize>,
     pub placement: Placement,
 }
@@ -50,17 +51,25 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Vec<Group>>>>
                     "Group names must contain 1–80 bytes without control characters",
                 ));
             }
-            let (parent, placement) = if let Some(options) = options {
-                crate::model::options_fields(&options, &["parent", "assembly"])?;
+            let (parent, placement, attachment) = if let Some(options) = options {
+                crate::model::options_fields(&options, &["parent", "assembly", "attachment"])?;
+                let attachment: Option<String> = options.get("attachment")?;
+                if attachment.as_ref().is_some_and(|role| {
+                    role.is_empty() || role.len() > 80 || role.chars().any(char::is_control)
+                }) {
+                    return Err(mlua::Error::runtime(
+                        "Attachment roles must contain 1–80 bytes without control characters",
+                    ));
+                }
                 let parent = parent(&options)?;
                 let placement = options
                     .get::<Option<Table>>("assembly")?
                     .map(Placement::from_table)
                     .transpose()?
                     .unwrap_or_default();
-                (parent, placement)
+                (parent, placement, attachment)
             } else {
-                (None, Placement::default())
+                (None, Placement::default(), None)
             };
             let mut groups = state.borrow_mut();
             if groups.len() >= 32 {
@@ -75,6 +84,7 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<Rc<RefCell<Vec<Group>>>>
             }
             groups.push(Group {
                 name,
+                attachment,
                 parent,
                 placement,
             });

@@ -293,6 +293,10 @@ impl Project {
             .collect()
     }
 
+    pub fn original_sources(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().map(|file| file.source.as_ref())
+    }
+
     pub fn analysis_key(&self, root: &str) -> String {
         let mut key = String::new();
         for (index, file) in self.files.iter().enumerate() {
@@ -566,6 +570,31 @@ mod tests {
         ] {
             let folder = fixture.0.join(name);
             crate::export::model_files_project(source, Some(&project), &folder, target)?;
+            if target == crate::export::Target::Game {
+                let metadata: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(folder.join("asset.json")).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+                let sources = metadata["files"]["sources"]
+                    .as_array()
+                    .expect("Source inventory");
+                assert_eq!(sources.len(), 2);
+                for file in sources {
+                    let path = file["path"].as_str().expect("Bundled source path");
+                    let bytes =
+                        std::fs::read(folder.join(path)).map_err(|error| error.to_string())?;
+                    assert_eq!(file["sha256"], crate::game_contract::hash(&bytes));
+                }
+                assert_eq!(
+                    sources[0]["input_sha256"],
+                    crate::game_contract::hash(source.as_bytes())
+                );
+                assert!(
+                    !std::fs::read_to_string(folder.join("module-1.luau"))
+                        .map_err(|error| error.to_string())?
+                        .contains("Changed after snapshot")
+                );
+            }
             let exported = crate::model::read_source(&folder.join("model.luau"))?;
             let captured = Project::load(&folder.join("model.luau"), &exported)?;
             let model =

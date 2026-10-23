@@ -5,11 +5,13 @@ Reviewed 2026-10-23 against the current Spice CAD exports and the local
 
 ## Readiness
 
-The original infantry and farmstead are ready for an **import and art-direction
-trial**. Their triangle counts are low, and the exported part meshes pass the
-geometry checks below. They have not been imported, profiled, or visually
-approved inside Crowns Adrift. The infantry is a rigid pawn assembly, not a
-skinned, animated character.
+The original farmstead passed a Crowns Adrift sprite-baker trial: at matching
+dimensions its 128×128 RGBA sprite matched the procedural model pixel-for-pixel
+on the tested RTX 3070 Vulkan renderer. The trial used a narrow loader-validation
+workaround; strict-loader acceptance and the newer orientation settings still
+need end-to-end verification. Infantry remains an import and art-direction trial,
+not an approved animated character. See the game's `docs/spice-farmstead-trial.md`
+at integration commit `8d93fdf` for the observed scope.
 
 Crowns Adrift currently displays troop and building PNGs; its diorama example
 authors 3D geometry and renders those sprites. Loading these GLBs into either
@@ -18,7 +20,7 @@ does not change the game.
 
 ## Files to hand over
 
-Fresh exports are in Spice CAD's ignored `output/crowns-adrift-handoff/`:
+The original audited exports are in Spice CAD's ignored `output/crowns-adrift-handoff/`:
 
 | Asset | Editable source | GLB | Triangles | GPU vertices | Mesh parts / materials |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -75,7 +77,9 @@ its grip. Literal named attachment transforms can also be edited in this panel.
 These are miniature-scale authoring models. Choose a uniform root scale for the
 game, not separate axis scales. For example, a 1.2-unit-tall infantry needs
 `1.2 / 0.0506 ≈ 23.7154`; a 1-unit-wide farmstead including its roof needs
-`1 / 0.115 ≈ 8.6957`. These are examples, not approved gameplay dimensions.
+`1 / 0.115 ≈ 8.6957`. The tested farmstead instead needs **scale 10** for the
+existing art's **1.15-unit roof width**. The infantry height remains an example,
+not an approved gameplay dimension.
 Apply that scale either in the export settings or on import, never both.
 
 Both original examples have their lowest geometry at Y=0. Origins and local

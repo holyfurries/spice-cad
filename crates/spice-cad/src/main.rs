@@ -24,6 +24,7 @@ mod export;
 mod face_feature;
 mod files;
 mod game_asset;
+mod game_contract;
 mod hole;
 mod inline_output;
 mod inspection;
@@ -2103,6 +2104,10 @@ impl eframe::App for Editor {
                                     export_requested = true;
                                     export_target = export::Target::Game;
                                     ui.close();
+                                }
+                                if self.snapshot.as_ref().is_some_and(|snapshot| snapshot.parts.iter().any(|part| part.material.effective_ior() == 1.0)) {
+                                    ui.label(egui::RichText::new("Bevy: specular validator fix required").color(ui.visuals().warn_fg_color))
+                                        .on_hover_text(game_contract::MATERIAL_WARNING);
                                 }
                                 if ui.button("Game export settings…").clicked() {
                                     self.orientation.open_game();

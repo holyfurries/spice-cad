@@ -1,4 +1,103 @@
 fn main() {
+    use sha2::{Digest, Sha256};
+    let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()
+        .expect("Exporter package directory");
+    let repository = package
+        .join("../..")
+        .canonicalize()
+        .expect("Exporter repository directory");
+    let mut pending = vec![
+        package.join("src"),
+        package.join("types"),
+        package.join("assets"),
+        repository.join("examples"),
+    ];
+    let mut inputs = vec![
+        repository.join("Cargo.toml"),
+        repository.join("Cargo.lock"),
+        repository.join("flake.nix"),
+        repository.join("flake.lock"),
+        package.join("Cargo.toml"),
+        package.join("build.rs"),
+    ];
+    for _ in 0..2048 {
+        let Some(directory) = pending.pop() else {
+            break;
+        };
+        println!("cargo:rerun-if-changed={}", directory.display());
+        for entry in std::fs::read_dir(directory).expect("Read exporter build inputs") {
+            let entry = entry.expect("Read exporter build input");
+            if entry.file_type().expect("Exporter input type").is_dir() {
+                pending.push(entry.path());
+            } else {
+                inputs.push(entry.path());
+            }
+            assert!(
+                pending.len() + inputs.len() <= 2048,
+                "Exporter input count exceeds limit"
+            );
+        }
+    }
+    assert!(pending.is_empty(), "Exporter directory count exceeds limit");
+    inputs.sort();
+    let mut fingerprint = Sha256::new();
+    let mut bytes = 0;
+    for path in inputs {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let name = path
+            .strip_prefix(&repository)
+            .expect("Exporter input inside repository")
+            .to_string_lossy();
+        let content = std::fs::read(&path).expect("Read exporter build input");
+        bytes += content.len();
+        assert!(
+            bytes <= 64 * 1024 * 1024,
+            "Exporter build inputs exceed 64 MiB"
+        );
+        fingerprint.update((name.len() as u64).to_le_bytes());
+        fingerprint.update(name.as_bytes());
+        fingerprint.update((content.len() as u64).to_le_bytes());
+        fingerprint.update(content);
+    }
+    for key in [
+        "SMLIB_ROOT",
+        "TARGET",
+        "PROFILE",
+        "OPT_LEVEL",
+        "DEBUG",
+        "CARGO_CFG_TARGET_FEATURE",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTC",
+    ] {
+        let value = std::env::var(key).unwrap_or_default();
+        fingerprint.update((key.len() as u64).to_le_bytes());
+        fingerprint.update(key.as_bytes());
+        fingerprint.update((value.len() as u64).to_le_bytes());
+        fingerprint.update(value.as_bytes());
+    }
+    println!(
+        "cargo:rustc-env=SPICE_BUILD_INPUTS_SHA256={:x}",
+        fingerprint.finalize()
+    );
+    let git = |arguments: &[&str]| {
+        std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(&repository)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+    };
+    if let Some(revision) = git(&["rev-parse", "HEAD"]) {
+        println!("cargo:rustc-env=SPICE_BUILD_REVISION={}", revision.trim());
+        if let Some(status) = git(&["status", "--porcelain", "--untracked-files=no"]) {
+            println!("cargo:rustc-env=SPICE_BUILD_DIRTY={}", !status.is_empty());
+        }
+        for path in [".git/HEAD", ".git/index", ".git/refs/heads"] {
+            println!("cargo:rerun-if-changed={}", repository.join(path).display());
+        }
+    }
     let root = std::env::var("SMLIB_ROOT")
         .expect("Enter nix develop to build the native SMLib application");
     let output = std::env::var("OUT_DIR").expect("Cargo provides OUT_DIR");

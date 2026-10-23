@@ -119,9 +119,37 @@ fn write_model(
             .collect()
     };
     let mut files = Vec::new();
+    let sources: Vec<(String, std::borrow::Cow<'_, str>)> = project.map_or_else(
+        || vec![("model.luau".to_owned(), std::borrow::Cow::Borrowed(source))],
+        |project| {
+            project
+                .sources("model.luau")
+                .into_iter()
+                .map(|(name, source)| (name, std::borrow::Cow::Owned(source)))
+                .collect()
+        },
+    );
     if target == Target::Game {
         files.push(("model.glb".into(), game_asset::glb(model, &meshes)?));
         files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object. Materials use the supported OpenPBR Surface 1.1.1 parameter subset. Base color, metalness and specular roughness map directly. Specular weight modulates IOR; effective IOR uses required KHR_materials_ior, and effective IOR 1 also requires KHR_materials_specular factor 0. Original supported parameters are preserved in materials[].extras.spice_cad as application metadata, not a standard interchange extension. Mapping is lossy: glTF commonly uses Schlick Fresnel rather than exact dielectric Fresnel, and compensation differs between renderers. The viewport also omits OpenPBR multiple-scattering compensation and layered diffuse-albedo normalization. No general rendered-appearance equivalence is claimed. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. Each mesh preserves local source coordinates and its source origin as the pivot; assembly placement is stored as node translation and quaternion rotation. Named transform groups and parent-child attachments are preserved as GLB nodes. By default no centering or bed placement is applied. cad.model_options can rotate the assembly without changing print placements. Configured game settings add a Game export root: selected model forward/up axes map to +Z/+Y, then positive uniform scale and optional lowest-point ground alignment are applied. Keep this root when importing; do not reapply its transforms. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with per-part cad.show shading: CAD-face smoothing by default, flat triangle normals, or shared-edge smoothing with a crease angle. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
+        let input_hashes = project.map_or_else(
+            || vec![crate::game_contract::hash(source.as_bytes())],
+            |project| {
+                project
+                    .original_sources()
+                    .map(|source| crate::game_contract::hash(source.as_bytes()))
+                    .collect()
+            },
+        );
+        let (metadata, notes) = crate::game_contract::generate(
+            &files[0].1,
+            &sources,
+            &input_hashes,
+            model.options,
+            &model.asset,
+        )?;
+        files[1].1.extend_from_slice(notes.as_bytes());
+        files.push(("asset.json".into(), metadata));
     } else {
         let print_bounds = bodies
             .iter()
@@ -214,12 +242,8 @@ fn write_model(
         for (name, data) in files {
             std::fs::write(folder.join(name), data)?;
         }
-        if let Some(project) = project {
-            for (name, source) in project.sources("model.luau") {
-                std::fs::write(folder.join(name), source)?;
-            }
-        } else {
-            std::fs::write(folder.join("model.luau"), source)?;
+        for (name, source) in sources {
+            std::fs::write(folder.join(name), source.as_bytes())?;
         }
         Ok(())
     })();

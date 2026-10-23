@@ -1,4 +1,13 @@
 --!strict
+cad.asset({
+	id = "crowns-adrift/farmstead",
+	author = "Holy Furries Studio",
+	source = "examples/farmstead.luau",
+	license = "MIT",
+	approval = "trial",
+	display_width = 1.15,
+})
+
 local scale: number = cad.number(1, { label = "Scale", min = 0.25, max = 2, step = 0.05 })
 assert(scale > 0, "Scale must be positive")
 

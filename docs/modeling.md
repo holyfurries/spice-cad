@@ -553,7 +553,7 @@ nix develop -c cargo run --locked -- --export-game examples/farmstead.luau outpu
 
 At Scale 1 the body is 100 mm wide; the exported GLB is 44 triangles and about
 6 KB. Import at uniform scale 10 to match the original game's one-unit-wide
-building. This miniature authoring scale keeps every profile below the current
+building body (1.15-unit roof width). This miniature authoring scale keeps every profile below the current
 1,000 mm width/depth limit, including at the slider's maximum. Exported objects
 share the ground-centred source origin. Colors convert the original sRGB palette
 to linear RGB for glTF materials.

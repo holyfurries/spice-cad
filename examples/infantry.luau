@@ -1,4 +1,12 @@
 --!strict
+cad.asset({
+	id = "spice-cad/infantry",
+	author = "Holy Furries Studio",
+	source = "examples/infantry.luau",
+	license = "MIT",
+	approval = "unreviewed",
+})
+
 local head_size: number = cad.number(1, { label = "Head size", min = 0.8, max = 1.4, step = 0.05 })
 local body_width: number = cad.number(18.6, { label = "Body width", unit = "mm", min = 14, max = 24, step = 0.2 })
 local body_height: number = cad.number(26.3, { label = "Body height", unit = "mm", min = 22, max = 32, step = 0.1 })

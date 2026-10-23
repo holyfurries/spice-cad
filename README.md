@@ -84,6 +84,7 @@ tooling in `tools/verification/`, and Luau models in `examples/`. See
 
 - [Editor and controls](docs/editor.md)
 - [Modeling, measurements, and modules](docs/modeling.md)
+- [Game export metadata and import contract](docs/game-asset-contract.md)
 - [Printing, fit calibration, and the spice rack](docs/printing.md)
 - [Development and verification](docs/development.md)
 - [Linux downloads and releases](docs/releases.md)

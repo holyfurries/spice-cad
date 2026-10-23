@@ -48,7 +48,17 @@ local cad: {
 			}?,
 		}
 	) -> (),
-	group: (string, { parent: Group?, assembly: Placement? }?) -> Group,
+	group: (string, { parent: Group?, assembly: Placement?, attachment: string? }?) -> Group,
+	asset: (
+		{
+			id: string?,
+			author: string?,
+			source: string?,
+			license: string?,
+			approval: ("unreviewed" | "trial" | "approved")?,
+			display_width: number?,
+		}
+	) -> (),
 	material: (
 		string,
 		{

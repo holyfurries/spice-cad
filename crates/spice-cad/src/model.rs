@@ -117,6 +117,7 @@ struct Recipe {
 }
 
 pub struct Model {
+    pub asset: crate::game_contract::Asset,
     pub options: crate::model_options::Options,
     pub groups: Vec<crate::assembly::Group>,
     pub print_options: crate::print_preparation::Options,
@@ -190,6 +191,7 @@ pub fn compile_project_cached(
     let cad = lua.create_table().map_err(|error| error.to_string())?;
     let groups = crate::assembly::register(&lua, &cad).map_err(|error| error.to_string())?;
     let options = crate::model_options::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let asset = crate::game_contract::register(&lua, &cad).map_err(|error| error.to_string())?;
     crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
@@ -968,6 +970,7 @@ pub fn compile_project_cached(
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
     definitions.validate_parameters(analysis.take_parameters())?;
     Ok(Model {
+        asset: asset.borrow_mut().take().unwrap_or_default(),
         options,
         groups,
         print_options: recipe.print_options.unwrap_or_default(),

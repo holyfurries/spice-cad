@@ -131,7 +131,11 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
         } else {
             group.placement
         };
-        nodes.push(placement_node(&group.name, placement.matrix()));
+        let mut node = placement_node(&group.name, placement.matrix());
+        if let Some(role) = &group.attachment {
+            node["extras"] = json!({"spice_cad":{"attachment_role":role}});
+        }
+        nodes.push(node);
     }
     let mut children = vec![Vec::<usize>::new(); nodes.len()];
     let mut scene_nodes = Vec::with_capacity(nodes.len());

@@ -55,6 +55,8 @@
                 builtins.elem root [
                   "Cargo.toml"
                   "Cargo.lock"
+                  "flake.nix"
+                  "flake.lock"
                   "LICENSE"
                   "NOTICE"
                   "ASSETS.md"
