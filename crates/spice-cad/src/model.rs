@@ -117,6 +117,7 @@ struct Recipe {
 }
 
 pub struct Model {
+    pub options: crate::model_options::Options,
     pub groups: Vec<crate::assembly::Group>,
     pub print_options: crate::print_preparation::Options,
     recipe: Rc<Recipe>,
@@ -188,6 +189,7 @@ pub fn compile_project_cached(
     let recipe = Rc::new(RefCell::new(Recipe::default()));
     let cad = lua.create_table().map_err(|error| error.to_string())?;
     let groups = crate::assembly::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let options = crate::model_options::register(&lua, &cad).map_err(|error| error.to_string())?;
     crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
@@ -933,6 +935,8 @@ pub fn compile_project_cached(
     let mut parts = std::mem::take(&mut recipe.outputs);
     let groups = std::mem::take(&mut *groups.borrow_mut());
     let worlds = crate::assembly::world_placements(&groups)?;
+    let options = *options.borrow();
+    let orientation = options.placement()?;
     for part in &mut parts {
         if let Some(parent) = part.parent {
             let world = worlds.get(parent).ok_or("Part parent does not exist")?;
@@ -947,6 +951,12 @@ pub fn compile_project_cached(
             ));
         }
     }
+    if options.rotation != [0.0; 3] {
+        for part in &mut parts {
+            part.print.get_or_insert(part.assembly);
+            part.assembly = orientation.composed(part.assembly)?;
+        }
+    }
     let first = parts
         .first()
         .ok_or("Model must call cad.show(name, solid)")?;
@@ -958,6 +968,7 @@ pub fn compile_project_cached(
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
     definitions.validate_parameters(analysis.take_parameters())?;
     Ok(Model {
+        options,
         groups,
         print_options: recipe.print_options.unwrap_or_default(),
         recipe: Rc::new(recipe),

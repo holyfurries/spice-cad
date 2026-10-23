@@ -34,6 +34,8 @@ mod material;
 mod mesh;
 mod modal;
 mod model;
+mod model_options;
+mod orientation;
 mod outliner;
 mod palette;
 mod parameters;
@@ -305,6 +307,8 @@ impl Scene {
     }
 }
 struct Snapshot {
+    options: model_options::Options,
+    groups: Vec<assembly::Group>,
     refinement_pending: bool,
     thumbnails_pending: bool,
     thumbnail_renders: u64,
@@ -644,6 +648,8 @@ fn build_script_snapshot_project(
     let tessellation_ms = prepared.tessellation_ms + start.elapsed().as_secs_f64() * 1000.0;
     cache.checkpoint()?;
     Ok(Snapshot {
+        options: model.options,
+        groups: model.groups,
         refinement_pending: prepared.refinement_pending,
         thumbnails_pending,
         thumbnail_renders: cache.thumbnail_renders,
@@ -752,6 +758,7 @@ fn build_scene(
 }
 
 struct Editor {
+    orientation: orientation::Editor,
     print_checks: print_checks::State,
     show_print_checks: bool,
     outliner: outliner::State,
@@ -1131,6 +1138,7 @@ impl Editor {
             }
         }
         Ok(Self {
+            orientation: orientation::Editor::default(),
             print_checks: print_checks::State::default(),
             show_print_checks: false,
             outliner: outliner::State::default(),
@@ -1195,6 +1203,7 @@ impl Editor {
         self.code_state.focus();
         self.palette.remember(document.path.clone());
         self.parameter_state = parameters::State::default();
+        self.orientation = orientation::Editor::default();
         self.parameter_editor = None;
         if let Some(location) = self.pending_location.take() {
             self.code_state
@@ -1949,6 +1958,7 @@ impl eframe::App for Editor {
                         }
                         Navigation::Performance => self.show_performance = !self.show_performance,
                         Navigation::PrintChecks => self.show_print_checks = true,
+                        Navigation::Orientation => self.orientation.open = true,
                         Navigation::Frame => {
                             frame_layout = true;
                         }
@@ -2094,6 +2104,10 @@ impl eframe::App for Editor {
                                     export_target = export::Target::Game;
                                     ui.close();
                                 }
+                                if ui.button("Game export settings…").clicked() {
+                                    self.orientation.open_game();
+                                    ui.close();
+                                }
                             });
                         })
                         .response
@@ -2198,6 +2212,7 @@ impl eframe::App for Editor {
                     }
                 });
                 ui.menu_button("Model", |ui| {
+                    if ui.add_enabled(self.script.is_some(), egui::Button::new("Orientation & game export…")).clicked() { self.orientation.open = true; ui.close(); }
                     if ui.button("Print checks…").clicked() { self.show_print_checks = true; ui.close(); }
                     ui.add_enabled_ui(self.script.is_some(), |ui| {
                         if ui.add_enabled(self.can_run(), egui::Button::new("Run").shortcut_text("Ctrl+Enter")).clicked() {
@@ -2657,6 +2672,41 @@ impl eframe::App for Editor {
                             self.message = error.into();
                         }
                     }
+                }
+            }
+        }
+        if let (Some(script), Some(snapshot)) = (&mut self.script, &self.snapshot) {
+            let ready = snapshot.editor_revision == Some(script.buffer.revision)
+                && matches!(self.work, WorkerState::Idle);
+            if let Some(edit) = self.orientation.show(
+                ui.ctx(),
+                &script.buffer,
+                snapshot.options,
+                &snapshot.groups,
+                ready,
+            ) {
+                if edit.revision == script.buffer.revision
+                    && script.buffer.replace(
+                        edit.range.clone(),
+                        &edit.text,
+                        self.code_state.cursor(),
+                    )
+                {
+                    self.code_state.reveal_source(
+                        edit.range.start..edit.range.start + edit.text.chars().count(),
+                    );
+                    self.worker.invalidate_preview();
+                    self.message =
+                        "Orientation settings updated in source · rebuilding preview".into();
+                    run_requested = true;
+                    save_requested = false;
+                    export_requested = false;
+                    parameter_edit = None;
+                    layout_requested = Some(placement::Layout::Assembly);
+                } else {
+                    self.message =
+                        "Source changed or exceeds the document limit; reopen orientation settings"
+                            .into();
                 }
             }
         }

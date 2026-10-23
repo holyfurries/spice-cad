@@ -36,6 +36,18 @@ type HoleOptions = {
 	countersink: { radius: number, angle: number? }?,
 }
 local cad: {
+	model_options: (
+		{
+			rotation: { x: number?, y: number?, z: number? }?,
+			game: {
+				preset: ("gltf" | "crowns_adrift")?,
+				forward: ("x+" | "x-" | "y+" | "y-" | "z+" | "z-")?,
+				up: ("x+" | "x-" | "y+" | "y-" | "z+" | "z-")?,
+				scale: number?,
+				ground: boolean?,
+			}?,
+		}
+	) -> (),
 	group: (string, { parent: Group?, assembly: Placement? }?) -> Group,
 	material: (
 		string,

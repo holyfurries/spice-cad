@@ -146,7 +146,10 @@ pub struct Parameter {
     property: Property,
 }
 
-fn parse_source(source: &str, progress_count_max: u32) -> Option<(Rope, tree_sitter::Tree)> {
+pub(crate) fn parse_source(
+    source: &str,
+    progress_count_max: u32,
+) -> Option<(Rope, tree_sitter::Tree)> {
     if source.len() > crate::text_buffer::SIZE_BYTES_MAX {
         return None;
     }

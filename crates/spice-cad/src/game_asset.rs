@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, String> {
     let parts = &model.parts;
     let group_worlds = crate::assembly::world_placements(&model.groups)?;
+    let orientation = model.options.placement()?;
     assert_eq!(parts.len(), meshes.len());
     let count: usize = meshes.iter().map(|mesh| mesh.vertices.len()).sum();
     if parts.is_empty() || parts.len() > 32 || count > 300000 {
@@ -58,7 +59,11 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
         let view = views.len();
         let accessor = accessors.len();
         let placement = if let Some(parent) = part.parent {
-            group_worlds[parent].matrix().inverse() * part.assembly.matrix()
+            orientation
+                .composed(group_worlds[parent])?
+                .matrix()
+                .inverse()
+                * part.assembly.matrix()
         } else {
             part.assembly.matrix()
         };
@@ -121,7 +126,12 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
             "count": indices.len(), "type": "SCALAR"}));
     }
     for group in &model.groups {
-        nodes.push(placement_node(&group.name, group.placement.matrix()));
+        let placement = if group.parent.is_none() {
+            orientation.composed(group.placement)?
+        } else {
+            group.placement
+        };
+        nodes.push(placement_node(&group.name, placement.matrix()));
     }
     let mut children = vec![Vec::<usize>::new(); nodes.len()];
     let mut scene_nodes = Vec::with_capacity(nodes.len());
@@ -141,6 +151,32 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
         if !children.is_empty() {
             node["children"] = json!(children);
         }
+    }
+    if model.options.declared {
+        let game = model.options.game;
+        game.validate()?;
+        let transform = game.rotation() * glam::Mat4::from_scale(Vec3::splat(game.scale as f32));
+        let mut minimum = f32::INFINITY;
+        for (part, mesh) in parts.iter().zip(meshes) {
+            let placement = part.assembly.matrix();
+            for vertex in &mesh.vertices {
+                let p = placement.transform_point3(Vec3::from_array(vertex.position));
+                let p = transform.transform_point3(Vec3::new(p.x, p.z, -p.y) * 0.001);
+                minimum = minimum.min(p.y);
+            }
+        }
+        if !minimum.is_finite() {
+            return Err("Cannot align an empty game scene".into());
+        }
+        let rotation = glam::Quat::from_mat4(&game.rotation()).normalize();
+        let scale = [game.scale; 3];
+        let index = nodes.len();
+        nodes.push(json!({"name":"Game export", "children":scene_nodes,
+            "rotation":rotation.to_array(), "scale":scale,
+            "translation":[0.0,if game.ground {-minimum} else {0.0},0.0],
+            "extras":{"spice_cad":{"preset":if game.crowns_adrift {"crowns_adrift"} else {"gltf"},
+                "model_forward":game.forward.name(),"model_up":game.up.name(),"ground":game.ground}}}));
+        scene_nodes = vec![index];
     }
     let mut document = json!({
         "asset": {"version": "2.0", "generator": "Spice CAD"},
@@ -207,6 +243,126 @@ mod tests {
 
     fn word(bytes: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("Complete word"))
+    }
+
+    #[test]
+    fn export_root_aligns_scaled_rotated_hierarchies_without_rewriting_mesh_buffers()
+    -> Result<(), String> {
+        let source = "local root=cad.group('Root',{assembly={position={x=10,y=12,z=20},rotation={z=35}}});local frame=cad.group('Grip',{parent=root,assembly={position={x=4,z=3},rotation={y=25}}});cad.show('blade',cad.box({width=2,depth=3,height=7}),{parent=frame});cad.show('loose',cad.box({width=4,depth=2,height=3,x=-7,y=4,z=-3}));cad.group('Empty frame',{parent=frame,assembly={position={z=8}}})";
+        let kernel = Kernel::new()?;
+        let original = model::compile(source)?;
+        let original_meshes = original.meshes(&mut original.build(&kernel)?, true)?;
+        let original_bytes = glb(&original, &original_meshes)?;
+        let source = format!(
+            "cad.model_options({{rotation={{x=90,z=20}},game={{forward='x+',up='y-',scale=3,ground=true}}}});{source}"
+        );
+        let model = model::compile(&source)?;
+        let meshes = model.meshes(&mut model.build(&kernel)?, true)?;
+        let bytes = glb(&model, &meshes)?;
+        let length = word(&bytes, 12) as usize;
+        let document: serde_json::Value =
+            serde_json::from_slice(&bytes[20..20 + length]).map_err(|e| e.to_string())?;
+        let old_length = word(&original_bytes, 12) as usize;
+        assert_eq!(&bytes[28 + length..], &original_bytes[28 + old_length..]);
+        let nodes = document["nodes"].as_array().expect("Nodes");
+        assert_eq!(nodes.len(), 6);
+        assert_eq!(nodes.last().unwrap()["name"], "Game export");
+        assert_eq!(nodes.last().unwrap()["scale"], json!([3.0, 3.0, 3.0]));
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n["name"] == "Empty frame" && n["mesh"].is_null())
+        );
+        let mut expected = Vec::new();
+        for (part, mesh) in model.parts.iter().zip(&meshes) {
+            for vertex in &mesh.vertices {
+                let p = part
+                    .assembly
+                    .matrix()
+                    .transform_point3(Vec3::from_array(vertex.position));
+                expected.push(Vec3::new(p.z, -p.y, p.x) * 0.003);
+            }
+        }
+        let floor = expected.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let frame_cad = model.parts[0]
+            .assembly
+            .matrix()
+            .transform_point3(glam::vec3(0.0, 0.0, 8.0));
+        let frame_expected =
+            Vec3::new(frame_cad.z, -frame_cad.y, frame_cad.x) * 0.003 - Vec3::Y * floor;
+        let mut frame_seen = false;
+        for p in &mut expected {
+            p.y -= floor;
+        }
+        let mut actual = Vec::new();
+        let mut pending: Vec<_> = document["scenes"][0]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| (i.as_u64().unwrap() as usize, glam::Mat4::IDENTITY))
+            .collect();
+        for _ in 0..64 {
+            let Some((index, parent)) = pending.pop() else {
+                break;
+            };
+            let node = &nodes[index];
+            let position = Vec3::from_array(std::array::from_fn(|i| {
+                node["translation"][i].as_f64().unwrap_or(0.0) as f32
+            }));
+            let rotation = glam::Quat::from_array(std::array::from_fn(|i| {
+                node["rotation"][i]
+                    .as_f64()
+                    .unwrap_or(if i == 3 { 1.0 } else { 0.0 }) as f32
+            }));
+            let scale = Vec3::from_array(std::array::from_fn(|i| {
+                node["scale"][i].as_f64().unwrap_or(1.0) as f32
+            }));
+            let world =
+                parent * glam::Mat4::from_scale_rotation_translation(scale, rotation, position);
+            if node["name"] == "Empty frame" {
+                assert!(world.transform_point3(Vec3::ZERO).distance(frame_expected) < 1e-7);
+                frame_seen = true;
+            }
+            if let Some(mesh) = node["mesh"].as_u64() {
+                let primitive = &document["meshes"][mesh as usize]["primitives"][0];
+                let accessor = &document["accessors"]
+                    [primitive["attributes"]["POSITION"].as_u64().unwrap() as usize];
+                let view =
+                    &document["bufferViews"][accessor["bufferView"].as_u64().unwrap() as usize];
+                let start = 28 + length + view["byteOffset"].as_u64().unwrap_or(0) as usize;
+                for index in 0..accessor["count"].as_u64().unwrap() as usize {
+                    let p = Vec3::from_array(std::array::from_fn(|axis| {
+                        f32::from_le_bytes(
+                            bytes[start + index * 24 + axis * 4..start + index * 24 + axis * 4 + 4]
+                                .try_into()
+                                .unwrap(),
+                        )
+                    }));
+                    actual.push(world.transform_point3(p));
+                }
+            }
+            if let Some(children) = node["children"].as_array() {
+                for child in children {
+                    pending.push((child.as_u64().unwrap() as usize, world));
+                }
+            }
+        }
+        assert!(pending.is_empty());
+        assert!(frame_seen);
+        for (left, right) in [(&actual, &expected), (&expected, &actual)] {
+            for p in left {
+                assert!(right.iter().any(|q| p.distance(*q) < 1e-7), "Missing {p:?}");
+            }
+        }
+        assert!(
+            actual
+                .iter()
+                .map(|p| p.y)
+                .fold(f32::INFINITY, f32::min)
+                .abs()
+                < 1e-7
+        );
+        Ok(())
     }
 
     #[test]

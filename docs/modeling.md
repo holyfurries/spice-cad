@@ -446,6 +446,62 @@ thumbnails and diagram renders remain color-only previews.
 nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.luau output/bevels
 ```
 
+## Model orientation, export axes, and attachment frames
+
+Open **Model → Orientation & game export…**, **File → Export → Game export
+settings…**, or the matching command-palette entry. This edits the source as one
+undoable change; save the document to persist it on disk. **Apply** rebuilds the
+assembly preview. The camera orientation is independent.
+
+```lua
+cad.model_options({
+    rotation={x=0, y=0, z=90},
+    game={preset="crowns_adrift", forward="y-", up="z+", scale=20, ground=true},
+})
+```
+
+Declare `cad.model_options` once, in the entry document or one imported module.
+All fields are optional. Model rotation uses degrees in X, then Y, then Z order,
+about the CAD origin. It changes assembly placement without rebuilding solids
+or changing explicit or default print placements. Reset rotation restores the
+authored assembly. Named measurements follow the rotated assembly.
+
+Game settings affect GLB export, not the millimetre-based CAD viewport or print
+files. `forward` and `up` describe perpendicular signed axes in the assembled
+CAD coordinate system **after** model rotation. Choices are `x+`, `x-`, `y+`,
+`y-`, `z+`, and `z-`. Export maps forward to game +Z and up to +Y using a proper
+rotation; GLB remains right-handed and Y-up. Defaults are `forward="y-"`,
+`up="z+"`, `scale=1`, and `ground=false`.
+
+The **Crowns Adrift** preset uses those axes and enables ground alignment. The
+preset keeps metre units and scale 1; choose the asset's additional uniform scale
+explicitly. Valid scale is 0.0001–10000. Ground alignment raises or lowers the
+lowest exported mesh point to Y=0, after rotation and scaling. For equipment that
+must retain its grip origin, turn ground alignment off. Orientation, positive
+scale, and grounding are stored in a **Game export** root node. Preserve it on
+import and do not apply its scale or unit conversion a second time. With no
+`cad.model_options` declaration, the existing GLB hierarchy is unchanged.
+
+The axis diagrams preview assembly and export directions. Under **Named
+attachment frames**, existing `cad.group` transforms can be edited in their
+parent's coordinates. **Add frame** creates a named group and an unused local
+handle before the model's declarations:
+
+```lua
+local sword = cad.extrude(cad.regular_polygon({radius=2, sides=4}), {height=40})
+local grip = cad.group("Sword grip", {
+    assembly={position={x=0,y=0,z=0}, rotation={x=0,y=0,z=0}},
+})
+cad.show("Sword", sword, {parent=grip})
+```
+
+Frames use local −Y forward and +Z up. They survive GLB export even without a
+child mesh, making them usable as mount or effect markers. These are rigid
+transforms, not animation bones. The UI preserves parent relationships. Settings
+or frame transforms supplied by expressions or imported modules remain editable
+in code; the UI does not replace those expressions with evaluated numbers. All
+UI edits participate in the editor's normal undo and save workflow.
+
 ## Low-poly infantry
 
 Open **File → Examples → Low-poly infantry** for an original pawn-style character

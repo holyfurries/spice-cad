@@ -58,6 +58,15 @@ CAD millimetres with `(x, y, z) → (x, z, -y) / 1000`; do not convert them agai
 The infantry's shield/front is toward GLB **+Z**. Align that direction with the
 game's facing convention once on an import wrapper.
 
+Spice CAD now exposes **Model → Orientation & game export…**. Choose the
+**Crowns Adrift** preset for model −Y forward / +Z up mapped to game +Z forward /
++Y up, with ground alignment enabled. Set an asset-appropriate uniform scale,
+then **Apply** and save. These values are stored in `cad.model_options` in the
+Luau source. The exported **Game export** root carries the conversion, scale,
+and ground offset; preserve that node instead of repeating its transform on
+the game wrapper. Disable grounding for standalone equipment whose origin is
+its grip. Literal named attachment transforms can also be edited in this panel.
+
 | Default export | World-space size, X × Y × Z in metres |
 | --- | --- |
 | Infantry, equipped | 0.037532 × 0.050600 × 0.021996 |
@@ -67,6 +76,7 @@ These are miniature-scale authoring models. Choose a uniform root scale for the
 game, not separate axis scales. For example, a 1.2-unit-tall infantry needs
 `1.2 / 0.0506 ≈ 23.7154`; a 1-unit-wide farmstead including its roof needs
 `1 / 0.115 ≈ 8.6957`. These are examples, not approved gameplay dimensions.
+Apply that scale either in the export settings or on import, never both.
 
 Both original examples have their lowest geometry at Y=0. Origins and local
 mesh coordinates are preserved, not automatically centred. The private knight's

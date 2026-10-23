@@ -29,35 +29,40 @@ impl Placement {
 
     pub fn from_table(options: Table) -> mlua::Result<Self> {
         crate::model::options_fields(&options, &["position", "rotation"])?;
-        let mut placement = Self::default();
+        let mut position_values = [0.0; 3];
+        let mut angles = [0.0; 3];
         if let Some(position) = options.get::<Option<Table>>("position")? {
             crate::model::options_fields(&position, &["x", "y", "z"])?;
             for (index, key) in ["x", "y", "z"].into_iter().enumerate() {
-                let value = position.get::<Option<f64>>(key)?.unwrap_or(0.0);
-                if !value.is_finite() || value.abs() > 2000.0 {
-                    return Err(mlua::Error::runtime(
-                        "Placement positions must be finite and within ±2000 mm",
-                    ));
-                }
-                placement.position[index] = value;
+                position_values[index] = position.get::<Option<f64>>(key)?.unwrap_or(0.0);
             }
         }
         if let Some(rotation) = options.get::<Option<Table>>("rotation")? {
             crate::model::options_fields(&rotation, &["x", "y", "z"])?;
-            let mut angles = [0.0; 3];
             for (index, key) in ["x", "y", "z"].into_iter().enumerate() {
-                let value = rotation.get::<Option<f64>>(key)?.unwrap_or(0.0);
-                if !value.is_finite() || value.abs() > 360000.0 {
-                    return Err(mlua::Error::runtime(
-                        "Placement rotations must be finite and within ±360000 degrees",
-                    ));
-                }
-                angles[index] = value.rem_euclid(360.0).to_radians();
+                angles[index] = rotation.get::<Option<f64>>(key)?.unwrap_or(0.0);
             }
-            placement.rotation =
-                DQuat::from_euler(glam::EulerRot::ZYX, angles[2], angles[1], angles[0]).normalize();
         }
-        Ok(placement)
+        Self::from_components(position_values, angles).map_err(mlua::Error::runtime)
+    }
+
+    pub fn from_components(position: [f64; 3], angles: [f64; 3]) -> Result<Self, String> {
+        if position.iter().any(|v| !v.is_finite() || v.abs() > 2000.0) {
+            return Err("Placement positions must be finite and within ±2000 mm".into());
+        }
+        if angles.iter().any(|v| !v.is_finite() || v.abs() > 360000.0) {
+            return Err("Placement rotations must be finite and within ±360000 degrees".into());
+        }
+        let [x, y, z] = angles.map(|v| v.rem_euclid(360.0).to_radians());
+        Ok(Self {
+            position,
+            rotation: DQuat::from_euler(glam::EulerRot::ZYX, z, y, x).normalize(),
+        })
+    }
+
+    pub fn components(self) -> ([f64; 3], [f64; 3]) {
+        let (z, y, x) = self.rotation.to_euler(glam::EulerRot::ZYX);
+        (self.position, [x, y, z].map(f64::to_degrees))
     }
 
     pub fn matrix(self) -> Mat4 {
