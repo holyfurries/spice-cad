@@ -55,7 +55,17 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
         let index = nodes.len();
         let view = views.len();
         let accessor = accessors.len();
-        nodes.push(json!({"name": part.name, "mesh": index}));
+        let basis = glam::Mat4::from_cols(
+            glam::Vec4::X,
+            glam::vec4(0.0, 0.0, -1.0, 0.0),
+            glam::Vec4::Y,
+            glam::Vec4::W,
+        );
+        let placement = basis * part.assembly.matrix() * basis.transpose();
+        let rotation = glam::Quat::from_mat4(&placement).normalize().to_array();
+        let translation = (placement.w_axis.truncate() * 0.001).to_array();
+        nodes.push(json!({"name": part.name, "mesh": index,
+            "rotation": rotation, "translation": translation}));
         let material_index = match material_keys
             .iter()
             .position(|material| *material == &part.material)
@@ -404,6 +414,63 @@ mod tests {
             std::fs::read_to_string(folder.join("print/model.luau")).unwrap(),
             source
         );
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn game_poses_preserve_local_vertices_joint_origins_and_world_normals() -> Result<(), String> {
+        let source = "cad.show('arm',cad.box({width=4,depth=6,height=25,x=-2,y=-3,z=-25}),{assembly={position={x=20,y=-10,z=60},rotation={x=ANGLE,y=20,z=-15}}})";
+        let folder =
+            std::env::temp_dir().join(format!("spice-joint-export-{}", std::process::id()));
+        let mut previous_binary = None;
+        for angle in [0, 35] {
+            let source = source.replace("ANGLE", &angle.to_string());
+            let target = folder.join(angle.to_string());
+            export::model_files(&source, &target, export::Target::Game)?;
+            let bytes =
+                std::fs::read(target.join("model.glb")).map_err(|error| error.to_string())?;
+            let json_size = word(&bytes, 12) as usize;
+            let document: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_size])
+                .map_err(|error| error.to_string())?;
+            let binary = &bytes[28 + json_size..];
+            if let Some(previous) = previous_binary {
+                assert_eq!(previous, binary);
+            }
+            previous_binary = Some(binary.to_vec());
+            let node = &document["nodes"][0];
+            assert!(node.get("matrix").is_none());
+            let translation = Vec3::from_array(std::array::from_fn(|index| {
+                node["translation"][index].as_f64().unwrap() as f32
+            }));
+            let rotation = glam::Quat::from_array(std::array::from_fn(|index| {
+                node["rotation"][index].as_f64().unwrap() as f32
+            }));
+            assert!(translation.distance(glam::vec3(0.02, 0.06, 0.01)) < 1e-7);
+            assert!((rotation.length() - 1.0).abs() < 1e-6);
+            let model = model::compile(&source)?;
+            let kernel = Kernel::new()?;
+            let mesh = model.meshes(&mut model.build(&kernel)?, true)?.remove(0);
+            let index_start = document["bufferViews"][1]["byteOffset"].as_u64().unwrap() as usize;
+            let basis = |point: Vec3| Vec3::new(point.x, point.z, -point.y);
+            for (index, vertex) in mesh.vertices.iter().enumerate() {
+                let vertex_index = word(binary, index_start + index * 4) as usize;
+                let vector = |offset: usize| {
+                    Vec3::from_array(std::array::from_fn(|component| {
+                        f32::from_bits(word(binary, vertex_index * 24 + offset + component * 4))
+                    }))
+                };
+                let position = vector(0);
+                let normal = vector(12);
+                let original = Vec3::from_array(vertex.position);
+                assert!(position.distance(basis(original) * 0.001) < 1e-7);
+                let matrix = model.parts[0].assembly.matrix();
+                let expected = basis(matrix.transform_point3(original)) * 0.001;
+                assert!((rotation * position + translation).distance(expected) < 1e-7);
+                let expected = basis(matrix.transform_vector3(Vec3::from_array(vertex.normal)));
+                assert!((rotation * normal).distance(expected) < 1e-6);
+            }
+        }
         std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
         Ok(())
     }

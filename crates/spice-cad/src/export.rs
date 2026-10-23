@@ -102,8 +102,10 @@ fn write_model(
     } else {
         crate::placement::Layout::Assembly
     };
-    for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
-        part.placement(layout).apply(body, false)?;
+    if target == Target::Print {
+        for (part, body) in model.parts.iter().zip(bodies.iter_mut()) {
+            part.placement(layout).apply(body, false)?;
+        }
     }
     let meshes = if target == Target::Game {
         model.meshes(bodies, true)?
@@ -119,7 +121,7 @@ fn write_model(
     let mut files = Vec::new();
     if target == Target::Game {
         files.push(("model.glb".into(), game_asset::glb(&model.parts, &meshes)?));
-        files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object. Materials use the supported OpenPBR Surface 1.1.1 parameter subset. Base color, metalness and specular roughness map directly. Specular weight modulates IOR; effective IOR uses required KHR_materials_ior, and effective IOR 1 also requires KHR_materials_specular factor 0. Original supported parameters are preserved in materials[].extras.spice_cad as application metadata, not a standard interchange extension. Mapping is lossy: glTF commonly uses Schlick Fresnel rather than exact dielectric Fresnel, and compensation differs between renderers. The viewport also omits OpenPBR multiple-scattering compensation and layered diffuse-albedo normalization. No general rendered-appearance equivalence is claimed. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. All parts preserve the source origin as their pivot; no centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with per-part cad.show shading: CAD-face smoothing by default, flat triangle normals, or shared-edge smoothing with a crease angle. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
+        files.push(("GAME_ASSET.md".into(), b"# Game asset\n\nImport model.glb as static meshes. Each named part is a separate object. Materials use the supported OpenPBR Surface 1.1.1 parameter subset. Base color, metalness and specular roughness map directly. Specular weight modulates IOR; effective IOR uses required KHR_materials_ior, and effective IOR 1 also requires KHR_materials_specular factor 0. Original supported parameters are preserved in materials[].extras.spice_cad as application metadata, not a standard interchange extension. Mapping is lossy: glTF commonly uses Schlick Fresnel rather than exact dielectric Fresnel, and compensation differs between renderers. The viewport also omits OpenPBR multiple-scattering compensation and layered diffuse-albedo normalization. No general rendered-appearance equivalence is claimed. Coordinates are metres, right-handed, Y up: CAD (x, y, z) becomes (x, z, -y) / 1000. Each mesh preserves local source coordinates and its source origin as the pivot; assembly placement is stored as node translation and quaternion rotation. Nodes are separate roots; no parent hierarchy is generated. No centering or bed placement is applied. Tessellation uses 0.25 mm chord and 30 degree angular tolerances, with per-part cad.show shading: CAD-face smoothing by default, flat triangle normals, or shared-edge smoothing with a crease angle. UVs, textures, collision meshes, LODs, rigging, and animation are not generated. model.luau is the exact source snapshot.\n".to_vec()));
     } else {
         let print_bounds = bodies
             .iter()

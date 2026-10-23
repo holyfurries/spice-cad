@@ -281,8 +281,13 @@ cargo run --release --locked -- --export-game examples/rocket-engine.luau output
 Run Cargo from `nix develop`. Output directories must be new. Game export writes
 `model.glb`, the source graph, and `GAME_ASSET.md`. GLB uses separate named objects,
 shared PBR materials, and hard boundaries between CAD faces. Coordinates convert to
-right-handed Y-up metres: `(x,y,z)` becomes `(x,z,-y)/1000`. The source origin
-remains the pivot. It has no print-bed requirement; closed meshes and declared
+right-handed Y-up metres: `(x,y,z)` becomes `(x,z,-y)/1000`. Each mesh keeps its
+local source coordinates and origin; assembly placement becomes the object's
+translation and quaternion rotation in GLB. Author a limb around its joint at
+`(0,0,0)` and place it with `assembly` to preserve a usable shoulder or hip pivot.
+Changing a pose changes node transforms without changing mesh vertex data.
+Nodes are separate roots; parented groups, skeletons, and animation clips are not
+generated. Game exports have no print-bed requirement; closed meshes and declared
 checks still apply.
 
 Game tessellation uses 0.25 mm chord / 30° angular tolerances, with no fixed polygon
