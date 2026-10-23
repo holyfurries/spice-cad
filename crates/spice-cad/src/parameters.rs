@@ -666,6 +666,7 @@ impl State {
                             };
                             let response = ui.add(
                                 egui::Slider::new(&mut value, minimum..=maximum)
+                                    .clamping(egui::SliderClamping::Edits)
                                     .handle_shape(egui::style::HandleShape::Circle)
                                     .step_by(step)
                                     .max_decimals(
@@ -822,6 +823,28 @@ mod tests {
             })
             .drop_without_applying_deltas();
         edit
+    }
+
+    #[test]
+    fn idle_sliders_preserve_precise_and_off_grid_source_literals() {
+        for (literal, step) in [
+            ("18.6106", "0.0001"),
+            ("26.2743", "0.0001"),
+            ("18.6106", "0.1"),
+            ("1.25", "0.1"),
+            ("1e-3", "0.1"),
+        ] {
+            let source = Buffer::from(format!(
+                "local width=cad.number({literal},{{min=0,max=40,step={step}}})"
+            ));
+            let parameters = parse(&source.to_string());
+            let mut state = State::default();
+            for _ in 0..3 {
+                assert!(controls(&mut state, &source, Some(&parameters), true).is_none());
+                assert_eq!(state.drafts[0], literal);
+                assert!(state.input_times[0].is_none());
+            }
+        }
     }
 
     fn dimension_frame(
