@@ -41,6 +41,7 @@ jobs:
       - name: Check formatting and workflow
         run: |
           nix develop .#format -c cargo fmt --all -- --check
+          nix develop .#format -c cargo fmt --manifest-path tools/game-import/Cargo.toml -- --check
           nix develop .#format -c nixfmt --check flake.nix
           nix develop .#format -c actionlint
           nix develop .#format -c yamlfmt -lint .github/workflows/build.yml
@@ -115,6 +116,9 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cmd-format: nix develop .#verification -c {0}
+          workspaces: |
+            . -> target
+            tools/game-import -> target
           key: ${{ hashFiles('flake.lock', 'flake.nix') }}
           shared-key: native
           cache-bin: "false"
@@ -149,6 +153,25 @@ jobs:
             cargo clippy --locked -p spice-cad-verification --all-targets -- -D warnings
             cargo test --locked -p spice-cad-verification
           ' 2>&1 | tee "$SPICE_CAD_ARTIFACTS/verification.log"
+      - name: Verify game exports with strict Bevy loader
+        env:
+          SPICE_IMPORT_ARTIFACTS: ${{ env.SPICE_CAD_ARTIFACTS }}/game-import
+        run: |
+          nix develop .#verification -c sh -eu -c '
+            cargo clippy --locked --manifest-path tools/game-import/Cargo.toml --all-targets -- -D warnings
+            cargo test --locked --manifest-path tools/game-import/Cargo.toml
+            cargo test --locked --manifest-path tools/game-import/Cargo.toml --test bundles -- --ignored --nocapture
+          ' 2>&1 | tee "$SPICE_CAD_ARTIFACTS/game-import.log"
+      - name: Upload game import evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spice-cad-game-import
+          path: |
+            verification-artifacts/game-import/
+            verification-artifacts/game-import.log
+          if-no-files-found: warn
+          retention-days: 14
       - name: Stop packaged app container
         if: always()
         run: |

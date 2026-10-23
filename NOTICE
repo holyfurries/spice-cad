@@ -56,6 +56,13 @@ The complete application source and pinned rebuild inputs are provided by
 this repository, Cargo.lock, and flake.lock; see docs/development.md for replacing
 and rebuilding the reference libraries.
 
+Test-only game import verification
+---------------------------------
+The standalone tools/game-import verifier vendors gltf-json 1.4.1 under
+MIT OR Apache-2.0, with a scoped required-specular validator correction.
+Its source record and both licenses are retained in
+tools/game-import/vendor/gltf-json/. This dependency is not linked into Spice CAD.
+
 Packaging
 ---------
 Experimental AppImages use nix-appimage's AppRun and AppImage's type2 runtime

@@ -86,3 +86,45 @@ constraint. Do not remove required extensions or disable validation to hide it.
 `compatibility.target_loader_validation` is `not_run`: saving a GLB is not a
 loader acceptance result. Keep independent loader/render validation reports
 alongside the bundle and bind them to its GLB SHA-256.
+
+## Strict target-loader gate
+
+The independent `tools/game-import` package pins Bevy 0.19.1 and corrects its
+validator through a vendored gltf-json 1.4.1. It runs without a GPU or renderer
+and is excluded from the application's Cargo workspace and normal tests.
+
+```sh
+nix develop -c cargo build --locked -p spice-cad
+nix develop -c cargo test --locked --manifest-path tools/game-import/Cargo.toml
+nix develop -c cargo test --locked --manifest-path tools/game-import/Cargo.toml --test bundles -- --ignored --nocapture
+```
+
+The last command exports nine fixtures: farmstead, asymmetric facing marker,
+and a nested grip/equipment hierarchy, each with default, preset, and rotated
+settings. It checks source/GLB hashes, strict loading, actual loaded colors,
+roughness, metalness, IOR and reflectance, hierarchy/local transforms, counts,
+and final bounds. Each subprocess has a 120-second limit. Bundles, logs and
+SHA-bound reports remain under `output/game-import-acceptance/`; set
+`SPICE_IMPORT_ARTIFACTS` or `SPICE_CAD_BIN` to override artifact/executable paths.
+Tagged-release CI runs this gate against the packaged application and retains
+evidence. Ordinary CI does not compile Bevy.
+
+To validate a separate export:
+
+```sh
+nix develop -c cargo run --locked --manifest-path tools/game-import/Cargo.toml -- output/farmstead output/farmstead-loader.json
+```
+
+The report path must be new. This proves import fidelity, not rendered appearance.
+Use the existing Crowns Adrift baker for camera, lighting and native-size checks.
+
+For the consumer correction, copy `tools/game-import/vendor/gltf-json` into the
+consumer repository, add a workspace `[patch.crates-io]` entry pointing to that
+copy, and enable its `allow_external_materials_specular` feature through a direct
+`gltf-json = { version = "=1.4.1", features = ["allow_external_materials_specular"] }`
+dependency in the importer. Remove the trial's `settings.validate = false`.
+Do not enable the upstream typed `KHR_materials_specular` feature for this Bevy
+version: it consumes the raw extension data that Bevy's parser expects. The gate
+explicitly tests that the raw zero-specular value survives, while unknown required
+extensions and malformed documents still fail. This correction is specific to
+Bevy's supported extension mapping; it does not claim other consumers support it.

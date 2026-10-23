@@ -8,6 +8,7 @@
 | --- | --- |
 | `crates/spice-cad/` | Native application, Rust examples, artwork, typed Luau API |
 | `tools/verification/` | Independent OpenCascade fixtures and packaged-app adapter |
+| `tools/game-import/` | Independent strict Bevy loader gate, outside the app workspace |
 | `examples/` | Luau models bundled into the app, including the four-part rack |
 | `benchmarks/` | Profiling commands and retained timing evidence |
 | `docs/` | Editor, modeling, printing, development, and release guides |

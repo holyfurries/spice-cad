@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/spice-cad", "tools/verification"]
 default-members = ["crates/spice-cad"]
+exclude = ["tools/game-import"]
 resolver = "3"
 
 [profile.release]
