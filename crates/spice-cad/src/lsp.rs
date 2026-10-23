@@ -608,6 +608,27 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn infantry_example_has_clean_editor_diagnostics() -> Result<(), String> {
+        let path = std::env::temp_dir().join("spice-cad-infantry-lsp-test.luau");
+        let mut client = Client::new(&path, &|| false, Arc::new(Mutex::new(None)))?;
+        let source = Buffer::from(include_str!("../../../examples/infantry.luau"));
+        let checked = client
+            .check(&source.rope, source.revision, Query::Check, || false)?
+            .expect("Not cancelled");
+        assert!(
+            checked.report.error().is_none(),
+            "{:?}",
+            checked.report.error()
+        );
+        assert!(
+            checked.report.diagnostics.is_empty(),
+            "{:?}",
+            checked.report.diagnostics
+        );
+        Ok(())
+    }
+
+    #[test]
     fn server_provides_cad_completion_hover_and_versioned_diagnostics() -> Result<(), String> {
         let path = std::env::temp_dir().join("spice-cad-lsp-test.luau");
         let mut client = Client::new(&path, &|| false, Arc::new(Mutex::new(None)))?;

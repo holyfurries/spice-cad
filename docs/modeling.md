@@ -350,6 +350,43 @@ thumbnails and diagram renders remain color-only previews.
 nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.luau output/bevels
 ```
 
+## Low-poly infantry
+
+Open **File → Examples → Low-poly infantry** for a configurable miniature soldier
+with a flared tunic, tapered limbs, oval head, domed helmet, kite shield, and
+spear. A muted blue coat, pale face, and chalk shield separate the main masses;
+the face uses two small eyes without a protruding nose. It uses authored
+eight-sided body profiles, a twelve-sided helmet, and degree-one lofts. Matching
+oval proportions between loft sections keep the facets planar. The default
+assembly has 21 named parts and 728 triangles, with shared materials and no
+texture dependencies.
+
+![Low-poly infantry with editable proportions, pose, and equipment](images/infantry.png)
+
+**Head size** changes proportions. **Arm pose** moves the sleeves, gloves, and
+equipment together; **Stride** rotates the legs and boots at their hips. These
+pose controls change assembly placements and reuse all cached geometry and GPU
+mesh buffers. Helmet, shield, and spear have individual toggles. Hide surface
+edges in **View → Appearance** to judge the game silhouette and shading.
+
+Each rigid limb and its equipment share a joint origin in their local geometry
+and matching placements. The GLB preserves those origins and placements as
+separate named nodes. This is a poseable rigid assembly, without a skeleton,
+skinning, parent hierarchy, or animation clips. Bending limbs and automatic
+equipment parenting are not implemented.
+
+```sh
+nix develop -c cargo run --locked -- --export-game examples/infantry.luau output/infantry
+```
+
+At default proportions the soldier is 86.5 mm tall including its helmet; the
+equipped spear extends higher. GLB converts millimetres to metres, so apply a
+uniform root scale appropriate for the game's character height. Individual
+closed parts overlap intentionally; this is a game assembly rather than a
+single printable solid. The infantry example and its proportion/equipment
+variants are checked by native tests, including editor diagnostics and pose
+cache reuse.
+
 ## Low-poly game asset study
 
 Open **File → Examples → Low-poly farmstead** for a recreation of the farmstead

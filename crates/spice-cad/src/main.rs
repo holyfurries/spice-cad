@@ -1957,6 +1957,9 @@ impl eframe::App for Editor {
                         Navigation::Materials => {
                             example_requested = Some(document::Example::Materials)
                         }
+                        Navigation::Infantry => {
+                            example_requested = Some(document::Example::Infantry)
+                        }
                         Navigation::BevelsAndShading => {
                             example_requested = Some(document::Example::BevelsAndShading)
                         }
@@ -2095,6 +2098,7 @@ impl eframe::App for Editor {
                         for (label, example) in [
                             ("Rounded cube", document::Example::Cube),
                             ("Materials", document::Example::Materials),
+                            ("Low-poly infantry", document::Example::Infantry),
                             ("Bevels and shading", document::Example::BevelsAndShading),
                             ("Low-poly farmstead", document::Example::Farmstead),
                             ("Spice rack · four parts", document::Example::RackParts),

@@ -52,6 +52,7 @@ pub enum Command {
     Farmstead,
     Materials,
     BevelsAndShading,
+    Infantry,
     RackParts,
     Bracket,
     ExtrudedBracket,
@@ -104,6 +105,7 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
     (Command::Cube, "Examples: rounded cube", ""),
     (Command::Farmstead, "Examples: low-poly farmstead", ""),
     (Command::Materials, "Examples: materials", ""),
+    (Command::Infantry, "Examples: low-poly infantry", ""),
     (
         Command::BevelsAndShading,
         "Examples: bevels and shading",

@@ -419,6 +419,89 @@ mod tests {
     }
 
     #[test]
+    fn infantry_pose_controls_reuse_geometry_and_equipment_variants_export() -> Result<(), String> {
+        let source = include_str!("../../../examples/infantry.luau");
+        {
+            let kernel = Kernel::new()?;
+            let mut cache = model::Cache::new(&kernel);
+            let first = cache.compile(source)?;
+            let initial = cache.prepare(&first)?;
+            assert_eq!(first.parts.len(), 21);
+            let display = cache.display(&initial.geometry)?;
+            let posed_source = source
+                .replace("cad.number(-12,", "cad.number(35,")
+                .replace("cad.number(0,", "cad.number(25,");
+            let posed = cache.compile(&posed_source)?;
+            let prepared = cache.prepare(&posed)?;
+            assert_eq!(prepared.hits, 21);
+            assert_eq!(prepared.build_ms, 0.0);
+            assert_eq!(prepared.tessellation_ms, 0.0);
+            assert!(std::sync::Arc::ptr_eq(
+                &display,
+                &cache.display(&prepared.geometry)?
+            ));
+            for (index, geometry) in prepared.geometry.iter().enumerate() {
+                assert!(std::sync::Arc::ptr_eq(geometry, &initial.geometry[index]));
+                geometry.mesh.validate()?;
+            }
+            assert!(
+                first
+                    .parts
+                    .iter()
+                    .zip(&posed.parts)
+                    .any(|(first, posed)| first.assembly != posed.assembly)
+            );
+        }
+        let folder =
+            std::env::temp_dir().join(format!("spice-infantry-export-{}", std::process::id()));
+        for (index, size) in [0.8, 1.0, 1.4].into_iter().enumerate() {
+            let source = source.replace("cad.number(1,", &format!("cad.number({size},"));
+            for equipment in [true, false] {
+                let source = if equipment {
+                    source.clone()
+                } else {
+                    source.replace("cad.toggle(true,", "cad.toggle(false,")
+                };
+                let target = folder.join(format!("{index}-{equipment}"));
+                export::model_files(&source, &target, export::Target::Game)?;
+                let bytes =
+                    std::fs::read(target.join("model.glb")).map_err(|error| error.to_string())?;
+                let json_size = word(&bytes, 12) as usize;
+                let document: serde_json::Value =
+                    serde_json::from_slice(&bytes[20..20 + json_size])
+                        .map_err(|error| error.to_string())?;
+                assert_eq!(
+                    document["nodes"].as_array().unwrap().len(),
+                    if equipment { 21 } else { 13 }
+                );
+                let triangles: u64 = document["accessors"]
+                    .as_array()
+                    .unwrap()
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|accessors| accessors[2]["count"].as_u64().unwrap() / 3)
+                    .sum();
+                assert!(
+                    triangles <= 750,
+                    "{size}/{equipment}: {triangles} triangles"
+                );
+                assert!(document.get("extensionsRequired").is_none());
+                assert_eq!(
+                    std::fs::read_to_string(target.join("model.luau")).unwrap(),
+                    source
+                );
+                eprintln!(
+                    "Infantry head size {size}, equipment {equipment}: {triangles} triangles, {} bytes GLB",
+                    bytes.len()
+                );
+            }
+        }
+        std::fs::remove_dir_all(folder).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
     fn game_poses_preserve_local_vertices_joint_origins_and_world_normals() -> Result<(), String> {
         let source = "cad.show('arm',cad.box({width=4,depth=6,height=25,x=-2,y=-3,z=-25}),{assembly={position={x=20,y=-10,z=60},rotation={x=ANGLE,y=20,z=-15}}})";
         let folder =

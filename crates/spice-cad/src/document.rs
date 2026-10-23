@@ -144,6 +144,7 @@ pub enum Example {
     Farmstead,
     Materials,
     BevelsAndShading,
+    Infantry,
     CurvedLoft,
     SmoothSweep,
     MiteredPipe,
@@ -169,6 +170,10 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
     };
     let (name, source) = match example {
         Example::Cube => ("cube.luau", include_str!("../../../examples/cube.luau")),
+        Example::Infantry => (
+            "infantry.luau",
+            include_str!("../../../examples/infantry.luau"),
+        ),
         Example::BevelsAndShading => (
             "bevels-and-shading.luau",
             include_str!("../../../examples/bevels-and-shading.luau"),
