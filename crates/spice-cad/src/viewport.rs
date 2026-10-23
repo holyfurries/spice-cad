@@ -170,6 +170,7 @@ impl Views {
 }
 
 pub struct Draw {
+    pub toon: bool,
     pub view_index: usize,
     pub visible_parts: u32,
     pub input: Option<crate::performance::Input>,
@@ -309,6 +310,7 @@ impl Geometry {
     }
 }
 struct Gpu {
+    outline_pipeline: wgpu::RenderPipeline,
     scene: GpuScene,
     line_pipeline: wgpu::RenderPipeline,
     pipeline: wgpu::RenderPipeline,
@@ -397,10 +399,20 @@ fn part_visible(part:u32)->bool {
  return (mask&(1u<<part))!=0u;
 }
 struct Output { @builtin(position) position:vec4<f32>, @location(0) normal:vec3<f32>, @location(1) @interpolate(flat) face:u32, @location(2) world:vec3<f32>, @location(3) color:vec3<f32>, @location(4) @interpolate(flat) part:u32 }
-@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
+fn vertex_output(position:vec3<f32>,normal:vec3<f32>,face:u32,part:u32)->Output {
  let instance=instances[part]; let world=instance.matrix*vec4<f32>(position,1.0);
  var output:Output; output.position=uniforms.matrix*world; output.normal=(instance.matrix*vec4<f32>(normal,0.0)).xyz; output.face=face; output.world=world.xyz; output.color=instance.color.rgb; output.part=part;
  if !part_visible(part) {output.position=vec4<f32>(0.0,0.0,2.0,1.0);} return output;
+}
+@vertex fn vertex_main(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
+ return vertex_output(position,normal,face,part);
+}
+@vertex fn outline_vertex(@location(0) position:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) face:u32,@location(3) part:u32)->Output {
+ var output=vertex_output(position,normal,face,part);
+ let projected=(uniforms.matrix*vec4<f32>(output.normal,0.0)).xy;
+ let direction=projected*inverseSqrt(max(dot(projected,projected),0.000001));
+ output.position=vec4<f32>(output.position.xy+direction*2.5/uniforms.selection.yz*output.position.w,output.position.zw);
+ return output;
 }
 fn dielectric_fresnel(cosine:f32, ior:f32)->f32 {
  if ior==1.0 {return 0.0;}
@@ -434,6 +446,12 @@ fn surface_color(input:Output)->vec3<f32> {
  var color=input.color; if (selected_parts&(1u<<input.part))!=0u {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.selection.x) {color=vec3<f32>(1.0,0.65,0.20);}
  if input.face==u32(uniforms.eye.w) {color=vec3<f32>(0.35,0.72,1.0);}
+ if uniforms.edges.w>0.5 {
+  let light=dot(normal,key);
+  let width=max(fwidth(light),0.0001);
+  let shadow=mix(vec3<f32>(0.14,0.24,0.43),vec3<f32>(0.28,0.49,0.76),smoothstep(-0.30-width,-0.30+width,light));
+  return color*mix(shadow,vec3<f32>(1.0),smoothstep(0.35-width,0.35+width,light));
+ }
  let ambient=color*0.20*(1.0-0.6*surface.y);
  return ambient+3.0*illuminate(color,surface,normal,view,key)+0.8*illuminate(color,surface,normal,view,fill);
 }
@@ -445,6 +463,8 @@ fn surface_color(input:Output)->vec3<f32> {
 @fragment fn fragment_linear(input:Output)->@location(0) vec4<f32> {
  return vec4<f32>(surface_color(input),1.0);
 }
+@fragment fn outline_main(input:Output)->@location(0) vec4<f32> {return vec4<f32>(0.13,0.17,0.23,1.0);}
+@fragment fn outline_linear(input:Output)->@location(0) vec4<f32> {return vec4<f32>(0.015,0.024,0.043,1.0);}
 struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32, @location(1) @interpolate(flat) selected:u32 }
 @vertex fn line_vertex(@location(0) start:vec3<f32>,@location(1) end:vec3<f32>,@location(2) part:u32,@builtin(vertex_index) index:u32,@builtin(instance_index) segment:u32)->LineOutput {
  let transform=uniforms.matrix*instances[part].matrix;
@@ -497,7 +517,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let mut pipeline_descriptor = wgpu::RenderPipelineDescriptor {
         label: Some("CAD"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
@@ -512,7 +532,11 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(if state.target_format.is_srgb() { "fragment_linear" } else { "fragment_main" }),
+            entry_point: Some(if state.target_format.is_srgb() {
+                "fragment_linear"
+            } else {
+                "fragment_main"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(state.target_format.into())],
         }),
@@ -530,7 +554,21 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         multisample: Default::default(),
         multiview_mask: None,
         cache: None,
+    };
+    let pipeline = device.create_render_pipeline(&pipeline_descriptor);
+    pipeline_descriptor.label = Some("Toon silhouette");
+    pipeline_descriptor.vertex.entry_point = Some("outline_vertex");
+    pipeline_descriptor
+        .fragment
+        .as_mut()
+        .expect("Surface fragment")
+        .entry_point = Some(if state.target_format.is_srgb() {
+        "outline_linear"
+    } else {
+        "outline_main"
     });
+    pipeline_descriptor.primitive.cull_mode = Some(wgpu::Face::Front);
+    let outline_pipeline = device.create_render_pipeline(&pipeline_descriptor);
     let instances = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("CAD part placements"),
         size: (32 * std::mem::size_of::<Instance>()) as u64,
@@ -613,6 +651,7 @@ struct LineOutput { @builtin(position) position:vec4<f32>, @location(0) side:f32
         instances,
         instances_previous: None,
         metrics: Metrics::default(),
+        outline_pipeline,
     });
     Ok(())
 }
@@ -689,6 +728,7 @@ impl egui_wgpu::CallbackTrait for Draw {
             uniform[25] = end as f32;
         }
         uniform[26] = f32::from(self.edges_enabled);
+        uniform[27] = f32::from(self.toon);
         uniform[28] = (self.selected_parts & 0xffff) as f32;
         uniform[29] = (self.selected_parts >> 16) as f32;
         uniform[30] = (self.visible_parts & 0xffff) as f32;
@@ -739,6 +779,11 @@ impl egui_wgpu::CallbackTrait for Draw {
                     .expect("Uploaded triangles")
                     .slice(..),
             );
+            if self.toon {
+                pass.set_pipeline(&gpu.outline_pipeline);
+                pass.draw(0..scene.count, 0..1);
+                pass.set_pipeline(&gpu.pipeline);
+            }
             pass.draw(0..scene.count, 0..1);
         }
         if scene.line_count > 0 && (self.edges_enabled || self.selected_edge.is_some()) {

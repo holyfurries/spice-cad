@@ -45,6 +45,13 @@ resizable bottom docks. Messages and Vim command entry do not move the document.
 Use **View → Appearance** for surface edges and display options; **Debug →
 Performance** exposes profiling counters.
 
+**Toon preview** in Appearance uses cool shadow bands and screen-sized silhouette
+outlines. Enabling it turns off CAD surface edges; you can re-enable them for
+inspection. The command palette also offers **View: toggle toon preview**. This
+is viewport lighting: GLB exports retain their authored PBR materials, and inline
+thumbnails and diagram renders keep their existing shading. Switching preview
+style reuses mesh buffers and changes only the view uniforms and draw passes.
+
 **Results** shows collapsible cards beside executed `cad.show` and `cad.measure`
 calls. Click a part card to select and frame it. Old cards are marked as previous
 results until a successful rebuild; cards are never written into the source file.

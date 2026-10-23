@@ -146,9 +146,17 @@ pub fn panel_title(ui: &mut egui::Ui, title: &str) {
     );
 }
 
-pub fn display_settings(ui: &mut egui::Ui, edges: &mut bool, width_px: &mut f32) {
+pub fn display_settings(ui: &mut egui::Ui, edges: &mut bool, width_px: &mut f32, toon: &mut bool) {
     ui.label("Viewport appearance");
     ui.separator();
+    if ui
+        .checkbox(toon, "Toon preview")
+        .on_hover_text("Preview lighting only; GLB exports retain their PBR materials.")
+        .changed()
+        && *toon
+    {
+        *edges = false;
+    }
     ui.checkbox(edges, "Surface edges");
     ui.horizontal(|ui| {
         ui.label("Edge width");

@@ -782,6 +782,7 @@ struct Editor {
     splash: Option<studio::Splash>,
     show_diagnostics: bool,
     show_edges: bool,
+    toon_preview: bool,
     show_dimensions: bool,
     show_inspector: bool,
     focus_editor: bool,
@@ -904,6 +905,7 @@ impl Editor {
                 ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                     rect,
                     viewport::Draw {
+                        toon: self.toon_preview,
                         view_index,
                         visible_parts,
                         input: snapshot.input,
@@ -1159,6 +1161,7 @@ impl Editor {
             splash: Some(studio::Splash::default()),
             show_diagnostics: false,
             show_edges: true,
+            toon_preview: false,
             show_dimensions: false,
             show_inspector: true,
             focus_editor: false,
@@ -1935,6 +1938,12 @@ impl eframe::App for Editor {
                         Navigation::Diagnostics => self.show_diagnostics = !self.show_diagnostics,
                         Navigation::Display => self.show_display_settings = true,
                         Navigation::Edges => self.show_edges = !self.show_edges,
+                        Navigation::Toon => {
+                            self.toon_preview = !self.toon_preview;
+                            if self.toon_preview {
+                                self.show_edges = false;
+                            }
+                        }
                         Navigation::Vim => {
                             self.code_state.modal.enable(!self.code_state.modal.enabled)
                         }
@@ -2179,7 +2188,7 @@ impl eframe::App for Editor {
                     }
                     ui.separator();
                     ui.menu_button("Appearance", |ui| {
-                        interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px);
+                        interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px, &mut self.toon_preview);
                     });
                     ui.checkbox(&mut self.show_performance, "Performance");
                     ui.separator();
@@ -2470,7 +2479,12 @@ impl eframe::App for Editor {
                 .open(&mut self.show_display_settings)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
-                    interface::display_settings(ui, &mut self.show_edges, &mut self.edge_width_px)
+                    interface::display_settings(
+                        ui,
+                        &mut self.show_edges,
+                        &mut self.edge_width_px,
+                        &mut self.toon_preview,
+                    )
                 });
         }
         if let Some(layout) = layout_requested.take() {
@@ -2997,6 +3011,7 @@ impl eframe::App for Editor {
                                         ui,
                                         &mut self.show_edges,
                                         &mut self.edge_width_px,
+                                        &mut self.toon_preview,
                                     );
                                 });
                         });
