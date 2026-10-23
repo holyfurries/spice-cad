@@ -254,7 +254,7 @@ fn exported_sections_match_independent_cavity_and_bushing_fixtures() -> TestResu
         ),
         (
             "section-bushing",
-            include_str!("../../../examples/revolved-bushing.luau"),
+            include_str!("../../../crates/spice-cad/tests/fixtures/revolved-bushing.luau"),
             bushing,
             std::f64::consts::PI * (231.0 * 4.0 + 75.0 * 16.0),
             vec![
@@ -370,10 +370,11 @@ fn rejects_step_surfaces_without_closed_volume() -> TestResult {
 fn curved_step_exports_reopen_with_matching_volumes_bounds_and_closed_meshes() -> TestResult {
     let bracket = include_str!("../../../examples/mounting-bracket.luau");
     let changed = bracket.replace("cad.number(100,", "cad.number(120,");
-    let bushing = include_str!("../../../examples/revolved-bushing.luau").replace(
-        "cad.revolve(section, { angle = sweep_angle })",
-        "cad.translate(cad.revolve(section, { angle = sweep_angle }), {x=16,y=16})",
-    );
+    let bushing = include_str!("../../../crates/spice-cad/tests/fixtures/revolved-bushing.luau")
+        .replace(
+            "cad.revolve(section, { angle = sweep_angle })",
+            "cad.translate(cad.revolve(section, { angle = sweep_angle }), {x=16,y=16})",
+        );
     for (index, source, dimensions) in [
         (0, bracket, [100.0, 50.0, 40.0]),
         (1, changed.as_str(), [120.0, 50.0, 40.0]),
@@ -384,17 +385,17 @@ fn curved_step_exports_reopen_with_matching_volumes_bounds_and_closed_meshes() -
         ),
         (
             3,
-            include_str!("../../../examples/extruded-bracket.luau"),
+            include_str!("../../../crates/spice-cad/tests/fixtures/extruded-bracket.luau"),
             [64.0, 42.0, 6.0],
         ),
         (
             4,
-            include_str!("../../../examples/edge-fillets.luau"),
+            include_str!("../../../crates/spice-cad/tests/fixtures/edge-fillets.luau"),
             [60.0, 30.0, 8.0],
         ),
         (
             5,
-            include_str!("../../../examples/edge-chamfers.luau"),
+            include_str!("../../../crates/spice-cad/tests/fixtures/edge-chamfers.luau"),
             [60.0, 30.0, 8.0],
         ),
         (
@@ -541,7 +542,7 @@ fn multipart_step_exports_preserve_native_volumes_and_part_counts() -> TestResul
     for (name, source) in [
         (
             "rocket",
-            include_str!("../../../examples/rocket-engine.luau"),
+            include_str!("../../../crates/spice-cad/tests/fixtures/rocket-engine.luau"),
         ),
         ("loft", include_str!("../../../examples/curved-loft.luau")),
         ("sweep", include_str!("../../../examples/smooth-sweep.luau")),

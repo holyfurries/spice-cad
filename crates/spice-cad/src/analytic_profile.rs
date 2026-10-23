@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn nested_curve_export_contains_closed_print_mesh_and_step_data() -> Result<(), String> {
-        let source = include_str!("../../../examples/rounded-enclosure.luau");
+        let source = include_str!("../tests/fixtures/rounded-enclosure.luau");
         let model = crate::model::compile(source)?;
         let kernel = crate::kernel::Kernel::new()?;
         for mut body in model.build(&kernel)? {

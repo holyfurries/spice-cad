@@ -936,7 +936,7 @@ mod tests {
             ("rack", include_str!("../../../examples/rack-parts.luau")),
             (
                 "rocket",
-                include_str!("../../../examples/rocket-engine.luau"),
+                include_str!("../tests/fixtures/rocket-engine.luau"),
             ),
         ] {
             let kernel = Kernel::new()?;
@@ -987,7 +987,7 @@ mod tests {
             ("rack", include_str!("../../../examples/rack-parts.luau")),
             (
                 "rocket",
-                include_str!("../../../examples/rocket-engine.luau"),
+                include_str!("../tests/fixtures/rocket-engine.luau"),
             ),
         ] {
             let kernel = Kernel::new()?;

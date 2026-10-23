@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn hollow_circle_sweep_example_keeps_an_open_bore_and_closed_material() -> Result<(), String> {
-        let source = include_str!("../../../examples/mitered-pipe.luau");
+        let source = include_str!("../tests/fixtures/mitered-pipe.luau");
         let snapshot = crate::build_script_snapshot(source, 1)?;
         let expected = std::f64::consts::PI * (25.0 - 12.25) * 60.0;
         assert!((snapshot.volume_mm3 - expected).abs() < expected * 1e-6);

@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn assembly_exports_named_colored_objects_and_independent_print_parts() -> Result<(), String> {
-        let source = include_str!("../../../examples/rocket-engine.luau");
+        let source = include_str!("../tests/fixtures/rocket-engine.luau");
         let model = model::compile(source)?;
         let volumes = {
             let kernel = Kernel::new()?;

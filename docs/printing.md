@@ -60,7 +60,7 @@ do not validate packing every part onto one plate.
 For JSON suitable for tooling:
 
 ```sh
-cargo run --release --locked -- --check-print examples/fit-gauge.luau
+cargo run --release --locked -- --check-print crates/spice-cad/tests/fixtures/fit-gauge.luau
 ```
 
 Invalid size or bed placement produces a report and a failing exit status.
@@ -68,7 +68,8 @@ Print checks run on demand or during export, not on every slider preview.
 
 ## Calibrate fit
 
-**File → Examples → Fit gauge** supplies five pin/receiver pairs with increasing
+The [fit-gauge regression fixture](../crates/spice-cad/tests/fixtures/fit-gauge.luau)
+supplies five pin/receiver pairs with increasing
 per-side clearance. A 0.1 mm per-side gap adds 0.2 mm to the opening's total width
 and depth. Export them and use the same filament, orientation, and settings as
 the final part. Part names record the gap; `parts.json` identifies their files.

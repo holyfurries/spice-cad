@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn chamfers_preserve_holes_and_follow_parameter_changes() -> Result<(), String> {
-        let source = include_str!("../../../examples/edge-chamfers.luau");
+        let source = include_str!("../tests/fixtures/edge-chamfers.luau");
         for width in [60.0, 80.0] {
             let source = source.replace("cad.number(60,", &format!("cad.number({width},"));
             let snapshot = crate::build_script_snapshot(&source, 1)?;
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn selected_fillets_follow_parameterized_edges_and_preserve_hole_rims() -> Result<(), String> {
-        let source = include_str!("../../../examples/edge-fillets.luau");
+        let source = include_str!("../tests/fixtures/edge-fillets.luau");
         for width in [60.0, 80.0] {
             let source = source.replace("cad.number(60,", &format!("cad.number({width},"));
             let snapshot = crate::build_script_snapshot(&source, 1)?;

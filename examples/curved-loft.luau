@@ -1,6 +1,7 @@
-local height = cad.number(48, { label = "Height", min = 30, max = 90, unit = "mm" })
-local body_radius = cad.number(14, { label = "Body radius", min = 10, max = 22, unit = "mm" })
-local neck_radius = cad.number(7, { label = "Neck radius", min = 4, max = 10, unit = "mm" })
+--!strict
+local height: number = cad.number(48, { label = "Height", min = 30, max = 90, unit = "mm" })
+local body_radius: number = cad.number(14, { label = "Body radius", min = 10, max = 22, unit = "mm" })
+local neck_radius: number = cad.number(7, { label = "Neck radius", min = 4, max = 10, unit = "mm" })
 
 local bottle = cad.loft({
 	{ profile = cad.circle({ radius = body_radius }), z = 0 },

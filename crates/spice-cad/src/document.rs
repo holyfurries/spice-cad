@@ -142,23 +142,11 @@ impl Drop for Watcher {
 pub enum Example {
     Cube,
     Farmstead,
-    Materials,
-    BevelsAndShading,
     Infantry,
     CurvedLoft,
     SmoothSweep,
-    MiteredPipe,
-    ShapeOperations,
-    FitGauge,
     ModularBracket,
     RackParts,
-    RocketEngine,
-    RevolvedBushing,
-    EdgeChamfers,
-    EdgeFillets,
-    ExtrudedBracket,
-    RoundedEnclosure,
-    MeasuredBlock,
     MountingBracket,
 }
 
@@ -174,14 +162,6 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
             "infantry.luau",
             include_str!("../../../examples/infantry.luau"),
         ),
-        Example::BevelsAndShading => (
-            "bevels-and-shading.luau",
-            include_str!("../../../examples/bevels-and-shading.luau"),
-        ),
-        Example::Materials => (
-            "materials.luau",
-            include_str!("../../../examples/materials.luau"),
-        ),
         Example::Farmstead => (
             "farmstead.luau",
             include_str!("../../../examples/farmstead.luau"),
@@ -193,18 +173,6 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
         Example::SmoothSweep => (
             "smooth-sweep.luau",
             include_str!("../../../examples/smooth-sweep.luau"),
-        ),
-        Example::MiteredPipe => (
-            "mitered-pipe.luau",
-            include_str!("../../../examples/mitered-pipe.luau"),
-        ),
-        Example::ShapeOperations => (
-            "shape-operations.luau",
-            include_str!("../../../examples/shape-operations.luau"),
-        ),
-        Example::FitGauge => (
-            "fit-gauge.luau",
-            include_str!("../../../examples/fit-gauge.luau"),
         ),
         Example::ModularBracket => {
             let files = [
@@ -226,34 +194,6 @@ pub fn example_model(example: Example) -> Result<PathBuf, String> {
         Example::RackParts => (
             "spice-rack-measurements.luau",
             include_str!("../../../examples/rack-parts.luau"),
-        ),
-        Example::RocketEngine => (
-            "rocket-engine-layouts.luau",
-            include_str!("../../../examples/rocket-engine.luau"),
-        ),
-        Example::RevolvedBushing => (
-            "revolved-bushing.luau",
-            include_str!("../../../examples/revolved-bushing.luau"),
-        ),
-        Example::EdgeChamfers => (
-            "edge-chamfers.luau",
-            include_str!("../../../examples/edge-chamfers.luau"),
-        ),
-        Example::EdgeFillets => (
-            "edge-fillets.luau",
-            include_str!("../../../examples/edge-fillets.luau"),
-        ),
-        Example::ExtrudedBracket => (
-            "extruded-bracket.luau",
-            include_str!("../../../examples/extruded-bracket.luau"),
-        ),
-        Example::RoundedEnclosure => (
-            "rounded-enclosure.luau",
-            include_str!("../../../examples/rounded-enclosure.luau"),
-        ),
-        Example::MeasuredBlock => (
-            "measured-block.luau",
-            include_str!("../../../examples/measured-block.luau"),
         ),
         Example::MountingBracket => (
             "mounting-bracket.luau",

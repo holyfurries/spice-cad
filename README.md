@@ -46,10 +46,11 @@ press **F** over the viewport to frame the model.
 
 ## Print or use in a game
 
-| Four-part spice rack                                                                           | Multipart rocket engine                                                                    |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| ![Exploded spice rack with four colored parts and dovetail joints](docs/images/spice-rack.png) | ![Rocket engine with a chamber, nozzle, and mounting plate](docs/images/rocket-engine.png) |
-| [Rack source](examples/rack-parts.luau)                                                          | [Engine source](examples/rocket-engine.luau)                                                 |
+![Exploded spice rack with four colored parts and dovetail joints](docs/images/spice-rack.png)
+
+The [spice rack source](examples/rack-parts.luau) demonstrates a printable assembly.
+The [eight example models](examples/README.md) cover basic modeling, modules,
+printing, and game assets.
 
 For a small game-art example, open **File → Examples → Low-poly farmstead**.
 The [farmstead study](docs/modeling.md#low-poly-game-asset-study) compares its
@@ -89,7 +90,7 @@ tooling in `tools/verification/`, and Luau models in `examples/`. See
 - [Development and verification](docs/development.md)
 - [Linux downloads and releases](docs/releases.md)
 
-The [typed CAD API](crates/spice-cad/types/cad.luau) and [example models](examples/) are the
+The [typed CAD API](crates/spice-cad/types/cad.luau) and [example models](examples/README.md) are the
 reference for writing scripts. Profiling commands and measured evidence live in
 [benchmarks/](benchmarks/README.md).
 

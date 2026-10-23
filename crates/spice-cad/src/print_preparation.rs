@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn exports_fit_gauge_with_source_and_advisory_reports() -> Result<(), String> {
-        let source = include_str!("../../../examples/fit-gauge.luau");
+        let source = include_str!("../tests/fixtures/fit-gauge.luau");
         let report = check(source)?;
         assert_eq!(report.parts.len(), 10);
         assert!(!report.blocked());

@@ -3,7 +3,7 @@
 [← Spice CAD](../README.md) · [Editor](editor.md) · [Printing](printing.md)
 
 The [typed CAD declarations](../crates/spice-cad/types/cad.luau) define the API;
-[examples](../examples/) provide runnable models. Use `--!strict` and annotate
+[eight examples](../examples/README.md) provide runnable models. Use `--!strict` and annotate
 factory functions for useful diagnostics and completion. Lengths are millimetres,
 angles are degrees, and X/Y/Z mean width/depth/height.
 
@@ -87,7 +87,8 @@ does not weight its metallic lobe. Weights above 1 and IORs outside [1, 3] are
 also outside this subset. The earlier `roughness`/`metallic`/`specular` aliases
 are removed so their different semantics cannot be mixed accidentally.
 
-**File → Examples → Materials** compares ceramic, bronze, and matte plaster.
+The [material regression fixture](../crates/spice-cad/tests/fixtures/materials.luau)
+compares ceramic, bronze, and matte plaster.
 Its top-level numeric controls edit surface properties without rebuilding solids,
 retessellating, or replacing the viewport geometry buffers. Hover a part in
 Properties to inspect its material name and values.
@@ -129,9 +130,9 @@ closed, nonintersecting, and consistently nested.
 profile X as radius and Y as world Z, revolving from +X toward +Y around +Z.
 Omit `angle` for a full turn; angles from 0.1° to 360° create capped sectors.
 Radii must stay within 0–1000 mm; touching the axis is allowed, crossing it is not.
-See [extruded bracket](../examples/extruded-bracket.luau),
-[rounded enclosure](../examples/rounded-enclosure.luau), and
-[revolved bushing](../examples/revolved-bushing.luau).
+See [extruded bracket](../crates/spice-cad/tests/fixtures/extruded-bracket.luau),
+[rounded enclosure](../crates/spice-cad/tests/fixtures/rounded-enclosure.luau), and
+[revolved bushing](../crates/spice-cad/tests/fixtures/revolved-bushing.luau).
 
 ## Sweeps, lofts, and shells
 
@@ -171,7 +172,8 @@ bounds. See [curved loft](../examples/curved-loft.luau).
 outside shape. Omit `open` for an enclosed cavity, or select one axis-aligned
 planar face for the opening. Thickness must be less than half the smallest bound;
 local features can impose tighter limits. Shell before applying fillets when
-possible. See [shape operations](../examples/shape-operations.luau).
+possible. See [curved loft](../examples/curved-loft.luau) and
+[smooth sweep](../examples/smooth-sweep.luau) for focused examples.
 
 ## Named faces and design checks
 
@@ -223,7 +225,7 @@ screw seat. Recess radius must exceed hole radius; countersink angles are includ
 angles. Select a fresh face from the resulting solid before another operation.
 `cad.pocket` cuts inward and `cad.boss` adds outward, using the same face axes.
 Supply `width`/`height` or a polygon `profile`, plus `depth` and optional `u/v`.
-See [manufacturing panel](../examples/manufacturing-panel.luau).
+See [manufacturing panel](../crates/spice-cad/tests/fixtures/manufacturing-panel.luau).
 
 ## Part placements and assemblies
 
@@ -275,7 +277,7 @@ the exported snapshot. **File → Examples → Reusable typed modules** installs
 ```sh
 cargo run --release --locked -- --check-model examples/mounting-bracket.luau
 cargo run --release --locked -- --render-views examples/rack-parts.luau output/views
-cargo run --release --locked -- --export-game examples/rocket-engine.luau output/engine
+cargo run --release --locked -- --export-game examples/farmstead.luau output/farmstead
 ```
 
 Run Cargo from `nix develop`. Output directories must be new. Game export writes
@@ -406,8 +408,9 @@ side count. Use `shading={mode="flat"}` for visible facets.
 
 ## Bevels and mesh shading
 
-Open **File → Examples → Bevels and shading** for a beveled block beside flat
-and smooth cylinders. Bevel width and crease angle are editable properties.
+The [shading regression fixture](../crates/spice-cad/tests/fixtures/bevels-and-shading.luau)
+places a beveled block beside flat and smooth cylinders. Bevel width and crease
+angle are editable properties.
 
 ```lua
 local block = cad.chamfer(cad.box({width=30, depth=30, height=30}), {width=1})
@@ -443,7 +446,7 @@ reuses display buffers. No per-frame normal calculation is added. Inline
 thumbnails and diagram renders remain color-only previews.
 
 ```sh
-nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.luau output/bevels
+nix develop -c cargo run --locked -- --export-game crates/spice-cad/tests/fixtures/bevels-and-shading.luau output/bevels
 ```
 
 ## Model orientation, export axes, and attachment frames

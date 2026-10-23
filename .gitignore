@@ -36,6 +36,7 @@
 !/crates/*/build.rs
 !/crates/*/src/**/*.rs
 !/crates/*/examples/**/*.rs
+!/crates/spice-cad/tests/fixtures/*.luau
 !/crates/spice-cad/assets/spice-cad.svg
 !/crates/spice-cad/assets/LICENSE
 !/crates/spice-cad/assets/brand/**
@@ -54,6 +55,7 @@
 !/tools/game-import/vendor/gltf-json/src/**/*.rs
 !/tools/game-import/vendor/gltf-json/UPSTREAM.md
 !/examples/**/*.luau
+!/examples/README.md
 !/benchmarks/*.md
 !/benchmarks/results/*.json
 !/docs/**/*.md

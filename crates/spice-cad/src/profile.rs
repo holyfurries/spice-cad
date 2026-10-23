@@ -276,7 +276,7 @@ mod tests {
     fn revolve_reuses_profiles_with_either_winding_and_existing_solid_operations()
     -> Result<(), String> {
         let snapshot = crate::build_script_snapshot(
-            include_str!("../../../examples/revolved-bushing.luau"),
+            include_str!("../tests/fixtures/revolved-bushing.luau"),
             1,
         )?;
         let expected = std::f64::consts::PI * ((256.0 - 25.0) * 4.0 + (100.0 - 25.0) * 16.0);
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn concave_extrusions_preserve_volume_and_accept_booleans_transforms_and_reuse()
     -> Result<(), String> {
-        let source = include_str!("../../../examples/extruded-bracket.luau");
+        let source = include_str!("../tests/fixtures/extruded-bracket.luau");
         let snapshot = crate::build_script_snapshot(source, 1)?;
         let area_mm2 = 64.0 * 10.0 + (42.0 - 10.0) * 10.0 + 24.0 * 24.0 * 0.5;
         let expected_mm3 = (area_mm2 - 2.0 * std::f64::consts::PI * 2.0 * 2.0) * 6.0;

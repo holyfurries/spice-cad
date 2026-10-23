@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn manufacturing_example_combines_profile_features_and_screw_seats() -> Result<(), String> {
         let snapshot = crate::build_script_snapshot(
-            include_str!("../../../examples/manufacturing-panel.luau"),
+            include_str!("../tests/fixtures/manufacturing-panel.luau"),
             1,
         )?;
         let expected = 80.0 * 60.0 * 8.0 - 292.0 * 3.0 + 84.5 * 4.0
@@ -333,7 +333,7 @@ mod tests {
     fn face_features_compose_on_internal_floors_and_support_open_through_cuts() -> Result<(), String>
     {
         let snapshot =
-            crate::build_script_snapshot(include_str!("../../../examples/enclosure.luau"), 1)?;
+            crate::build_script_snapshot(include_str!("../tests/fixtures/enclosure.luau"), 1)?;
         let expected = 80.0 * 50.0 * 20.0 - 74.0 * 44.0 * 17.0 + 10.0 * 10.0 * 5.0
             - std::f64::consts::PI * 1.5 * 1.5 * 5.0;
         assert!((snapshot.volume_mm3 - expected).abs() < 0.001);

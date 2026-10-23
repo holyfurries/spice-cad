@@ -1984,14 +1984,8 @@ impl eframe::App for Editor {
                         Navigation::Farmstead => {
                             example_requested = Some(document::Example::Farmstead)
                         }
-                        Navigation::Materials => {
-                            example_requested = Some(document::Example::Materials)
-                        }
                         Navigation::Infantry => {
                             example_requested = Some(document::Example::Infantry)
-                        }
-                        Navigation::BevelsAndShading => {
-                            example_requested = Some(document::Example::BevelsAndShading)
                         }
                         Navigation::RackParts => {
                             example_requested = Some(document::Example::RackParts)
@@ -1999,38 +1993,14 @@ impl eframe::App for Editor {
                         Navigation::Bracket => {
                             example_requested = Some(document::Example::MountingBracket)
                         }
-                        Navigation::ExtrudedBracket => {
-                            example_requested = Some(document::Example::ExtrudedBracket)
-                        }
                         Navigation::ModularBracket => {
                             example_requested = Some(document::Example::ModularBracket)
-                        }
-                        Navigation::EdgeFillets => {
-                            example_requested = Some(document::Example::EdgeFillets)
-                        }
-                        Navigation::EdgeChamfers => {
-                            example_requested = Some(document::Example::EdgeChamfers)
-                        }
-                        Navigation::RevolvedBushing => {
-                            example_requested = Some(document::Example::RevolvedBushing)
-                        }
-                        Navigation::MiteredPipe => {
-                            example_requested = Some(document::Example::MiteredPipe)
                         }
                         Navigation::CurvedLoft => {
                             example_requested = Some(document::Example::CurvedLoft)
                         }
                         Navigation::SmoothSweep => {
                             example_requested = Some(document::Example::SmoothSweep)
-                        }
-                        Navigation::ShapeOperations => {
-                            example_requested = Some(document::Example::ShapeOperations)
-                        }
-                        Navigation::FitGauge => {
-                            example_requested = Some(document::Example::FitGauge)
-                        }
-                        Navigation::RocketEngine => {
-                            example_requested = Some(document::Example::RocketEngine)
                         }
                         Navigation::AssemblyLayout => {
                             layout_requested = Some(placement::Layout::Assembly)
@@ -2140,25 +2110,13 @@ impl eframe::App for Editor {
                     ui.menu_button("Examples", |ui| {
                         for (label, example) in [
                             ("Rounded cube", document::Example::Cube),
-                            ("Materials", document::Example::Materials),
-                            ("Low-poly infantry", document::Example::Infantry),
-                            ("Bevels and shading", document::Example::BevelsAndShading),
-                            ("Low-poly farmstead", document::Example::Farmstead),
-                            ("Spice rack · four parts", document::Example::RackParts),
                             ("Mounting bracket", document::Example::MountingBracket),
-                            ("Measured block", document::Example::MeasuredBlock),
-                            ("Extruded bracket", document::Example::ExtrudedBracket),
-                            ("Rounded enclosure", document::Example::RoundedEnclosure),
-                            ("Reusable typed modules", document::Example::ModularBracket),
-                            ("Selected edge fillets", document::Example::EdgeFillets),
-                            ("Selected edge chamfers", document::Example::EdgeChamfers),
-                            ("Revolved bushing", document::Example::RevolvedBushing),
-                            ("Rocket engine assembly", document::Example::RocketEngine),
-                            ("Fit gauge", document::Example::FitGauge),
-                            ("Sweep, loft and shell", document::Example::ShapeOperations),
-                            ("Hollow mitered pipe", document::Example::MiteredPipe),
                             ("Curved lofts", document::Example::CurvedLoft),
                             ("Smooth hollow sweep", document::Example::SmoothSweep),
+                            ("Reusable typed modules", document::Example::ModularBracket),
+                            ("Spice rack · four parts", document::Example::RackParts),
+                            ("Low-poly farmstead", document::Example::Farmstead),
+                            ("Low-poly infantry", document::Example::Infantry),
                         ] {
                             if ui.button(label).clicked() {
                                 example_requested = Some(example);
@@ -3700,7 +3658,7 @@ mod tests {
 
     #[test]
     fn named_measurements_survive_shape_changes_and_clear_when_removed() -> Result<(), String> {
-        let source = include_str!("../../../examples/measured-block.luau");
+        let source = include_str!("../tests/fixtures/measured-block.luau");
         let first = build_script_snapshot(source, 1)?;
         let selected = first.checks.measurements[0]
             .selection(&first.scene.faces)
@@ -4026,7 +3984,7 @@ mod tests {
 
     #[test]
     fn material_edits_reuse_geometry_and_update_only_instance_surface_data() -> Result<(), String> {
-        let source = include_str!("../../../examples/materials.luau");
+        let source = include_str!("../tests/fixtures/materials.luau");
         let kernel = kernel::Kernel::new()?;
         let mut cache = model::Cache::new(&kernel);
         let initial = build_script_snapshot_cached(source.into(), 1, &mut cache)?;
@@ -4414,7 +4372,7 @@ mod tests {
         let bracket = include_str!("../../../examples/mounting-bracket.luau");
         let changed = bracket.replace("cad.number(100,", "cad.number(120,");
         let cavity = "local a = cad.box({width=10, depth=10, height=10}); local b = cad.box({width=6, depth=6, height=6,x=2,y=2,z=2}); cad.show('hollow', cad.subtract(a,b))";
-        let bushing = include_str!("../../../examples/revolved-bushing.luau").replace(
+        let bushing = include_str!("../tests/fixtures/revolved-bushing.luau").replace(
             "cad.revolve(section, { angle = sweep_angle })",
             "cad.translate(cad.revolve(section, { angle = sweep_angle }), {x=16,y=16})",
         );
@@ -4424,17 +4382,17 @@ mod tests {
             (2, cavity, [10.0; 3]),
             (
                 3,
-                include_str!("../../../examples/extruded-bracket.luau"),
+                include_str!("../tests/fixtures/extruded-bracket.luau"),
                 [64.0, 42.0, 6.0],
             ),
             (
                 4,
-                include_str!("../../../examples/edge-fillets.luau"),
+                include_str!("../tests/fixtures/edge-fillets.luau"),
                 [60.0, 30.0, 8.0],
             ),
             (
                 5,
-                include_str!("../../../examples/edge-chamfers.luau"),
+                include_str!("../tests/fixtures/edge-chamfers.luau"),
                 [60.0, 30.0, 8.0],
             ),
             (
@@ -4647,7 +4605,7 @@ mod tests {
 
     #[test]
     fn luau_models_preserve_native_geometry_and_allow_reused_operands() -> Result<(), String> {
-        let bracket = build_script_snapshot(include_str!("../../../examples/bracket.luau"), 1)?;
+        let bracket = build_script_snapshot(include_str!("../tests/fixtures/bracket.luau"), 1)?;
         assert_eq!(bracket.name, "bracket");
         assert!((bracket.volume_mm3 - 64080.0).abs() < 0.01);
         let rack = build_script_snapshot(
@@ -4983,7 +4941,7 @@ mod tests {
                 "local a=cad.box({width=10,depth=10,height=10}); cad.show('bad',cad.fillet(a,{radius=100}))",
                 3,
             ),
-            (include_str!("../../../examples/bracket.luau"), 4),
+            (include_str!("../tests/fixtures/bracket.luau"), 4),
         ] {
             worker
                 .try_send(Command::Script {

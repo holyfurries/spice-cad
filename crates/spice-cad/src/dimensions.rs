@@ -1312,7 +1312,7 @@ mod tests {
     -> Result<(), String> {
         let source = format!(
             "-- Unicode: λ\n{}",
-            include_str!("../../../examples/measured-block.luau")
+            include_str!("../tests/fixtures/measured-block.luau")
         );
         let kernel = crate::kernel::Kernel::new()?;
         let mut cache = crate::model::Cache::new(&kernel);
@@ -1353,7 +1353,7 @@ mod tests {
 
     #[test]
     fn parameter_links_reject_unknown_toggle_computed_and_shadowed_controls() {
-        let source = include_str!("../../../examples/measured-block.luau");
+        let source = include_str!("../tests/fixtures/measured-block.luau");
         for source in [
             source.replace("parameter = \"height\"", "parameter = \"missing\""),
             source
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn rotated_measurement_labels_are_clickable_and_use_world_endpoints() -> Result<(), String> {
-        let source = include_str!("../../../examples/measured-block.luau").replace(
+        let source = include_str!("../tests/fixtures/measured-block.luau").replace(
             "cad.show(\"Measured block\", part)",
             "cad.show(\"Measured block\", part, {assembly={rotation={y=45}}})",
         );
@@ -1444,7 +1444,7 @@ mod tests {
 
     #[test]
     fn named_faces_and_distance_checks_follow_rebuilt_geometry() -> Result<(), String> {
-        let source = include_str!("../../../examples/measured-block.luau");
+        let source = include_str!("../tests/fixtures/measured-block.luau");
         for (source, height) in [
             (source.to_owned(), 20.0),
             (
@@ -1529,7 +1529,7 @@ mod tests {
     #[test]
     fn failing_checks_block_preview_and_export_and_reference_dimensions_remain_unchecked()
     -> Result<(), String> {
-        let source = include_str!("../../../examples/measured-block.luau");
+        let source = include_str!("../tests/fixtures/measured-block.luau");
         let invalid = source.replace("max = 25", "max = 19");
         let error = crate::build_script_snapshot(&invalid, 1)
             .err()
@@ -1562,7 +1562,7 @@ mod tests {
 
     #[test]
     fn annotation_api_validates_names_limits_and_unknown_options() {
-        let source = include_str!("../../../examples/measured-block.luau");
+        let source = include_str!("../tests/fixtures/measured-block.luau");
         for (source, expected) in [
             (
                 source.replace("name = \"bottom\"", "name = \"top\""),

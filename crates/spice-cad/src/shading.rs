@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn bevel_example_stays_closed_and_low_poly_across_slider_limits() -> Result<(), String> {
         let kernel = crate::kernel::Kernel::new()?;
-        let source = include_str!("../../../examples/bevels-and-shading.luau");
+        let source = include_str!("../tests/fixtures/bevels-and-shading.luau");
         let mut previous_volume = f64::INFINITY;
         for width in [0, 1, 4] {
             let source = source.replace("cad.number(1,", &format!("cad.number({width},"));
