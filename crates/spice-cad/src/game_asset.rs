@@ -487,6 +487,32 @@ mod tests {
                     .zip(&posed.parts)
                     .any(|(first, posed)| first.assembly != posed.assembly)
             );
+            for (width, height) in [(14.0, 22.0), (24.0, 32.0)] {
+                let source = source
+                    .replace("cad.number(18.6,", &format!("cad.number({width},"))
+                    .replace("cad.number(26.3,", &format!("cad.number({height},"));
+                let resized = cache.compile(&source)?;
+                let prepared = cache.prepare(&resized)?;
+                assert_eq!(prepared.hits, 10);
+                let bounds = prepared.geometry[0].bounds;
+                assert!((f64::from(bounds[1].x - bounds[0].x) - width).abs() < 1e-4);
+                assert!((f64::from(bounds[1].z - bounds[0].z) - height).abs() < 1e-4);
+                assert!(!std::sync::Arc::ptr_eq(
+                    &initial.geometry[0],
+                    &prepared.geometry[0]
+                ));
+                for index in 1..11 {
+                    assert!(std::sync::Arc::ptr_eq(
+                        &initial.geometry[index],
+                        &prepared.geometry[index]
+                    ));
+                }
+                assert!(
+                    (f64::from(resized.parts[1].assembly.translation().z) - height - 9.3).abs()
+                        < 1e-5
+                );
+                prepared.geometry[0].mesh.validate()?;
+            }
         }
         let folder =
             std::env::temp_dir().join(format!("spice-infantry-export-{}", std::process::id()));

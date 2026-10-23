@@ -389,12 +389,16 @@ nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.l
 Open **File → Examples → Low-poly infantry** for an original pawn-style character
 with a rounded body and head, small detached hands, a faceted helmet, kite
 shield, and spear. Pale surfaces and blue bindings separate the main masses.
-The default GLB has 11 named parts, five attachment groups, and 1,382 triangles
-(about 79 KB), with shared materials and no texture dependencies.
+The default GLB has 11 named parts, five attachment groups, and 966 triangles
+(about 46 KB), with shared materials and no texture dependencies. The torso is a
+six-section polygon loft, the head is a sphere, the hands are boxes, and the
+helmet uses a loft, visor cut, and extruded cheek guards. Geometry is defined by modeling operations,
+without embedded mesh vertices or triangle lists.
 
 ![Low-poly infantry with editable proportions, pose, and equipment](images/infantry.png)
 
-**Head size** changes proportions. **Heading**, **Body lean**, and **Grip pose**
+**Body width**, **Body height**, and **Head size** change proportions.
+**Heading**, **Body lean**, and **Grip pose**
 adjust the character and its attachments while reusing all eleven cached part
 geometries and GPU mesh buffers. Helmet, shield, and spear have individual
 toggles. Enable **View → Appearance → Toon preview** for colored shadow bands
@@ -410,7 +414,7 @@ and animation clips are not implemented.
 nix develop -c cargo run --locked -- --export-game examples/infantry.luau output/infantry
 ```
 
-At default proportions the character is 45 mm tall including its helmet; the
+At default proportions the character is 50.6 mm tall including its helmet; the
 equipped spear extends higher. GLB converts millimetres to metres, so apply a
 uniform root scale appropriate for the game's character height. Individual
 closed parts overlap intentionally; this is a game assembly rather than a
