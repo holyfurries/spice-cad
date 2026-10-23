@@ -5,13 +5,13 @@ Reviewed 2026-10-23 against the current Spice CAD exports and the local
 
 ## Readiness
 
-The original farmstead passed a Crowns Adrift sprite-baker trial: at matching
-dimensions its 128×128 RGBA sprite matched the procedural model pixel-for-pixel
-on the tested RTX 3070 Vulkan renderer. The trial used a narrow loader-validation
-workaround; strict-loader acceptance and the newer orientation settings still
-need end-to-end verification. Infantry remains an import and art-direction trial,
-not an approved animated character. See the game's `docs/spice-farmstead-trial.md`
-at integration commit `8d93fdf` for the observed scope.
+The farmstead passes strict Bevy 0.19.1 loading with the supplied validator
+correction. Both the miniature export at import scale 10 and the game-preset
+export with an identity wrapper match the procedural 128×128 RGBA sprite
+pixel-for-pixel on the tested RTX 3070 Vulkan renderer. Nine loader fixtures also
+cover rotated models and nested equipment frames. Infantry remains an import
+and art-direction trial, not an approved animated character. See the
+[current acceptance report](game-import-acceptance.md) for results and scope.
 
 Crowns Adrift currently displays troop and building PNGs; its diorama example
 authors 3D geometry and renders those sprites. Loading these GLBs into either
@@ -20,7 +20,12 @@ does not change the game.
 
 ## Files to hand over
 
-The original audited exports are in Spice CAD's ignored `output/crowns-adrift-handoff/`:
+The verified farmstead handoff is in `output/crowns-adrift-contract/handoff/`,
+including the original and lower-roof candidate, metadata, strict-loader reports,
+editable sources, reference sprites, and consumer correction. The game repository
+and approved sprites remain unchanged.
+
+The original legacy exports remain in ignored `output/crowns-adrift-handoff/`:
 
 | Asset | Editable source | GLB | Triangles | GPU vertices | Mesh parts / materials |
 | --- | --- | --- | ---: | ---: | ---: |

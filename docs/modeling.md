@@ -545,7 +545,9 @@ cache reuse.
 Open **File → Examples → Low-poly farmstead** for a recreation of the farmstead
 from Holy Furries' Crowns Adrift project. Its four separately colored parts use
 only boxes and an extruded triangular roof. The Scale slider changes the whole
-model proportionally. No booleans or curved tessellation are needed.
+model proportionally. **Roof rise** changes the gable height independently while
+keeping the footprint, ground anchor, and materials fixed. No booleans or curved
+tessellation are needed.
 
 ```sh
 nix develop -c cargo run --locked -- --export-game examples/farmstead.luau output/farmstead

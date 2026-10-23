@@ -9,7 +9,10 @@ cad.asset({
 })
 
 local scale: number = cad.number(1, { label = "Scale", min = 0.25, max = 2, step = 0.05 })
+local roof_rise: number = cad.number(40, { label = "Roof rise", min = 20, max = 60, step = 1 })
 assert(scale > 0, "Scale must be positive")
+assert(roof_rise >= 20, "Roof rise must be at least 20 mm")
+assert(roof_rise <= 60, "Roof rise must be at most 60 mm")
 
 local function linear(channel: number): number
 	local value = channel / 255
@@ -41,7 +44,7 @@ cad.show("Plaster body", body, { material = plaster })
 local gable = cad.polygon({
 	{ x = -57.5 * scale, y = 0 },
 	{ x = 57.5 * scale, y = 0 },
-	{ x = 0, y = 40 * scale },
+	{ x = 0, y = roof_rise * scale },
 })
 local roof = cad.rotate(cad.extrude(gable, { height = 100 * scale }), { axis = "x", angle = 90 })
 roof = cad.translate(roof, { y = 50 * scale, z = 68 * scale })
