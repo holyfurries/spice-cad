@@ -461,14 +461,15 @@ mod tests {
             let mut cache = model::Cache::new(&kernel);
             let first = cache.compile(source)?;
             let initial = cache.prepare(&first)?;
-            assert_eq!(first.parts.len(), 21);
+            assert_eq!(first.parts.len(), 11);
+            assert_eq!(first.groups.len(), 5);
             let display = cache.display(&initial.geometry)?;
             let posed_source = source
-                .replace("cad.number(-12,", "cad.number(35,")
-                .replace("cad.number(0,", "cad.number(25,");
+                .replace("cad.number(-8,", "cad.number(30,")
+                .replace("cad.number(0,", "cad.number(10,");
             let posed = cache.compile(&posed_source)?;
             let prepared = cache.prepare(&posed)?;
-            assert_eq!(prepared.hits, 21);
+            assert_eq!(prepared.hits, 11);
             assert_eq!(prepared.build_ms, 0.0);
             assert_eq!(prepared.tessellation_ms, 0.0);
             assert!(std::sync::Arc::ptr_eq(
@@ -507,7 +508,7 @@ mod tests {
                         .map_err(|error| error.to_string())?;
                 assert_eq!(
                     document["nodes"].as_array().unwrap().len(),
-                    if equipment { 21 } else { 13 }
+                    if equipment { 16 } else { 9 }
                 );
                 let triangles: u64 = document["accessors"]
                     .as_array()
@@ -518,7 +519,7 @@ mod tests {
                     .map(|accessors| accessors[2]["count"].as_u64().unwrap() / 3)
                     .sum();
                 assert!(
-                    triangles <= 750,
+                    triangles <= 2500,
                     "{size}/{equipment}: {triangles} triangles"
                 );
                 assert!(document.get("extensionsRequired").is_none());

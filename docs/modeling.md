@@ -386,34 +386,31 @@ nix develop -c cargo run --locked -- --export-game examples/bevels-and-shading.l
 
 ## Low-poly infantry
 
-Open **File → Examples → Low-poly infantry** for a configurable miniature soldier
-with a flared tunic, tapered limbs, oval head, domed helmet, kite shield, and
-spear. A muted blue coat, pale face, and chalk shield separate the main masses;
-the face uses two small eyes without a protruding nose. It uses authored
-eight-sided body profiles, a twelve-sided helmet, and degree-one lofts. Matching
-oval proportions between loft sections keep the facets planar. The default
-assembly has 21 named parts and 728 triangles, with shared materials and no
-texture dependencies.
+Open **File → Examples → Low-poly infantry** for an original pawn-style character
+with a rounded body and head, small detached hands, a faceted helmet, kite
+shield, and spear. Pale surfaces and blue bindings separate the main masses.
+The default GLB has 11 named parts, five attachment groups, and 1,382 triangles
+(about 79 KB), with shared materials and no texture dependencies.
 
 ![Low-poly infantry with editable proportions, pose, and equipment](images/infantry.png)
 
-**Head size** changes proportions. **Arm pose** moves the sleeves, gloves, and
-equipment together; **Stride** rotates the legs and boots at their hips. These
-pose controls change assembly placements and reuse all cached geometry and GPU
-mesh buffers. Helmet, shield, and spear have individual toggles. Hide surface
-edges in **View → Appearance** to judge the game silhouette and shading.
+**Head size** changes proportions. **Heading**, **Body lean**, and **Grip pose**
+adjust the character and its attachments while reusing all eleven cached part
+geometries and GPU mesh buffers. Helmet, shield, and spear have individual
+toggles. Enable **View → Appearance → Toon preview** for colored shadow bands
+and silhouette outlines. This affects the viewport; exports retain authored PBR
+materials.
 
-Each rigid limb and its equipment share a joint origin in their local geometry
-and matching placements. The GLB preserves those origins and placements as
-separate named nodes. This is a poseable rigid assembly, without a skeleton,
-skinning, parent hierarchy, or animation clips. Bending limbs and automatic
-equipment parenting are not implemented.
+The `Unit rig` group contains `Body pose`, which parents the head mount and two
+grips. Equipment follows its grip. GLB preserves this hierarchy and the local
+transforms as named nodes. These are rigid attachment poses; skeletons, skinning,
+and animation clips are not implemented.
 
 ```sh
 nix develop -c cargo run --locked -- --export-game examples/infantry.luau output/infantry
 ```
 
-At default proportions the soldier is 86.5 mm tall including its helmet; the
+At default proportions the character is 45 mm tall including its helmet; the
 equipped spear extends higher. GLB converts millimetres to metres, so apply a
 uniform root scale appropriate for the game's character height. Individual
 closed parts overlap intentionally; this is a game assembly rather than a
