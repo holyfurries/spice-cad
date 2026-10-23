@@ -12,6 +12,7 @@ use std::{
 #[cfg(test)]
 mod allocations;
 mod analysis;
+mod assembly;
 mod assembly_checks;
 mod cancellation;
 mod code_editor;

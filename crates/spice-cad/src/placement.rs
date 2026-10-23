@@ -1,5 +1,5 @@
 use crate::kernel::Body;
-use glam::{DMat4, DVec3, Mat4};
+use glam::{DMat4, DQuat, DVec3, Mat4};
 use mlua::Table;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub enum Layout {
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Placement {
     position: [f64; 3],
-    rotation: [f64; 3],
+    rotation: DQuat,
 }
 
 impl Placement {
@@ -44,6 +44,7 @@ impl Placement {
         }
         if let Some(rotation) = options.get::<Option<Table>>("rotation")? {
             crate::model::options_fields(&rotation, &["x", "y", "z"])?;
+            let mut angles = [0.0; 3];
             for (index, key) in ["x", "y", "z"].into_iter().enumerate() {
                 let value = rotation.get::<Option<f64>>(key)?.unwrap_or(0.0);
                 if !value.is_finite() || value.abs() > 360000.0 {
@@ -51,36 +52,51 @@ impl Placement {
                         "Placement rotations must be finite and within ±360000 degrees",
                     ));
                 }
-                placement.rotation[index] = value.rem_euclid(360.0);
+                angles[index] = value.rem_euclid(360.0).to_radians();
             }
+            placement.rotation =
+                DQuat::from_euler(glam::EulerRot::ZYX, angles[2], angles[1], angles[0]).normalize();
         }
         Ok(placement)
     }
 
     pub fn matrix(self) -> Mat4 {
-        (DMat4::from_translation(DVec3::from_array(self.position))
-            * DMat4::from_rotation_z(self.rotation[2].to_radians())
-            * DMat4::from_rotation_y(self.rotation[1].to_radians())
-            * DMat4::from_rotation_x(self.rotation[0].to_radians()))
-        .as_mat4()
+        self.matrix_f64().as_mat4()
+    }
+
+    fn matrix_f64(self) -> DMat4 {
+        DMat4::from_rotation_translation(self.rotation, DVec3::from_array(self.position))
+    }
+
+    pub fn composed(self, local: Self) -> Result<Self, String> {
+        let position =
+            self.rotation * DVec3::from_array(local.position) + DVec3::from_array(self.position);
+        if !position.is_finite() || position.abs().max_element() > 2000.0 {
+            return Err("Composed group positions must remain within ±2000 mm".into());
+        }
+        let placement = Self {
+            position: position.to_array(),
+            rotation: (self.rotation * local.rotation).normalize(),
+        };
+        assert!(placement.matrix().is_finite());
+        assert!((placement.rotation.length() - 1.0).abs() < 1e-12);
+        Ok(placement)
     }
 
     pub fn apply(self, body: &mut Body<'_>, inverse: bool) -> Result<(), String> {
-        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        assert!(self.rotation.is_finite());
+        assert!((self.rotation.length() - 1.0).abs() < 1e-12);
+        let (axis, angle) = self.rotation.to_axis_angle();
         if inverse {
             if self.position != [0.0; 3] {
                 body.translate(self.position.map(|value| -value))?;
             }
-            for index in (0..3).rev() {
-                if self.rotation[index] != 0.0 {
-                    body.rotate(axes[index], -self.rotation[index])?;
-                }
+            if angle != 0.0 {
+                body.rotate(axis.to_array(), -angle.to_degrees())?;
             }
         } else {
-            for (index, axis) in axes.into_iter().enumerate() {
-                if self.rotation[index] != 0.0 {
-                    body.rotate(axis, self.rotation[index])?;
-                }
+            if angle != 0.0 {
+                body.rotate(axis.to_array(), angle.to_degrees())?;
             }
             if self.position != [0.0; 3] {
                 body.translate(self.position)?;
@@ -93,6 +109,35 @@ impl Placement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_rotations_remain_accurate_at_euler_singularities() -> Result<(), String> {
+        let lua = mlua::Lua::new();
+        for angle in [89.999999, 90.0, 270.0] {
+            let parent = lua
+                .load(format!(
+                    "return {{position={{x=10,y=-20,z=30}},rotation={{x=35,y={angle},z=80}}}}"
+                ))
+                .eval()
+                .map_err(|error| error.to_string())?;
+            let local = lua
+                .load("return {position={x=3,y=8,z=-5},rotation={x=-80,y=90,z=170}}")
+                .eval()
+                .map_err(|error| error.to_string())?;
+            let parent = Placement::from_table(parent).map_err(|error| error.to_string())?;
+            let local = Placement::from_table(local).map_err(|error| error.to_string())?;
+            let composed = parent.composed(local)?;
+            let expected = parent.matrix_f64() * local.matrix_f64();
+            assert!(
+                (composed.matrix_f64() - expected)
+                    .to_cols_array()
+                    .iter()
+                    .all(|value| value.abs() < 1e-10)
+            );
+            assert!((composed.rotation.length() - 1.0).abs() < 1e-12);
+        }
+        Ok(())
+    }
 
     #[test]
     fn native_placements_match_the_matrix_and_inverse_restores_geometry() -> Result<(), String> {

@@ -332,7 +332,7 @@ mod tests {
             let meshes = model.meshes(&mut model.build(&kernel)?, true)?;
             let mesh = &meshes[0];
             mesh.validate()?;
-            let bytes = crate::game_asset::glb(&model.parts, &meshes)?;
+            let bytes = crate::game_asset::glb(&model, &meshes)?;
             let word =
                 |index| u32::from_le_bytes(bytes[index..index + 4].try_into().unwrap()) as usize;
             let json_size = word(12);
@@ -444,7 +444,7 @@ mod tests {
             for mesh in &meshes {
                 mesh.validate()?;
             }
-            assert!(!crate::game_asset::glb(&model.parts, &meshes)?.is_empty());
+            assert!(!crate::game_asset::glb(&model, &meshes)?.is_empty());
             eprintln!("Bevel width {width}: {triangles} triangles, block volume {volume} mm³");
         }
         Ok(())

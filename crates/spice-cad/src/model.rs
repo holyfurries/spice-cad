@@ -18,6 +18,7 @@ pub use cache::{Cache, DisplayQuality, Presentation, ThumbnailMode};
 
 #[derive(Clone)]
 pub struct Part {
+    pub parent: Option<usize>,
     pub assembly: crate::placement::Placement,
     pub print: Option<crate::placement::Placement>,
     pub line: usize,
@@ -38,7 +39,6 @@ impl Part {
 
 #[derive(Clone, Copy)]
 enum Operation {
-    Shape(usize),
     Sphere {
         origin: [f64; 3],
         radius: f64,
@@ -48,6 +48,7 @@ enum Operation {
         radius: f64,
         height: f64,
     },
+    Shape(usize),
     Profile {
         profile: usize,
         sweep: ProfileSweep,
@@ -116,6 +117,7 @@ struct Recipe {
 }
 
 pub struct Model {
+    pub groups: Vec<crate::assembly::Group>,
     pub print_options: crate::print_preparation::Options,
     recipe: Rc<Recipe>,
     definitions: crate::dimensions::Definitions,
@@ -185,6 +187,7 @@ pub fn compile_project_cached(
     });
     let recipe = Rc::new(RefCell::new(Recipe::default()));
     let cad = lua.create_table().map_err(|error| error.to_string())?;
+    let groups = crate::assembly::register(&lua, &cad).map_err(|error| error.to_string())?;
     crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
@@ -408,9 +411,6 @@ pub fn compile_project_cached(
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    for name in ["translate", "rotate", "fillet", "chamfer"] {
-        let state = Rc::clone(&recipe);
-        cad.set(
     for name in ["sphere", "capsule"] {
         let state = Rc::clone(&recipe);
         cad.set(name, lua.create_function(move |_, options: Table| {
@@ -435,6 +435,9 @@ pub fn compile_project_cached(
             push_operation(&state, operation)
         }).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
     }
+    for name in ["translate", "rotate", "fillet", "chamfer"] {
+        let state = Rc::clone(&recipe);
+        cad.set(
             name,
             lua.create_function(move |_, (solid, options): (AnyUserData, Table)| {
                 let source = solid.borrow::<Solid>()?.0;
@@ -528,11 +531,13 @@ pub fn compile_project_cached(
                 ));
             }
             let mut material = crate::material::Material::default();
+            let mut parent = None;
             let mut shading = crate::shading::Shading::default();
             let mut assembly = crate::placement::Placement::default();
             let mut print = None;
             if let Some(options) = options {
-                options_fields(&options, &["material", "assembly", "print", "shading"])?;
+                options_fields(&options, &["material", "assembly", "print", "shading", "parent"])?;
+                parent = crate::assembly::parent(&options)?;
                 if let Some(options) = options.get::<Option<Table>>("shading")? { shading = crate::shading::Shading::from_table(options)?; }
                 if let Some(options) = options.get::<Option<Table>>("assembly")? { assembly = crate::placement::Placement::from_table(options)?; }
                 if let Some(options) = options.get::<Option<Table>>("print")? { print = Some(crate::placement::Placement::from_table(options)?); }
@@ -554,7 +559,7 @@ pub fn compile_project_cached(
                 return Err(mlua::Error::RuntimeError("Each shown part must have its own solid; translate a copy for repeated parts".into()));
             }
             let line = crate::project::source_line(lua);
-            state.outputs.push(Part { assembly, print, line, name, material, shading, solid });
+            state.outputs.push(Part { parent, assembly, print, line, name, material, shading, solid });
             Ok(())
         })
         .map_err(|error| error.to_string())?,
@@ -884,7 +889,15 @@ pub fn compile_project_cached(
         .exec()
         .map_err(|error| error.to_string())?;
     let mut recipe = std::mem::take(&mut *recipe.borrow_mut());
-    let parts = std::mem::take(&mut recipe.outputs);
+    let mut parts = std::mem::take(&mut recipe.outputs);
+    let groups = std::mem::take(&mut *groups.borrow_mut());
+    let worlds = crate::assembly::world_placements(&groups)?;
+    for part in &mut parts {
+        if let Some(parent) = part.parent {
+            let world = worlds.get(parent).ok_or("Part parent does not exist")?;
+            part.assembly = world.composed(part.assembly)?;
+        }
+    }
     if parts.iter().any(|part| part.print.is_some()) {
         if let Some(part) = parts.iter().find(|part| part.print.is_none()) {
             return Err(format!(
@@ -904,6 +917,7 @@ pub fn compile_project_cached(
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
     definitions.validate_parameters(analysis.take_parameters())?;
     Ok(Model {
+        groups,
         print_options: recipe.print_options.unwrap_or_default(),
         recipe: Rc::new(recipe),
         definitions,
@@ -1107,6 +1121,18 @@ impl Model {
                         .ok_or("Missing sweep profile")?;
                     bodies.push(kernel.sweep_curved_profile(polygon, sweep)?);
                 }
+                Operation::Sphere { origin, radius } => bodies.push(kernel.sphere(origin, radius)?),
+                Operation::Capsule {
+                    origin,
+                    radius,
+                    height,
+                } => {
+                    let mut body = kernel.capsule(radius, height)?;
+                    if origin != [0.0; 3] {
+                        body.translate(origin)?;
+                    }
+                    bodies.push(body);
+                }
                 Operation::Cylinder {
                     origin,
                     radius,
@@ -1121,18 +1147,6 @@ impl Model {
                         let mut body = bodies.pop().ok_or("Missing modification operand")?;
                         match modification {
                             Modification::Shell(index) => {
-                Operation::Sphere { origin, radius } => bodies.push(kernel.sphere(origin, radius)?),
-                Operation::Capsule {
-                    origin,
-                    radius,
-                    height,
-                } => {
-                    let mut body = kernel.capsule(radius, height)?;
-                    if origin != [0.0; 3] {
-                        body.translate(origin)?;
-                    }
-                    bodies.push(body);
-                }
                                 let shell = &self.recipe.shells[index];
                                 body.shell(shell.thickness, shell.opening.as_ref())?;
                             }
@@ -1216,20 +1230,6 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn touching_parts_preserve_faces_colors_edges_and_volume() -> Result<(), String> {
-        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=10});cad.show('red',a,{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}})});cad.show('blue',b,{material = cad.material('Surface', {base_color = {r=0,g=0,b=1}})})";
-        let snapshot = crate::build_script_snapshot(source, 1)?;
-        assert_eq!(snapshot.parts.len(), 2);
-        assert_eq!(snapshot.parts[0].name, "red");
-        assert_eq!(snapshot.parts[1].name, "blue");
-        assert_eq!(snapshot.scene.world_mesh().face_count, 12);
-        assert_eq!(snapshot.scene.faces.len(), 12);
-        assert_eq!(snapshot.scene.world_edges().items.len(), 24);
-        assert!((snapshot.volume_mm3 - 2000.0).abs() < 1e-6);
-        assert_eq!(
-            snapshot.scene.bounds,
-            [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
     use super::{Cache, Kernel, compile};
     #[test]
     fn rounded_primitives_have_exact_volume_closed_meshes_and_cached_geometry() -> Result<(), String>
@@ -1284,6 +1284,20 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn touching_parts_preserve_faces_colors_edges_and_volume() -> Result<(), String> {
+        let source = "local a=cad.box({width=10,depth=10,height=10});local b=cad.translate(a,{x=10});cad.show('red',a,{material = cad.material('Surface', {base_color = {r=1,g=0,b=0}})});cad.show('blue',b,{material = cad.material('Surface', {base_color = {r=0,g=0,b=1}})})";
+        let snapshot = crate::build_script_snapshot(source, 1)?;
+        assert_eq!(snapshot.parts.len(), 2);
+        assert_eq!(snapshot.parts[0].name, "red");
+        assert_eq!(snapshot.parts[1].name, "blue");
+        assert_eq!(snapshot.scene.world_mesh().face_count, 12);
+        assert_eq!(snapshot.scene.faces.len(), 12);
+        assert_eq!(snapshot.scene.world_edges().items.len(), 24);
+        assert!((snapshot.volume_mm3 - 2000.0).abs() < 1e-6);
+        assert_eq!(
+            snapshot.scene.bounds,
+            [glam::Vec3::ZERO, glam::vec3(20.0, 10.0, 10.0)]
         );
         for vertex in &snapshot.scene.world_mesh().vertices {
             let index = snapshot

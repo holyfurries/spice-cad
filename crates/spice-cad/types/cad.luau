@@ -3,6 +3,7 @@ type Face = { _face: "Face" }
 type Profile = { _profile: "Profile" }
 type Edge = { _edge: "Edge" }
 type Material = { _material: "Material" }
+type Group = { _group: "Group" }
 type Shading = { mode: "cad" | "flat" | "smooth", crease_angle: number? }
 type Point = { x: number, y: number, z: number }
 type Point2 = { x: number, y: number }
@@ -35,6 +36,7 @@ type HoleOptions = {
 	countersink: { radius: number, angle: number? }?,
 }
 local cad: {
+	group: (string, { parent: Group?, assembly: Placement? }?) -> Group,
 	material: (
 		string,
 		{
@@ -59,10 +61,10 @@ local cad: {
 	loft: ({ { profile: Profile, z: number, x: number?, y: number? } }, { degree: number }?) -> Solid,
 	shell: (Solid, { thickness: number, open: Face? }) -> Solid,
 	cylinder: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
-	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
-	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,
 	sphere: ({ radius: number, x: number?, y: number?, z: number? }) -> Solid,
 	capsule: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
+	translate: (Solid, { x: number?, y: number?, z: number? }) -> Solid,
+	rotate: (Solid, { axis: "x" | "y" | "z", angle: number }) -> Solid,
 	fillet: (Solid, { radius: number, edges: { Edge }? }) -> Solid,
 	chamfer: (Solid, { width: number, edges: { Edge }? }) -> Solid,
 	edge: (Solid, { name: string, from: Point, to: Point }) -> Edge,
@@ -72,7 +74,11 @@ local cad: {
 	box: (BoxOptions) -> Solid,
 	union: (Solid, Solid) -> Solid,
 	subtract: (Solid, Solid) -> Solid,
-	show: (string, Solid, { material: Material?, assembly: Placement?, print: Placement?, shading: Shading? }?) -> (),
+	show: (
+		string,
+		Solid,
+		{ material: Material?, assembly: Placement?, print: Placement?, shading: Shading?, parent: Group? }?
+	) -> (),
 	face: (Solid, { name: string, normal: "x+" | "x-" | "y+" | "y-" | "z+" | "z-", at: number?, near: Point? }) -> Face,
 	measure: (string, { from: Face, to: Face, min: number?, max: number?, parameter: string? }) -> (),
 } =

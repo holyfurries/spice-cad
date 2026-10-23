@@ -286,14 +286,34 @@ local source coordinates and origin; assembly placement becomes the object's
 translation and quaternion rotation in GLB. Author a limb around its joint at
 `(0,0,0)` and place it with `assembly` to preserve a usable shoulder or hip pivot.
 Changing a pose changes node transforms without changing mesh vertex data.
-Nodes are separate roots; parented groups, skeletons, and animation clips are not
-generated. Game exports have no print-bed requirement; closed meshes and declared
+Named groups preserve their parent-child hierarchy; unparented parts remain roots.
+Skeletons and animation clips are not generated. Game exports have no print-bed requirement; closed meshes and declared
 checks still apply.
 
 Game tessellation uses 0.25 mm chord / 30° angular tolerances, with no fixed polygon
 budget or automatic LOD generation. UVs, textures, collision meshes, rigging, and
 animation are unsupported. [Printing](printing.md) uses finer tessellation and
 separate bed placements.
+
+## Parented attachments
+
+`cad.group("Grip", {parent=body, assembly={position={x=12}}})` creates a named
+transform group. `parent` accepts an earlier group handle; omit it for a root.
+Pass the handle to `cad.show` with `parent=grip`. Assembly placements are local
+to their parent, and transforms compose from the root to the part. Groups may
+contain parts and other groups; up to 32 groups and 16 levels are supported.
+
+Changing a group placement updates its descendants without rebuilding their
+solids or tessellation. Named measurements, picking, and bounds use the composed
+world placement. An explicit `print` placement remains independent of the group;
+without print placements, printing uses the composed assembly placement.
+
+GLB preserves group nodes, children, and local translations/rotations. Parts stay
+separate meshes. The Parts panel currently lists individual parts; groups are
+authored in Luau rather than manipulated through an editable hierarchy tree.
+Duplicate group names, invalid parents, excessive depth, and composed positions
+outside ±2,000 mm are rejected. Immutable handles can only reference existing
+groups, so scripts cannot create parent cycles.
 
 ## Rounded primitives
 

@@ -3,14 +3,16 @@ use glam::Vec3;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, String> {
+pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, String> {
+    let parts = &model.parts;
+    let group_worlds = crate::assembly::world_placements(&model.groups)?;
     assert_eq!(parts.len(), meshes.len());
     let count: usize = meshes.iter().map(|mesh| mesh.vertices.len()).sum();
     if parts.is_empty() || parts.len() > 32 || count > 300000 {
         return Err("Game scene exceeds its part or triangle budget".into());
     }
     let mut binary = Vec::with_capacity(count * 28);
-    let mut nodes = Vec::with_capacity(parts.len());
+    let mut nodes = Vec::with_capacity(parts.len() + model.groups.len());
     let mut materials = Vec::with_capacity(parts.len());
     let mut material_keys = Vec::with_capacity(parts.len());
     let mut output_meshes = Vec::with_capacity(parts.len());
@@ -55,17 +57,14 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
         let index = nodes.len();
         let view = views.len();
         let accessor = accessors.len();
-        let basis = glam::Mat4::from_cols(
-            glam::Vec4::X,
-            glam::vec4(0.0, 0.0, -1.0, 0.0),
-            glam::Vec4::Y,
-            glam::Vec4::W,
-        );
-        let placement = basis * part.assembly.matrix() * basis.transpose();
-        let rotation = glam::Quat::from_mat4(&placement).normalize().to_array();
-        let translation = (placement.w_axis.truncate() * 0.001).to_array();
-        nodes.push(json!({"name": part.name, "mesh": index,
-            "rotation": rotation, "translation": translation}));
+        let placement = if let Some(parent) = part.parent {
+            group_worlds[parent].matrix().inverse() * part.assembly.matrix()
+        } else {
+            part.assembly.matrix()
+        };
+        let mut node = placement_node(&part.name, placement);
+        node["mesh"] = json!(index);
+        nodes.push(node);
         let material_index = match material_keys
             .iter()
             .position(|material| *material == &part.material)
@@ -121,7 +120,28 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
         accessors.push(json!({"bufferView": view + 1, "componentType": 5125,
             "count": indices.len(), "type": "SCALAR"}));
     }
-    let scene_nodes: Vec<_> = (0..nodes.len()).collect();
+    for group in &model.groups {
+        nodes.push(placement_node(&group.name, group.placement.matrix()));
+    }
+    let mut children = vec![Vec::<usize>::new(); nodes.len()];
+    let mut scene_nodes = Vec::with_capacity(nodes.len());
+    for (index, parent) in parts
+        .iter()
+        .map(|part| part.parent)
+        .chain(model.groups.iter().map(|group| group.parent))
+        .enumerate()
+    {
+        if let Some(parent) = parent {
+            children[parts.len() + parent].push(index);
+        } else {
+            scene_nodes.push(index);
+        }
+    }
+    for (node, children) in nodes.iter_mut().zip(children) {
+        if !children.is_empty() {
+            node["children"] = json!(children);
+        }
+    }
     let mut document = json!({
         "asset": {"version": "2.0", "generator": "Spice CAD"},
         "scene": 0, "scenes": [{"nodes": scene_nodes}],
@@ -163,6 +183,21 @@ pub fn glb(parts: &[crate::model::Part], meshes: &[Mesh]) -> Result<Vec<u8>, Str
     assert_eq!(output.len(), length);
     assert!(output.len().is_multiple_of(4));
     Ok(output)
+}
+
+fn placement_node(name: &str, placement: glam::Mat4) -> serde_json::Value {
+    assert!(placement.is_finite());
+    assert!(!name.is_empty());
+    let basis = glam::Mat4::from_cols(
+        glam::Vec4::X,
+        glam::vec4(0.0, 0.0, -1.0, 0.0),
+        glam::Vec4::Y,
+        glam::Vec4::W,
+    );
+    let placement = basis * placement * basis.transpose();
+    let rotation = glam::Quat::from_mat4(&placement).normalize().to_array();
+    let translation = (placement.w_axis.truncate() * 0.001).to_array();
+    json!({"name": name, "rotation": rotation, "translation": translation})
 }
 
 #[cfg(test)]
@@ -651,7 +686,7 @@ mod tests {
         for vertex in &game.vertices {
             assert!((Vec3::from_array(vertex.normal).length() - 1.0).abs() < 1e-5);
         }
-        assert!(!glb(&model.parts, &[game])?.is_empty());
+        assert!(!glb(&model, &[game])?.is_empty());
         assert!((body.volume()? - volume_before).abs() < 1e-6);
         Ok(())
     }
