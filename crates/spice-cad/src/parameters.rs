@@ -170,6 +170,10 @@ fn parse_source(source: &str, progress_count_max: u32) -> Option<(Rope, tree_sit
     Some((Rope::from_str(source), tree))
 }
 
+pub(crate) fn literal_string(text: &str) -> bool {
+    matches!(text.as_bytes().first().copied(), Some(b'\'' | b'"' | b'['))
+}
+
 impl Parameter {
     pub fn is_numeric(&self) -> bool {
         matches!(self.property.control, Control::Number { .. })
@@ -326,7 +330,11 @@ fn extract_property<'a>(
             return None;
         }
         let value = field.child_by_field_name("value")?;
-        if value.kind() != "string" {
+        if value.kind() == "string" {
+            if !literal_string(&source.byte_slice(value.byte_range()).to_string()) {
+                return None;
+            }
+        } else {
             number(&source.byte_slice(value.byte_range()).to_string()).ok()?;
         }
     }
@@ -1087,6 +1095,14 @@ mod tests {
             assert_eq!(source.slice(parameter.range).to_string(), parameter.literal);
         }
         assert!(parse("local value = \n").is_empty());
+        assert!(
+            parse("local value=cad.number(1,{label=`{(function() return 'Computed' end)()}`})")
+                .is_empty()
+        );
+        assert!(
+            parse("local value=cad.number(1,{label=`{(function() error('must not run') end)()}`})")
+                .is_empty()
+        );
     }
 
     #[test]
