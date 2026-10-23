@@ -14,11 +14,13 @@ fn run() -> Result<i32, Box<dyn Error>> {
     let arguments: Vec<OsString> = env::args_os().skip(1).take(4).collect();
     let valid = match arguments.as_slice() {
         [flag, _] => flag == "--check-model",
-        [flag, _, _] => flag == "--export-model" || flag == "--export-game",
+        [flag, _, _] => {
+            flag == "--export-model" || flag == "--export-game" || flag == "--export-game-poses"
+        }
         _ => false,
     };
     if !valid {
-        return Err("Expected --check-model SOURCE, --export-model SOURCE DIRECTORY, or --export-game SOURCE DIRECTORY".into());
+        return Err("Expected --check-model SOURCE, or --export-model/--export-game/--export-game-poses SOURCE DIRECTORY".into());
     }
     let container = env::var("SPICE_CAD_CONTAINER")?;
     if container.is_empty() || container.starts_with('-') {

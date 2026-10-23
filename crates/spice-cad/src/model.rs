@@ -117,6 +117,9 @@ struct Recipe {
 }
 
 pub struct Model {
+    pub references: Vec<crate::game_contract::Reference>,
+    pub poses: Vec<crate::poses::Pose>,
+    pub pose: Option<String>,
     pub asset: crate::game_contract::Asset,
     pub options: crate::model_options::Options,
     pub groups: Vec<crate::assembly::Group>,
@@ -167,6 +170,15 @@ pub fn compile_project_cached(
     project: Option<&crate::project::Project>,
     analysis: &mut crate::analysis::Cache,
 ) -> Result<Model, String> {
+    compile_project_pose(source, project, analysis, None)
+}
+
+pub fn compile_project_pose(
+    source: &str,
+    project: Option<&crate::project::Project>,
+    analysis: &mut crate::analysis::Cache,
+    pose: Option<&str>,
+) -> Result<Model, String> {
     let started = Instant::now();
     if let Some(project) = project {
         analysis.validate_project(source, project)?;
@@ -192,7 +204,14 @@ pub fn compile_project_cached(
     let groups = crate::assembly::register(&lua, &cad).map_err(|error| error.to_string())?;
     let options = crate::model_options::register(&lua, &cad).map_err(|error| error.to_string())?;
     let asset = crate::game_contract::register(&lua, &cad).map_err(|error| error.to_string())?;
-    crate::parameters::register(&lua, &cad).map_err(|error| error.to_string())?;
+    let references =
+        crate::game_contract::register_references(&lua, &cad).map_err(|error| error.to_string())?;
+    let poses = crate::poses::register(&lua, &cad, pose).map_err(|error| error.to_string())?;
+    let pose_parameters = Rc::clone(&poses);
+    crate::parameters::register(&lua, &cad, move |options, value| {
+        pose_parameters.borrow_mut().resolve(options, value)
+    })
+    .map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
     cad.set(
         "print_options",
@@ -969,7 +988,12 @@ pub fn compile_project_cached(
     };
     let mut definitions = std::mem::take(&mut *definitions.borrow_mut());
     definitions.validate_parameters(analysis.take_parameters())?;
+    let mut poses = poses.borrow_mut();
+    poses.validate()?;
     Ok(Model {
+        references: std::mem::take(&mut *references.borrow_mut()),
+        poses: std::mem::take(&mut poses.poses),
+        pose: poses.selected.take(),
         asset: asset.borrow_mut().take().unwrap_or_default(),
         options,
         groups,

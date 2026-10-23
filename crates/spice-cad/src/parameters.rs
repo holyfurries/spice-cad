@@ -28,9 +28,9 @@ struct Property {
 impl Property {
     fn from_table(toggle: bool, options: &Table) -> mlua::Result<Self> {
         let allowed: &[&str] = if toggle {
-            &["label"]
+            &["id", "label"]
         } else {
-            &["label", "unit", "min", "max", "step"]
+            &["id", "label", "unit", "min", "max", "step"]
         };
         for pair in options.pairs::<String, Value>() {
             let (key, _) = pair?;
@@ -111,10 +111,15 @@ impl Property {
     }
 }
 
-pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<()> {
+pub fn register(
+    lua: &Lua,
+    cad: &Table,
+    resolve: impl Fn(&Table, Value) -> mlua::Result<Value> + Clone + 'static,
+) -> mlua::Result<()> {
     let count = std::rc::Rc::new(std::cell::Cell::new(0_usize));
     for (name, toggle) in [("number", false), ("toggle", true)] {
         let count = std::rc::Rc::clone(&count);
+        let resolve = resolve.clone();
         cad.set(
             name,
             lua.create_function(move |_, (value, options): (Value, Table)| {
@@ -122,15 +127,18 @@ pub fn register(lua: &Lua, cad: &Table) -> mlua::Result<()> {
                     return Err(mlua::Error::runtime("Model exceeds 64 properties"));
                 }
                 let property = Property::from_table(toggle, &options)?;
-                let literal = match value {
-                    Value::Boolean(value) if toggle => value.to_string(),
-                    Value::Number(value) if !toggle => format!("{value:e}"),
-                    Value::Integer(value) if !toggle => format!("{:e}", value as f64),
-                    _ => return Err(mlua::Error::runtime("Property value has the wrong type")),
-                };
-                property.validate(&literal).map_err(mlua::Error::runtime)?;
+                let selected = resolve(&options, value.clone())?;
+                for value in [&value, &selected] {
+                    let literal = match value {
+                        Value::Boolean(value) if toggle => value.to_string(),
+                        Value::Number(value) if !toggle => format!("{value:e}"),
+                        Value::Integer(value) if !toggle => format!("{:e}", *value as f64),
+                        _ => return Err(mlua::Error::runtime("Property value has the wrong type")),
+                    };
+                    property.validate(&literal).map_err(mlua::Error::runtime)?;
+                }
                 count.set(count.get() + 1);
-                Ok(value)
+                Ok(selected)
             })?,
         )?;
     }
@@ -1179,7 +1187,7 @@ mod tests {
     fn runtime_and_inspector_reject_invalid_property_metadata_and_values() -> Result<(), String> {
         let lua = Lua::new();
         let cad = lua.create_table().map_err(|error| error.to_string())?;
-        register(&lua, &cad).map_err(|error| error.to_string())?;
+        register(&lua, &cad, |_, value| Ok(value)).map_err(|error| error.to_string())?;
         lua.globals()
             .set("cad", cad)
             .map_err(|error| error.to_string())?;

@@ -38,9 +38,9 @@ shield, and weapon frames declare attachment roles; they are not bones.
 
 All three sources share the ground plane and one uniform bake-time scale.
 The consumer adapter chooses the existing levy's 1.025-unit helmet height and
-divides it by this infantry's **0.0546-metre ground-to-helmet reference height**.
-This deliberately excludes the spear. It must be revisited if body proportions
-change. Do not independently fit each pose or apply display-size suggestions.
+divides it by the GLB's measured **body reference height** (currently 0.0546 metres).
+This excludes the spear and follows changes to body proportions. Do not
+independently fit each pose or apply display-size suggestions.
 Exports retain neutral metres and their complete hierarchy.
 
 Camera focus is `(0, 0.59, 0)`, front/back offsets are `(2.5, 4, ±7)`, and the
@@ -50,18 +50,26 @@ The back view changes the camera, not the model's handedness or equipment.
 
 ## Reproduce
 
-Use a graphical session and an isolated game worktree at `d3d72ef`. Apply
+The current recipe uses [named poses and cached batch export](pose-exports.md).
+New outputs live under `models/{idle,step-left,step-right}/`, with a shared
+animation library at `models/model.glb`. It no longer rewrites stride literals.
+The supplied adapter reads body references directly from the GLB; no companion
+JSON is copied into the game. Historical archives and the existing game trial
+remain unchanged. Adopting this adapter is a separate game-side integration.
+
+For the supplied adapter, use a graphical session and an isolated game worktree
+at `45df40f`. Apply
 `tools/game-import/fixtures/infantry-baker.patch` there; the existing strict
 validator correction is already included in that game revision. Build its
-`crowns-adrift-client` diorama example with `--features diorama` under its Nix shell:
+`tribute-client` diorama example with `--features diorama` under its Nix shell:
 
 ```sh
-nix develop -c cargo build -p crowns-adrift-client --example diorama --features diorama
+nix develop -c cargo build --locked -p tribute-client --example diorama --features diorama
 ```
 
-The archived bundle remains pinned to `45df40f`, where the package was named
-`tribute-client`. Its original README and checksums are historical provenance;
-use the current command above with the renamed game checkout.
+The historical archive is also pinned to `45df40f`. Its README and checksums
+remain immutable provenance. The current game package is `crowns-adrift-client`;
+its trial branch already has an adapter, so do not reapply this patch there.
 
 From Spice CAD, build the exporter, validator, and recipe:
 

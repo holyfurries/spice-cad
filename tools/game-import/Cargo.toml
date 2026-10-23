@@ -8,7 +8,7 @@ license = "MIT"
 description = "Independent Crowns Adrift glTF loader acceptance gate"
 
 [dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["bevy_gltf", "bevy_mesh", "bevy_image"] }
+bevy = { version = "=0.19.1", default-features = false, features = ["bevy_gltf", "bevy_mesh", "bevy_image", "gltf_animation"] }
 serde_json = "1"
 sha2 = "0.10"
 gltf-json = { version = "=1.4.1", features = ["allow_external_materials_specular"] }

@@ -1,2 +1,3 @@
 licenses/**/*.txt -text -whitespace
 tools/game-import/vendor/gltf-json/LICENSE-* -text -whitespace
+tools/game-import/fixtures/*.patch -whitespace

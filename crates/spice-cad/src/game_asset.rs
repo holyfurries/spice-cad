@@ -206,7 +206,12 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
         document["extensionsUsed"] = json!(extensions);
         document["extensionsRequired"] = json!(extensions);
     }
-    let mut json = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
+    encode(&document, &binary)
+}
+
+pub fn encode(document: &serde_json::Value, binary: &[u8]) -> Result<Vec<u8>, String> {
+    assert!(binary.len().is_multiple_of(4));
+    let mut json = serde_json::to_vec(document).map_err(|error| error.to_string())?;
     json.resize(json.len().next_multiple_of(4), b' ');
     let length = 12 + 8 + json.len() + 8 + binary.len();
     let length_u32 = u32::try_from(length).map_err(|error| error.to_string())?;
@@ -219,7 +224,7 @@ pub fn glb(model: &crate::model::Model, meshes: &[Mesh]) -> Result<Vec<u8>, Stri
     output.extend_from_slice(&json);
     output.extend_from_slice(&(binary.len() as u32).to_le_bytes());
     output.extend_from_slice(b"BIN\0");
-    output.extend_from_slice(&binary);
+    output.extend_from_slice(binary);
     assert_eq!(output.len(), length);
     assert!(output.len().is_multiple_of(4));
     Ok(output)
@@ -407,13 +412,17 @@ mod tests {
             );
             if index == 0 {
                 assert!(material["extensions"].is_null());
-                assert!(document["extensionsUsed"].is_null());
+                assert_eq!(document["extensionsUsed"], json!(["KHR_xmp_json_ld"]));
+                assert!(document["extensionsRequired"].is_null());
             } else {
                 let actual = material["extensions"]["KHR_materials_ior"]["ior"]
                     .as_f64()
                     .unwrap();
                 assert!((actual - expected).abs() < 1e-6);
-                assert_eq!(document["extensionsUsed"], document["extensionsRequired"]);
+                let required = document["extensionsRequired"].as_array().unwrap();
+                let used = document["extensionsUsed"].as_array().unwrap();
+                assert_eq!(&used[..required.len()], required);
+                assert_eq!(used.last().unwrap(), "KHR_xmp_json_ld");
                 assert_eq!(document["extensionsUsed"][0], "KHR_materials_ior");
             }
             if expected == 1.0 {
@@ -450,7 +459,11 @@ mod tests {
             assert_eq!(document["materials"].as_array().unwrap().len(), 3);
             assert_eq!(
                 document["extensionsUsed"],
-                json!(["KHR_materials_ior", "KHR_materials_specular"])
+                json!([
+                    "KHR_materials_ior",
+                    "KHR_materials_specular",
+                    "KHR_xmp_json_ld"
+                ])
             );
             assert_eq!(document["meshes"][3]["primitives"][0]["material"], 0);
             for material in document["materials"].as_array().unwrap() {

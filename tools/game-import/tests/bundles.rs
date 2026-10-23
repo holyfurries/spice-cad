@@ -89,6 +89,34 @@ fn exported_fixtures_pass_strict_target_loader_and_keep_transform_contracts()
             }
         }
     }
+    let source = output.join("infantry.luau");
+    std::fs::write(&source, include_str!("../../../examples/infantry.luau"))?;
+    let batch = output.join("infantry-poses");
+    run(
+        std::process::Command::new(&native)
+            .arg("--export-game-poses")
+            .arg(&source)
+            .arg(&batch),
+        &output.join("infantry-batch.log"),
+    )?;
+    for (name, animations) in [("", 3), ("idle", 0), ("step-left", 0), ("step-right", 0)] {
+        let bundle = batch.join(name);
+        let report = bundle.join("target-loader.json");
+        run(
+            std::process::Command::new(env!("CARGO_BIN_EXE_spice-game-import"))
+                .arg(&bundle)
+                .arg(&report),
+            &output.join(format!("infantry-{name}-loader.log")),
+        )?;
+        let report: Value = serde_json::from_slice(&std::fs::read(report)?)?;
+        assert_eq!(report["animation_count"], animations);
+        assert_eq!(report["reference_bounds"], "passed");
+    }
+    let manifest: Value = serde_json::from_slice(&std::fs::read(batch.join("batch.json"))?)?;
+    for pose in &manifest["poses"].as_array().ok_or("Missing poses")?[1..] {
+        assert_eq!(pose["geometry_cache_hits"], 13);
+        assert_eq!(pose["tessellation_ms"], 0.0);
+    }
     println!("Acceptance bundles and reports: {}", output.display());
     Ok(())
 }

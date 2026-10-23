@@ -7,13 +7,17 @@ cad.asset({
 	approval = "unreviewed",
 })
 
+cad.pose("idle", { stride = 0 })
+cad.pose("step-left", { stride = 1 })
+cad.pose("step-right", { stride = -1 })
+
 local head_size: number = cad.number(1, { label = "Head size", min = 0.8, max = 1.4, step = 0.05 })
 local body_width: number = cad.number(18.6, { label = "Body width", unit = "mm", min = 14, max = 24, step = 0.2 })
 local body_height: number = cad.number(26.3, { label = "Body height", unit = "mm", min = 22, max = 32, step = 0.1 })
 local heading: number = cad.number(0, { label = "Heading", unit = "deg", min = -180, max = 180, step = 1 })
 local lean: number = cad.number(0, { label = "Body lean", unit = "deg", min = -15, max = 15, step = 1 })
 local grip: number = cad.number(-8, { label = "Grip pose", unit = "deg", min = -40, max = 40, step = 1 })
-local stride: number = cad.number(0, { label = "Stride", min = -1, max = 1, step = 1 })
+local stride: number = cad.number(0, { id = "stride", label = "Stride", min = -1, max = 1, step = 1 })
 local helmet_visible: boolean = cad.toggle(true, { label = "Helmet" })
 local shield_visible: boolean = cad.toggle(true, { label = "Shield" })
 local spear_visible: boolean = cad.toggle(true, { label = "Spear" })
@@ -67,6 +71,12 @@ for _, section in shoulder_sections do
 		z = body_height * section.height,
 	})
 end
+
+local body_parts = { "Body", "Head", "Left boot", "Right boot" }
+if helmet_visible then
+	table.insert(body_parts, "Helmet")
+end
+cad.reference("body", { parts = body_parts })
 local body = cad.loft(sections, { degree = 1 })
 cad.show("Body", cad.translate(body, { z = -14 }), {
 	parent = body_pose,

@@ -4,6 +4,58 @@ use sha2::{Digest, Sha256};
 
 pub const MATERIAL_WARNING: &str = "Zero-specular materials require KHR_materials_specular. Bevy 0.19.1 with unpatched gltf-json 1.4.1 rejects this required extension; use a corrected validator, not a validation bypass.";
 
+pub struct Reference {
+    pub name: String,
+    pub parts: Vec<String>,
+}
+
+pub fn register_references(
+    lua: &mlua::Lua,
+    cad: &mlua::Table,
+) -> mlua::Result<std::rc::Rc<std::cell::RefCell<Vec<Reference>>>> {
+    let state = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Reference>::new()));
+    let target = std::rc::Rc::clone(&state);
+    cad.set(
+        "reference",
+        lua.create_function(move |_, (name, options): (String, mlua::Table)| {
+            crate::model::options_fields(&options, &["parts"])?;
+            let mut state = target.borrow_mut();
+            if !crate::poses::identifier(&name)
+                || state.len() >= 16
+                || state.iter().any(|reference| reference.name == name)
+            {
+                return Err(mlua::Error::runtime(
+                    "References need unique portable identifiers; at most 16 are supported",
+                ));
+            }
+            let table: mlua::Table = options.get("parts")?;
+            let mut parts = Vec::new();
+            for entry in table.pairs::<usize, String>() {
+                let (index, part) = entry?;
+                if index == 0
+                    || index > 32
+                    || parts.len() >= 32
+                    || part.is_empty()
+                    || part.len() > 80
+                    || parts.contains(&part)
+                {
+                    return Err(mlua::Error::runtime(
+                        "References need 1–32 distinct part names in an array",
+                    ));
+                }
+                parts.push(part);
+            }
+            if parts.is_empty() || table.raw_len() != parts.len() {
+                return Err(mlua::Error::runtime("Reference cannot be empty"));
+            }
+            parts.sort();
+            state.push(Reference { name, parts });
+            Ok(())
+        })?,
+    )?;
+    Ok(state)
+}
+
 #[derive(Default)]
 pub struct Asset {
     id: Option<String>,
@@ -51,12 +103,13 @@ pub fn hash(bytes: &[u8]) -> String {
 }
 
 pub fn generate(
-    glb: &[u8],
+    glb: &mut Vec<u8>,
     sources: &[(String, std::borrow::Cow<'_, str>)],
     input_hashes: &[String],
-    options: crate::model_options::Options,
-    asset: &Asset,
+    model: &crate::model::Model,
 ) -> Result<(Vec<u8>, String), String> {
+    let options = model.options;
+    let asset = &model.asset;
     assert!(!sources.is_empty());
     assert_eq!(sources.len(), input_hashes.len());
     let json_length = u32::from_le_bytes(
@@ -65,7 +118,7 @@ pub fn generate(
             .try_into()
             .map_err(|_| "Invalid GLB JSON length")?,
     ) as usize;
-    let document: Value =
+    let mut document: Value =
         serde_json::from_slice(glb.get(20..20 + json_length).ok_or("Missing GLB JSON")?)
             .map_err(|error| error.to_string())?;
     let binary = glb.get(28 + json_length..).ok_or("Missing GLB binary")?;
@@ -143,6 +196,8 @@ pub fn generate(
         if Some(index) != root {
             identity.push(id.clone());
         }
+        let mut part_minimum = DVec3::splat(f64::INFINITY);
+        let mut part_maximum = DVec3::splat(f64::NEG_INFINITY);
         if let Some(mesh) = node["mesh"].as_u64() {
             let primitive = &document["meshes"][mesh as usize]["primitives"][0];
             let accessor = &document["accessors"][number(&primitive["attributes"]["POSITION"])?];
@@ -176,6 +231,8 @@ pub fn generate(
                 }
                 minimum = minimum.min(p);
                 maximum = maximum.max(p);
+                part_minimum = part_minimum.min(p);
+                part_maximum = part_maximum.max(p);
             }
             vertex_count += count;
             triangle_count +=
@@ -184,10 +241,41 @@ pub fn generate(
         records.push(json!({"id":id,"node":index,"name":node["name"],"path":path,
             "kind":if Some(index)==root {"export_root"} else if node["mesh"].is_number() {"part"} else {"transform_frame"},
             "attachment_role":node["extras"]["spice_cad"]["attachment_role"],"parent_node":parents[index],
+            "bounds":if part_minimum.is_finite() {json!({"minimum":part_minimum.to_array(),"maximum":part_maximum.to_array()})} else {Value::Null},
             "local_transform":transform(node)?.to_cols_array(),"world_transform":world.to_cols_array()}));
     }
     if !minimum.is_finite() {
         return Err("Empty game bounds".into());
+    }
+    let mut references = serde_json::Map::new();
+    for reference in &model.references {
+        let mut minimum = DVec3::splat(f64::INFINITY);
+        let mut maximum = DVec3::splat(f64::NEG_INFINITY);
+        let mut members = Vec::with_capacity(reference.parts.len());
+        for name in &reference.parts {
+            let mut found = records
+                .iter()
+                .filter(|record| record["kind"] == "part" && record["name"] == *name);
+            let record = found.next().ok_or_else(|| {
+                format!("Reference '{}' has missing part '{name}'", reference.name)
+            })?;
+            if found.next().is_some() {
+                return Err(format!("Ambiguous reference part: {name}"));
+            }
+            let vector = |key: &str| -> Result<DVec3, String> {
+                let mut values = [0.0; 3];
+                for (axis, value) in values.iter_mut().enumerate() {
+                    *value = record["bounds"][key][axis]
+                        .as_f64()
+                        .ok_or("Missing reference bounds")?;
+                }
+                Ok(DVec3::from_array(values))
+            };
+            minimum = minimum.min(vector("minimum")?);
+            maximum = maximum.max(vector("maximum")?);
+            members.push(record["node"].clone());
+        }
+        references.insert(reference.name.clone(), json!({"space":"exported world","units":"metres","nodes":members,"minimum":minimum.to_array(),"maximum":maximum.to_array(),"size":(maximum-minimum).to_array()}));
     }
     identity.sort();
     let asset_id = asset.id.clone().unwrap_or(hash(
@@ -239,7 +327,7 @@ pub fn generate(
             "material":index,"name":material["name"],"openpbr":material["extras"]["spice_cad"]})
         })
         .collect();
-    let metadata = json!({
+    let mut metadata = json!({
         "schema":"https://holyfurries.com/spice-cad/game-asset","schema_version":1,
         "asset_id":asset_id,"identity_basis":if asset.id.is_some() {"authored cad.asset id"} else {"sorted semantic hierarchy paths; renaming or reparenting changes identity"},
         "files":{"glb":{"path":"model.glb","sha256":hash(glb)},"sources":source_records,"source_bundle_sha256":source_hash},
@@ -261,8 +349,36 @@ pub fn generate(
             "attachment_frames":nodes.iter().filter(|node| node["extras"]["spice_cad"]["attachment_role"].is_string()).count()},
         "material_profile":"openpbr-1.1.1-supported-subset-to-gltf-pbr","extensions_required":required,
         "compatibility":{"target_loader_validation":"not_run","warnings":if warning {vec![MATERIAL_WARNING]} else {vec![]}},
-        "nodes":records,"materials":material_records
+        "nodes":records,"materials":material_records,"references":references,"pose":model.pose,
+        "poses":model.poses.iter().map(|pose| json!({"name":pose.name,"parameters":pose.parameters})).collect::<Vec<_>>()
     });
+    document["extras"]["spice_cad"] = json!({"schema_version":1,"asset_id":asset_id,"references":metadata["references"],"pose":model.pose,"poses":metadata["poses"]});
+    for record in &records {
+        let index = record["node"].as_u64().ok_or("Missing node index")? as usize;
+        document["nodes"][index]["extras"]["spice_cad"]["id"] = record["id"].clone();
+    }
+    let mut packet = json!({"@context":{"dc":"http://purl.org/dc/elements/1.1/","rdf":"http://www.w3.org/1999/02/22-rdf-syntax-ns#"},"dc:identifier":asset_id});
+    if let Some(author) = &asset.author {
+        packet["dc:creator"] = json!({"@list":[author]});
+    }
+    if let Some(source) = &asset.source {
+        packet["dc:source"] = json!(source);
+    }
+    if let Some(license) = &asset.license {
+        packet["dc:rights"] =
+            json!({"@type":"rdf:Alt","rdf:_1":{"@language":"x-default","@value":license}});
+    }
+    document["extensions"]["KHR_xmp_json_ld"] = json!({"packets":[packet]});
+    document["asset"]["extensions"]["KHR_xmp_json_ld"] = json!({"packet":0});
+    if document["extensionsUsed"].is_null() {
+        document["extensionsUsed"] = json!([]);
+    }
+    document["extensionsUsed"]
+        .as_array_mut()
+        .ok_or("Invalid extension list")?
+        .push(json!("KHR_xmp_json_ld"));
+    *glb = crate::game_asset::encode(&document, binary)?;
+    metadata["files"]["glb"]["sha256"] = json!(hash(glb));
     let notes = format!(
         "\n## This export\n\nAsset: `{asset_id}`. Preset: `{}`. Model forward/up: `{}` / `{}` (assembled CAD axes after model rotation). Model rotation XYZ: {:?} degrees.\n\nFinal world dimensions: {:.9} × {:.9} × {:.9} metres. Game scale: {}. Grounding: {}. Preserve the GLB hierarchy: all stored transforms are already applied. An identity import wrapper retains these exported dimensions. Gameplay tile size and art approval are not inferred.\n\nAdditional uniform display scale: {additional_scale:.6}. This is separate from the baked export-root transform and uses the authored display width when present; without a declared width it is 1.\n\n`asset.json` records exact transforms, bounds, source and GLB SHA-256 hashes, semantic identities, and material requirements. Target-loader validation has not been run by this export.{}\n",
         if options.game.crowns_adrift {
@@ -338,19 +454,38 @@ mod tests {
         let model = crate::model::compile(source)?;
         let kernel = crate::kernel::Kernel::new()?;
         let meshes = model.meshes(&mut model.build(&kernel)?, true)?;
-        let glb = crate::game_asset::glb(&model, &meshes)?;
+        let mut glb = crate::game_asset::glb(&model, &meshes)?;
         let sources = vec![("model.luau".to_owned(), std::borrow::Cow::Borrowed(source))];
-        let (bytes, _) = generate(
-            &glb,
-            &sources,
-            &[hash(source.as_bytes())],
-            model.options,
-            &model.asset,
-        )?;
+        let (bytes, _) = generate(&mut glb, &sources, &[hash(source.as_bytes())], &model)?;
         Ok((
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
             glb,
         ))
+    }
+
+    #[test]
+    fn named_references_measure_exported_geometry_and_embed_provenance() -> Result<(), String> {
+        let source = "cad.asset({id='test/body',author='Studio',license='MIT'}) cad.model_options({game={scale=2}}) local frame=cad.group('frame',{assembly={position={x=5,z=7},rotation={z=90}}}) cad.show('body',cad.box({width=2,depth=3,height=4}),{parent=frame}) cad.show('weapon',cad.box({width=1,depth=1,height=100})) cad.reference('body',{parts={'body'}})";
+        let (metadata, bytes) = contract(source)?;
+        let reference = &metadata["references"]["body"];
+        for (axis, expected) in [0.006, 0.008, 0.004].into_iter().enumerate() {
+            assert!((reference["size"][axis].as_f64().unwrap() - expected).abs() < 1e-8);
+        }
+        assert!(metadata["bounds"]["size"][1].as_f64().unwrap() > 0.19);
+        let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let document: Value =
+            serde_json::from_slice(&bytes[20..20 + length]).map_err(|e| e.to_string())?;
+        assert_eq!(
+            document["extras"]["spice_cad"]["references"],
+            metadata["references"]
+        );
+        assert_eq!(
+            document["extensions"]["KHR_xmp_json_ld"]["packets"][0]["dc:creator"]["@list"][0],
+            "Studio"
+        );
+        assert_eq!(metadata["files"]["glb"]["sha256"], hash(&bytes));
+        assert!(contract(&source.replace("parts={'body'}", "parts={'missing'}")).is_err());
+        Ok(())
     }
 
     #[test]

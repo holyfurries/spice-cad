@@ -43,6 +43,8 @@ mod parameters;
 mod performance;
 mod picking;
 mod placement;
+mod pose_export;
+mod poses;
 mod preview;
 mod print_checks;
 mod print_preparation;
@@ -138,6 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Rendered top, front, side, isometric, and contact-sheet PNGs to {folder}");
             return Ok(());
         }
+        [flag, path, folder] if flag == "--export-game-poses" => {
+            let source = model::read_source(std::path::Path::new(path))?;
+            let project = project::Project::load_if_imported(std::path::Path::new(path), &source)?;
+            pose_export::export(&source, project.as_ref(), std::path::Path::new(folder))?;
+            println!("Exported named poses to {folder}");
+            return Ok(());
+        }
         [flag, path, folder] if flag == "--export-model" || flag == "--export-game" => {
             let source = model::read_source(std::path::Path::new(path))?;
             let target = if flag == "--export-game" {
@@ -157,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
+                                    "Usage: spice-cad [--profile-preview | --profile-rotation | --profile-geometry | [--profile] [--model FILE.luau | --check-print FILE.luau | --check-model FILE.luau | --export-model FILE.luau NEW_DIRECTORY | --export-game FILE.luau NEW_DIRECTORY | --export-game-poses FILE.luau NEW_DIRECTORY | --render-views FILE.luau NEW_DIRECTORY]]"
                     .into(),
             );
         }
@@ -2103,6 +2112,11 @@ impl eframe::App for Editor {
                                 if ui.button("Game asset · GLB").clicked() {
                                     export_requested = true;
                                     export_target = export::Target::Game;
+                                    ui.close();
+                                }
+                                if ui.button("Named poses · GLB").clicked() {
+                                    export_requested = true;
+                                    export_target = export::Target::GamePoses;
                                     ui.close();
                                 }
                                 if self.snapshot.as_ref().is_some_and(|snapshot| snapshot.parts.iter().any(|part| part.material.effective_ior() == 1.0)) {

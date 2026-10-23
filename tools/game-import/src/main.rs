@@ -78,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bevy::gltf::GltfPlugin::default(),
     ));
     app.init_asset::<Image>();
+    app.init_asset::<bevy::animation::AnimationClip>();
     app.finish();
     app.cleanup();
     let handle: Handle<Gltf> = app
@@ -233,9 +234,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
     let mut triangle_count = 0;
     let mut vertex_count = 0;
+    let mut node_bounds = vec![None; nodes.len()];
     for (index, node) in nodes.iter().enumerate() {
         let node = node.ok_or("Missing loaded node")?;
         if let Some(handle) = &node.mesh {
+            let mut node_minimum = Vec3::splat(f32::INFINITY);
+            let mut node_maximum = Vec3::splat(f32::NEG_INFINITY);
             let mesh = mesh_assets.get(handle).ok_or("Missing loaded GLB mesh")?;
             for primitive in &mesh.primitives {
                 let mesh = meshes
@@ -254,6 +258,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .transform_point3(Vec3::from_array(*position));
                     minimum = minimum.min(point);
                     maximum = maximum.max(point);
+                    node_minimum = node_minimum.min(point);
+                    node_maximum = node_maximum.max(point);
+                }
+            }
+            node_bounds[index] = Some([node_minimum, node_maximum]);
+        }
+    }
+    let references = document["extras"]["spice_cad"]["references"]
+        .as_object()
+        .ok_or("Missing embedded reference inventory")?;
+    if references.len() > 16 {
+        return Err("Reference inventory exceeds 16 entries".into());
+    }
+    if document["extras"]["spice_cad"]["references"] != metadata["references"] {
+        return Err("Embedded and companion reference inventories differ".into());
+    }
+    for reference in references.values() {
+        if reference["units"] != "metres" || reference["space"] != "exported world" {
+            return Err("Invalid reference coordinates".into());
+        }
+        let members = reference["nodes"]
+            .as_array()
+            .ok_or("Missing reference members")?;
+        if members.is_empty() || members.len() > 32 {
+            return Err("Reference exceeds member limits".into());
+        }
+        let mut minimum = Vec3::splat(f32::INFINITY);
+        let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+        for member in members {
+            let index = usize::try_from(member.as_u64().ok_or("Invalid reference member")?)?;
+            let [low, high] = node_bounds
+                .get(index)
+                .and_then(|bounds| *bounds)
+                .ok_or("Reference member is not a loaded mesh")?;
+            minimum = minimum.min(low);
+            maximum = maximum.max(high);
+        }
+        for (key, vector) in [
+            ("minimum", minimum),
+            ("maximum", maximum),
+            ("size", maximum - minimum),
+        ] {
+            for (axis, actual) in vector.to_array().into_iter().enumerate() {
+                let expected = reference[key][axis]
+                    .as_f64()
+                    .ok_or("Missing reference measurement")?;
+                if !expected.is_finite() || (f64::from(actual) - expected).abs() > 1e-5 {
+                    return Err("Reference bounds differ from loaded geometry".into());
                 }
             }
         }
@@ -277,11 +329,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    let expected_animations = document["animations"].as_array().map_or(0, Vec::len);
+    if loaded.animations.len() != expected_animations
+        || loaded.named_animations.len() != expected_animations
+    {
+        return Err("Loaded animation count differs from GLB clips".into());
+    }
     let result = json!({"schema_version":1,"glb_sha256":digest,"asset_id":metadata["asset_id"],
         "loader":"bevy 0.19.1","validator":"gltf-json 1.4.1 with required-specular allowlist correction",
-        "validation_enabled":true,"result":"passed","mesh_count":loaded.meshes.len(),"materials":material_report,
+        "validation_enabled":true,"result":"passed","mesh_count":loaded.meshes.len(),"materials":material_report,"animation_count":loaded.animations.len(),
         "bounds":{"minimum":minimum.to_array(),"maximum":maximum.to_array()},
-        "hierarchy_and_local_transforms":"passed","render_validation":"not_run"});
+        "hierarchy_and_local_transforms":"passed","reference_bounds":"passed","render_validation":"not_run"});
     let mut output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

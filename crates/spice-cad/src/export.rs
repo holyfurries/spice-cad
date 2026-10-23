@@ -9,6 +9,7 @@ use std::path::Path;
 pub enum Target {
     Print,
     Game,
+    GamePoses,
 }
 
 impl Target {
@@ -16,6 +17,7 @@ impl Target {
         match self {
             Self::Print => "STEP, STL, print checks, and source",
             Self::Game => "GLB game asset and source",
+            Self::GamePoses => "named pose GLBs and standard animation clips",
         }
     }
 }
@@ -31,6 +33,9 @@ pub fn model_files_project(
     folder: &Path,
     target: Target,
 ) -> Result<(), String> {
+    if target == Target::GamePoses {
+        return crate::pose_export::export(source, project, folder);
+    }
     let model =
         model::compile_project_cached(source, project, &mut crate::analysis::Cache::default())?;
     let kernel = Kernel::new()?;
@@ -59,6 +64,9 @@ pub fn model_files_project_cached(
     target: Target,
     cache: &mut model::Cache<'_>,
 ) -> Result<(), String> {
+    if target == Target::GamePoses {
+        return crate::pose_export::export_cached(source, project, folder, cache);
+    }
     let model = cache.compile_project(source, project)?;
     let prepared = cache.prepare(&model)?;
     let mut bodies = prepared
@@ -82,7 +90,7 @@ pub fn model_files_project_cached(
     )
 }
 
-fn write_model(
+pub(crate) fn write_model(
     source: &str,
     project: Option<&crate::project::Project>,
     folder: &Path,
@@ -91,6 +99,7 @@ fn write_model(
     bodies: &mut [Body<'_>],
     canonical_meshes: &[&crate::mesh::Mesh],
 ) -> Result<(), String> {
+    assert!(target != Target::GamePoses);
     model.annotations(canonical_meshes)?;
     let assembly_checks = if target == Target::Print {
         Some(crate::assembly_checks::check(model, bodies)?)
@@ -141,13 +150,8 @@ fn write_model(
                     .collect()
             },
         );
-        let (metadata, notes) = crate::game_contract::generate(
-            &files[0].1,
-            &sources,
-            &input_hashes,
-            model.options,
-            &model.asset,
-        )?;
+        let (metadata, notes) =
+            crate::game_contract::generate(&mut files[0].1, &sources, &input_hashes, model)?;
         files[1].1.extend_from_slice(notes.as_bytes());
         files.push(("asset.json".into(), metadata));
     } else {

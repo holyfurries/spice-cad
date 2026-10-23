@@ -102,11 +102,14 @@ nix develop -c cargo test --locked --manifest-path tools/game-import/Cargo.toml
 nix develop -c cargo test --locked --manifest-path tools/game-import/Cargo.toml --test bundles -- --ignored --nocapture
 ```
 
-The last command exports nine fixtures: farmstead, asymmetric facing marker,
+The last command checks thirteen cases: farmstead, asymmetric facing marker,
 and a nested grip/equipment hierarchy, each with default, preset, and rotated
-settings. It checks source/GLB hashes, strict loading, actual loaded colors,
+settings, plus three infantry poses and their shared animation library. It
+checks source/GLB hashes, strict loading, actual loaded colors,
 roughness, metalness, IOR and reflectance, hierarchy/local transforms, counts,
-and final bounds. Each subprocess has a 120-second limit. Bundles, logs and
+and final bounds, named reference measurements, animation counts and pose-cache
+reuse. See [named pose exports](pose-exports.md) for the authoring API and embedded
+standard/custom metadata boundary. Each subprocess has a 120-second limit. Bundles, logs and
 SHA-bound reports remain under `output/game-import-acceptance/`; set
 `SPICE_IMPORT_ARTIFACTS` or `SPICE_CAD_BIN` to override artifact/executable paths.
 Tagged-release CI runs this gate against the packaged application and retains

@@ -26,26 +26,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir(output)?;
     let output = Path::new(output).canonicalize()?;
     let source = include_str!("../../../examples/infantry.luau");
-    let marker = "local stride: number = cad.number(0,";
-    if source.matches(marker).count() != 1 {
-        return Err("Infantry stride declaration changed; update the bake recipe".into());
+    let snapshot = output.join("model.luau");
+    fs::write(&snapshot, source)?;
+    let status = run(Command::new(&native)
+        .arg("--export-game-poses")
+        .arg(snapshot)
+        .arg(output.join("models")))?;
+    if !status.success() {
+        return Err(format!("Batch pose export failed: {status}").into());
     }
-    for (pose, stride) in [("idle", 0), ("step-left", 1), ("step-right", -1)] {
-        let source = source.replacen(
-            marker,
-            &format!("local stride: number = cad.number({stride},"),
-            1,
-        );
-        let snapshot = output.join(format!("{pose}.luau"));
-        fs::write(&snapshot, source)?;
-        let bundle = output.join(format!("infantry-{pose}"));
-        let status = run(Command::new(&native)
-            .arg("--export-game")
-            .arg(snapshot)
-            .arg(&bundle))?;
-        if !status.success() {
-            return Err(format!("Export failed for {pose}: {status}").into());
-        }
+    for pose in ["idle", "step-left", "step-right"] {
+        let bundle = output.join("models").join(pose);
         let status = run(Command::new(&validator)
             .arg(&bundle)
             .arg(bundle.join("target-loader.json")))?;
@@ -56,9 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .join("art/source/spice")
             .join(format!("infantry-{pose}"));
         fs::create_dir(&target)?;
-        for file in ["model.glb", "asset.json"] {
-            fs::copy(bundle.join(file), target.join(file))?;
-        }
+        fs::copy(bundle.join("model.glb"), target.join("model.glb"))?;
     }
     let status = run(Command::new(&baker)
         .env_remove("DIORAMA_SPICE")

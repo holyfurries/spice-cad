@@ -36,6 +36,8 @@ type HoleOptions = {
 	countersink: { radius: number, angle: number? }?,
 }
 local cad: {
+	pose: (string, { [string]: number | boolean }) -> (),
+	reference: (string, { parts: { string } }) -> (),
 	model_options: (
 		{
 			rotation: { x: number?, y: number?, z: number? }?,
@@ -70,8 +72,11 @@ local cad: {
 		}
 	) -> Material,
 	print_options: ({ minimum_wall: number?, minimum_clearance: number? }) -> (),
-	number: (number, { label: string?, unit: string?, min: number?, max: number?, step: number? }) -> number,
-	toggle: (boolean, { label: string? }) -> boolean,
+	number: (
+		number,
+		{ id: string?, label: string?, unit: string?, min: number?, max: number?, step: number? }
+	) -> number,
+	toggle: (boolean, { id: string?, label: string? }) -> boolean,
 	polygon: ({ { x: number, y: number } }) -> Profile,
 	regular_polygon: ({ radius: number, sides: number, rotation: number? }) -> Profile,
 	circle: ({ radius: number, x: number?, y: number? }) -> Profile,

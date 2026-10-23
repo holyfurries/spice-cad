@@ -211,6 +211,16 @@ impl<'kernel> Cache<'kernel> {
         super::compile_project_cached(source, project, &mut self.analysis)
     }
 
+    pub fn compile_pose(
+        &mut self,
+        source: &str,
+        project: Option<&crate::project::Project>,
+        pose: &str,
+    ) -> Result<Model, String> {
+        self.checkpoint()?;
+        super::compile_project_pose(source, project, &mut self.analysis, Some(pose))
+    }
+
     pub fn with_preview<T>(
         &mut self,
         token: crate::cancellation::Token,

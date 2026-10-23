@@ -1,21 +1,100 @@
 diff --git a/crates/client/examples/diorama.rs b/crates/client/examples/diorama.rs
-index cb32e20..ba2eb90 100644
+index cb32e20..4e7cf91 100644
 --- a/crates/client/examples/diorama.rs
 +++ b/crates/client/examples/diorama.rs
-@@ -21,5 +21,7 @@ mod assets;
+@@ -10,6 +10,7 @@ use bevy::render::render_resource::{PipelineCache, TextureFormat};
+ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+ use bevy::window::{PrimaryWindow, WindowResolution};
+ use bevy::world_serialization::WorldInstanceReady;
++use std::io::Read;
+ use std::sync::{
+     Arc,
+     atomic::{AtomicU32, Ordering},
+@@ -20,6 +21,7 @@ mod assets;
+ 
  const GROUND: f32 = 0.72;
  const FARMSTEAD_WIDTH: f64 = 1.15;
 +const LEVY_REFERENCE_HEIGHT: f32 = 1.025;
-+const INFANTRY_REFERENCE_HEIGHT_METRES: f32 = 0.0546;
  const VIEW_HEIGHT: f32 = 13.0;
  const OUTLINE: [[f32; 2]; 18] = [
      [-4.6, -1.8],
-@@ -364,7 +366,26 @@ fn setup(
+@@ -172,6 +174,51 @@ fn farmstead_scale(size: [f64; 3]) -> Result<f32, &'static str> {
+     Ok(scale as f32)
+ }
+ 
++fn infantry_scale() -> Result<f32, String> {
++    let path = std::path::Path::new(concat!(
++        env!("CARGO_MANIFEST_DIR"),
++        "/../../art/source/spice/infantry-idle/model.glb"
++    ));
++    let mut bytes = Vec::new();
++    std::fs::File::open(path)
++        .map_err(|error| error.to_string())?
++        .take(32 * 1024 * 1024 + 1)
++        .read_to_end(&mut bytes)
++        .map_err(|error| error.to_string())?;
++    if bytes.len() > 32 * 1024 * 1024 {
++        return Err("Infantry GLB exceeds 32 MiB".into());
++    }
++    let length = u32::from_le_bytes(
++        bytes
++            .get(12..16)
++            .ok_or("Truncated GLB")?
++            .try_into()
++            .map_err(|_| "Invalid GLB header")?,
++    ) as usize;
++    let document: serde_json::Value =
++        serde_json::from_slice(bytes.get(20..20 + length).ok_or("Truncated GLB JSON")?)
++            .map_err(|error| error.to_string())?;
++    let asset = &document["extras"]["spice_cad"];
++    if asset["schema_version"] != 1 || asset["asset_id"] != "spice-cad/infantry" {
++        return Err("Unsupported infantry contract".into());
++    }
++    let reference = &asset["references"]["body"];
++    if reference["space"] != "exported world" || reference["units"] != "metres" {
++        return Err("Invalid body reference coordinates".into());
++    }
++    let height = reference["size"][1]
++        .as_f64()
++        .ok_or("Missing body reference height")?;
++    if !height.is_finite() || height <= 0.0 {
++        return Err("Invalid body reference height".into());
++    }
++    let scale = f64::from(LEVY_REFERENCE_HEIGHT) / height;
++    if !(0.0001..=10000.0).contains(&scale) {
++        return Err("Infantry scale exceeds limits".into());
++    }
++    Ok(scale as f32)
++}
++
+ #[derive(Default)]
+ struct CaptureProgress {
+     wait_frames: u32,
+@@ -348,6 +395,18 @@ fn setup(
+                 return;
+             }
+         };
++        let infantry = if std::env::var_os("DIORAMA_INFANTRY").is_some() {
++            match infantry_scale() {
++                Ok(scale) => Some(scale),
++                Err(error) => {
++                    error!("Sprite import: {error}");
++                    exit.write(AppExit::error());
++                    return;
++                }
++            }
++        } else {
++            None
++        };
+         let mut asset_index = 0;
+         let targets = assets::NAMES.map(|name| {
+             let x = (asset_index as f32 - 1.0) * 8.0;
+@@ -364,7 +423,25 @@ fn setup(
                  _ => (128, 1.65),
              };
              let base = Vec3::new(x, 0.0, 0.0);
 -            if let Some((directory, scale)) = &spice && name == "farmstead" {
-+            if std::env::var_os("DIORAMA_INFANTRY").is_some() && name.starts_with("levy") {
++            if let Some(scale) = infantry && name.starts_with("levy") {
 +                let pose = if name.ends_with("-left") {
 +                    "step-left"
 +                } else if name.ends_with("-right") {
@@ -24,7 +103,6 @@ index cb32e20..ba2eb90 100644
 +                    "idle"
 +                };
 +                let path = format!("infantry-{pose}/model.glb");
-+                let scale = LEVY_REFERENCE_HEIGHT / INFANTRY_REFERENCE_HEIGHT_METRES;
 +                commands
 +                    .spawn((
 +                        WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(path))),
