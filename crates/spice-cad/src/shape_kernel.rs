@@ -35,6 +35,22 @@ fn add_lines(
 }
 
 impl Kernel {
+    pub fn skin(&self, skin: &crate::shape_operation::skin::Skin) -> Result<Body<'_>, String> {
+        assert!(skin.points.len() >= 4);
+        assert!((4..=32768).contains(&skin.triangles.len()));
+        let mut coordinates = Vec::with_capacity(skin.triangles.len() * 9);
+        for face in &skin.triangles {
+            for &index in face {
+                coordinates.extend_from_slice(&skin.points[index as usize]);
+            }
+        }
+        let mut result = std::ptr::null_mut();
+        let status = unsafe {
+            ffi::spice_faceted_body(coordinates.as_ptr(), coordinates.len(), &mut result)
+        };
+        self.shape_result(result, status, "skin")
+    }
+
     pub fn faceted_revolve(
         &self,
         polygon: &crate::profile::Polygon,

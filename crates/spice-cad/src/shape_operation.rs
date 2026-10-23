@@ -1,6 +1,9 @@
 use glam::DVec3;
 use mlua::Table;
 
+#[path = "skin.rs"]
+pub mod skin;
+
 #[derive(Clone, PartialEq)]
 pub struct Section {
     pub profile: crate::profile::Profile,
@@ -9,6 +12,7 @@ pub struct Section {
 
 #[derive(PartialEq)]
 pub enum Recipe {
+    Skin(skin::Skin),
     Sweep {
         profile: SweepProfile,
         path: SweepPath,

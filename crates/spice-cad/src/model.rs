@@ -587,6 +587,28 @@ pub fn compile_project_cached(
     crate::material::register(&lua, &cad).map_err(|error| error.to_string())?;
     let definitions = crate::dimensions::register(&lua, &cad).map_err(|error| error.to_string())?;
     let state = Rc::clone(&recipe);
+    let control_count = std::cell::Cell::new(0_usize);
+    cad.set(
+        "skin",
+        lua.create_function(move |_, options: Table| {
+            if state.borrow().operations.len() >= OPERATION_COUNT_MAX {
+                return Err(mlua::Error::runtime("Model exceeds 256 operations"));
+            }
+            let remaining = crate::shape_operation::skin::CONTROL_COUNT_MAX - control_count.get();
+            let (skin, count) = crate::shape_operation::skin::Skin::from_table(options, remaining)?;
+            control_count.set(control_count.get() + count);
+            let mut recipe = state.borrow_mut();
+            let index = recipe.shapes.len();
+            recipe
+                .shapes
+                .push(crate::shape_operation::Recipe::Skin(skin));
+            drop(recipe);
+            push_operation(&state, Operation::Shape(index))
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = Rc::clone(&recipe);
     cad.set(
         "sweep",
         lua.create_function(move |_, (profile, options): (AnyUserData, Table)| {
@@ -1124,6 +1146,7 @@ impl Model {
             match self.recipe.operations[index] {
                 Operation::Shape(index) => {
                     bodies.push(match &self.recipe.shapes[index] {
+                        crate::shape_operation::Recipe::Skin(skin) => kernel.skin(skin)?,
                         crate::shape_operation::Recipe::Sweep { profile, path } => {
                             kernel.path_sweep(profile, path)?
                         }
@@ -1250,6 +1273,97 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::{Cache, Kernel, compile};
+    #[test]
+    fn skins_cap_warped_and_concave_sections_and_reuse_cached_geometry() -> Result<(), String> {
+        let source = r#"
+local sections={}
+for level=0,1 do
+    local section={}
+    for _,p in {{x=0,y=0},{x=10,y=0},{x=10,y=10},{x=0,y=10}} do
+        table.insert(section,{x=p.x,y=p.y,z=level*10+p.x*p.y*0.1})
+    end
+    table.insert(sections,section)
+end
+cad.show('skin',cad.skin({sections=sections}),{shading={mode='flat'}})
+"#;
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = cache.compile(source)?;
+        let first = cache.prepare(&model)?;
+        assert!((first.bodies[0].volume()? - 1000.0).abs() < 1e-6);
+        first.geometry[0].mesh.validate()?;
+        let mut body = first.bodies[0].try_clone()?;
+        assert!(!body.step_data("skin")?.is_empty());
+        let meshes = model.meshes(&mut model.build(&kernel)?, true)?;
+        meshes[0].validate()?;
+        assert!(!crate::game_asset::glb(&model, &meshes)?.is_empty());
+        let repeated = cache.prepare(&model)?;
+        assert_eq!(repeated.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &first.geometry[0],
+            &repeated.geometry[0]
+        ));
+        let moved = cache.compile(&source.replace(
+            "shading={mode='flat'}",
+            "shading={mode='flat'},assembly={position={x=20}}",
+        ))?;
+        let prepared = cache.prepare(&moved)?;
+        assert_eq!(prepared.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &first.geometry[0],
+            &prepared.geometry[0]
+        ));
+        let changed = cache.compile(&source.replace("level*10", "level*15"))?;
+        let prepared = cache.prepare(&changed)?;
+        assert_eq!(prepared.hits, 0);
+        assert!((prepared.bodies[0].volume()? - 1500.0).abs() < 1e-6);
+        for replacement in [
+            "{x=level*10+p.x*p.y*0.1,y=p.x,z=p.y}",
+            "{x=p.y,y=level*10+p.x*p.y*0.1,z=p.x}",
+            "{x=p.x+1990,y=p.y+1990,z=level*10+p.x*p.y*0.1+1970}",
+        ] {
+            let model = cache
+                .compile(&source.replace("{x=p.x,y=p.y,z=level*10+p.x*p.y*0.1}", replacement))?;
+            let prepared = cache.prepare(&model)?;
+            assert!((prepared.bodies[0].volume()? - 1000.0).abs() < 1e-6);
+            prepared.geometry[0].mesh.validate()?;
+        }
+        for (source, expected) in [
+            (
+                "local sections={} for level=0,1 do local section={} for _,p in {{x=0,y=0},{x=2,y=0},{x=2,y=1},{x=1,y=1},{x=1,y=2},{x=0,y=2}} do table.insert(section,{x=p.x,y=p.y,z=level*10}) end table.insert(sections,section) end cad.show('L',cad.skin({sections=sections}))",
+                30.0,
+            ),
+            (
+                "local sections={} for level=0,1 do local section={} for corner=0,7 do local a=corner*math.pi/4 local r=level==0 and 5 or 0 table.insert(section,{x=r*math.cos(a),y=r*math.sin(a),z=level*10}) end table.insert(sections,section) end cad.show('cone',cad.skin({sections=sections}))",
+                8.0 * std::f64::consts::FRAC_PI_4.sin() * 25.0 * 10.0 / 6.0,
+            ),
+            (
+                "local sections={} for sector=0,15 do local section={} local a=sector*math.pi/8 for _,p in {{r=8,z=-2},{r=12,z=-2},{r=12,z=2},{r=8,z=2}} do table.insert(section,{x=p.r*math.cos(a),y=p.r*math.sin(a),z=p.z}) end table.insert(sections,section) end cad.show('ring',cad.skin({sections=sections,closed=true}))",
+                16.0 * std::f64::consts::FRAC_PI_8.sin() * (144.0 - 64.0) * 4.0 / 2.0,
+            ),
+        ] {
+            let model = cache.compile(source)?;
+            let prepared = cache.prepare(&model)?;
+            assert!((prepared.bodies[0].volume()? - expected).abs() < 1e-6);
+            prepared.geometry[0].mesh.validate()?;
+            model.meshes(&mut model.build(&kernel)?, true)?[0].validate()?;
+        }
+        for bad in [
+            source.replace("{sections=sections}", "{sections=sections,unknown=true}"),
+            source.replace("{sections=sections}", "{sections=sections,closed=true}"),
+            source.replace("level*10", "level*0"),
+            source.replace("x=p.x", "x=0/0"),
+            source.replace("x=p.x", "x=2001"),
+            source.replace(
+                "z=level*10+p.x*p.y*0.1",
+                "z=level*10+p.x*p.y*0.1,unknown=true",
+            ),
+        ] {
+            assert!(compile(&bad).is_err(), "{bad}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn faceted_revolves_close_poles_preserve_volume_and_cache_segment_counts() -> Result<(), String>
     {

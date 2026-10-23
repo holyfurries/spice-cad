@@ -351,6 +351,46 @@ polygon profile; partial turns and curved profiles are unsupported in this mode.
 Omit `segments` for the existing analytic revolve. The facets remain part of the
 solid in STEP and mesh exports, and segment counts participate in geometry caching.
 
+## Freeform faceted skins
+
+`cad.skin` connects closed 3D section curves into a solid. Use it for control
+curves that warp through space, such as a helmet crest or a curved guard:
+
+```lua
+local sections = {}
+for level = 0, 2 do
+    local section = {}
+    for corner = 0, 7 do
+        local angle = corner * math.pi / 4
+        local radius = 10 - 2 * level
+        local ridge = level == 1 and 3 * math.max(0, math.cos(angle)) or 0
+        table.insert(section, {
+            x=radius*math.cos(angle), y=radius*math.sin(angle), z=10*level+ridge,
+        })
+    end
+    table.insert(sections, section)
+end
+cad.show("Skin", cad.skin({sections=sections}), {shading={mode="flat"}})
+```
+
+Sections have corresponding control points in matching order; the app generates
+the connecting faces and end caps. Set `closed=true` to connect the last section
+back to the first instead of capping the ends. Repeated coincident points can
+close a section into a pole. The result remains faceted in STEP and mesh exports.
+
+`diagonal="shortest"` is the default for each connecting quad. Use `"forward"`
+or `"backward"` to keep the facet direction fixed while editing controls.
+Forward connects the current point to the next section's next point; backward
+uses the other diagonal. A rule array applies one rule per section edge,
+including the closing edge, consistently along the entire skin. For example,
+`diagonal={"forward","backward","shortest"}` controls a triangular section's
+three strips. End caps use automatic triangulation.
+
+Use 2–128 sections (at least 3 for a closed path), each with 3–128 points. The
+model budget is 32,768 skin control points. Coordinates must be finite and within
+±2,000 mm. Degenerate cells, uncappable ends, and non-manifold connections are
+rejected. Use `cad.loft` for ordinary planar profiles and smooth NURBS transitions.
+
 ## Explicit low-poly profiles
 
 `cad.regular_polygon({radius=10, sides=8, rotation=22.5})` creates a centred

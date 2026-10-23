@@ -59,6 +59,13 @@ local cad: {
 	revolve: (Profile, { angle: number?, segments: number? }) -> Solid,
 	sweep: (Profile, { path: { Point }, bend_radius: number? }) -> Solid,
 	loft: ({ { profile: Profile, z: number, x: number?, y: number? } }, { degree: number }?) -> Solid,
+	skin: (
+		{
+			sections: { { Point } },
+			closed: boolean?,
+			diagonal: ("shortest" | "forward" | "backward" | { "shortest" | "forward" | "backward" })?,
+		}
+	) -> Solid,
 	shell: (Solid, { thickness: number, open: Face? }) -> Solid,
 	cylinder: ({ radius: number, height: number, x: number?, y: number?, z: number? }) -> Solid,
 	sphere: ({ radius: number, x: number?, y: number?, z: number? }) -> Solid,
