@@ -1,5 +1,19 @@
 *
-!*/
+!/.cargo/
+!/.github/
+!/.github/**/
+!/crates/
+!/crates/**/
+!/tools/
+!/tools/**/
+!/examples/
+!/examples/**/
+!/docs/
+!/docs/**/
+!/licenses/
+!/licenses/**/
+!/benchmarks/
+!/benchmarks/**/
 
 !/.gitignore
 !/.gitattributes
@@ -18,18 +32,18 @@
 !/deny.toml
 !/.cargo/config.toml
 
-!/crates/**/Cargo.toml
-!/crates/**/build.rs
-!/crates/**/src/**/*.rs
-!/crates/**/examples/**/*.rs
+!/crates/*/Cargo.toml
+!/crates/*/build.rs
+!/crates/*/src/**/*.rs
+!/crates/*/examples/**/*.rs
 !/crates/spice-cad/assets/spice-cad.svg
 !/crates/spice-cad/assets/LICENSE
 !/crates/spice-cad/assets/brand/**
 !/crates/spice-cad/types/**/*.luau
-!/tools/**/Cargo.toml
-!/tools/**/build.rs
-!/tools/**/src/**/*.rs
-!/tools/**/examples/**/*.rs
+!/tools/*/Cargo.toml
+!/tools/*/build.rs
+!/tools/*/src/**/*.rs
+!/tools/*/examples/**/*.rs
 !/tools/verification/fixtures/*.luau
 !/tools/game-import/Cargo.lock
 !/tools/game-import/tests/**/*.rs
@@ -44,9 +58,3 @@
 !/benchmarks/results/*.json
 !/docs/**/*.md
 !/docs/images/*.png
-
-/target/
-/tools/game-import/target/
-/output/
-/.direnv/
-AGENTS.md
