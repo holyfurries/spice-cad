@@ -329,6 +329,28 @@ without boolean unions. Both primitives support normal CAD operations, exact
 volume queries, STEP/STL exports, and cached preview geometry. Display and game
 meshes use the existing tessellation tolerances; no fixed polygon count is implied.
 
+## Faceted revolutions
+
+Add `segments` to a full revolve to define polygonal geometry, rather than only
+changing display tessellation:
+
+```lua
+local meridian = {}
+for step = 0, 8 do
+    local angle = step * math.pi / 8
+    table.insert(meridian, {x=7.5*math.sin(angle), y=-7.5*math.cos(angle)})
+end
+local head = cad.revolve(cad.polygon(meridian), {segments=16})
+cad.show("Head", head, {shading={mode="smooth", crease_angle=60}})
+```
+
+This generates a low-poly sphere from a semicircular profile and a segment count;
+no mesh vertices or triangle lists are authored. Profile X is radius and Y is
+height along Z. Axis endpoints close into poles. Use 3–128 angular segments and a
+polygon profile; partial turns and curved profiles are unsupported in this mode.
+Omit `segments` for the existing analytic revolve. The facets remain part of the
+solid in STEP and mesh exports, and segment counts participate in geometry caching.
+
 ## Explicit low-poly profiles
 
 `cad.regular_polygon({radius=10, sides=8, rotation=22.5})` creates a centred

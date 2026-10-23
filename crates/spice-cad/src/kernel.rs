@@ -11,8 +11,13 @@ pub enum EdgeTreatment {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProfileSweep {
-    Extrude { height_mm: f64 },
-    Revolve { angle_deg: f64 },
+    Extrude {
+        height_mm: f64,
+    },
+    Revolve {
+        angle_deg: f64,
+        segments: Option<u32>,
+    },
 }
 #[path = "shape_kernel.rs"]
 mod shape_operations;
@@ -94,6 +99,11 @@ mod ffi {
         type SmCurveArray;
         fn spice_curve_array() -> Result<UniquePtr<SmCurveArray>>;
         fn spice_copy_brep(body: &SmBrep) -> Result<UniquePtr<SmBrep>>;
+        unsafe fn spice_faceted_body(
+            coordinates: *const f64,
+            count: usize,
+            result: &mut *mut SmBrep,
+        ) -> Result<i64>;
         unsafe fn spice_loft(
             curves: &SmCurveArray,
             section_count: usize,
@@ -487,10 +497,17 @@ impl Kernel {
                 assert!(height_mm.is_finite());
                 assert!(height_mm > 0.0);
             }
-            ProfileSweep::Revolve { angle_deg } => {
+            ProfileSweep::Revolve {
+                angle_deg,
+                segments,
+            } => {
                 assert!(angle_deg.is_finite());
                 assert!((0.1..=360.0).contains(&angle_deg));
                 polygon.validate_revolve()?;
+                if let Some(segments) = segments {
+                    assert_eq!(angle_deg, 360.0);
+                    return self.faceted_revolve(polygon, segments);
+                }
             }
         }
         let mut lines = Vec::with_capacity(polygon.points.len());
@@ -534,7 +551,7 @@ impl Kernel {
                 ProfileSweep::Extrude { height_mm } => {
                     ffi::SmApiCreateLinearSweep(&curves, &axis, height_mm, 1, &mut result)
                 }
-                ProfileSweep::Revolve { angle_deg } => ffi::SmApiCreateRotationalSweep(
+                ProfileSweep::Revolve { angle_deg, .. } => ffi::SmApiCreateRotationalSweep(
                     &curves,
                     &Vector::default(),
                     &axis,

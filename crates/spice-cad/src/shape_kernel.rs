@@ -35,6 +35,55 @@ fn add_lines(
 }
 
 impl Kernel {
+    pub fn faceted_revolve(
+        &self,
+        polygon: &crate::profile::Polygon,
+        segments: u32,
+    ) -> Result<Body<'_>, String> {
+        assert!((3..=128).contains(&segments));
+        assert!((3..=128).contains(&polygon.points.len()));
+        let mut directions = [[0.0; 2]; 128];
+        for index in 0..segments {
+            let angle = std::f64::consts::TAU * f64::from(index) / f64::from(segments);
+            directions[index as usize] = [angle.cos(), angle.sin()];
+        }
+        let mut coordinates = Vec::with_capacity(polygon.points.len() * segments as usize * 18);
+        for index in 0..polygon.points.len() {
+            let start = polygon.points[index];
+            let end = polygon.points[(index + 1) % polygon.points.len()];
+            for sector in 0..segments as usize {
+                let next = (sector + 1) % segments as usize;
+                let point = |[radius, height]: [f64; 2], angle: usize| {
+                    let radius = if radius < 1e-9 { 0.0 } else { radius };
+                    [
+                        radius * directions[angle][0],
+                        radius * directions[angle][1],
+                        height,
+                    ]
+                };
+                let a = point(start, sector);
+                let b = point(end, sector);
+                let c = point(end, next);
+                let d = point(start, next);
+                if end[0] >= 1e-9 {
+                    for point in [a, c, b] {
+                        coordinates.extend_from_slice(&point);
+                    }
+                }
+                if start[0] >= 1e-9 {
+                    for point in [a, d, c] {
+                        coordinates.extend_from_slice(&point);
+                    }
+                }
+            }
+        }
+        let mut result = std::ptr::null_mut();
+        let status = unsafe {
+            ffi::spice_faceted_body(coordinates.as_ptr(), coordinates.len(), &mut result)
+        };
+        self.shape_result(result, status, "faceted revolve")
+    }
+
     pub fn path_sweep(
         &self,
         section: &crate::shape_operation::SweepProfile,

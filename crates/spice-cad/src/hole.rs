@@ -91,7 +91,10 @@ impl Recipe {
                     };
                     kernel.sweep_profile(
                         &polygon,
-                        crate::kernel::ProfileSweep::Revolve { angle_deg: 360.0 },
+                        crate::kernel::ProfileSweep::Revolve {
+                            angle_deg: 360.0,
+                            segments: None,
+                        },
                     )?
                 }
             };

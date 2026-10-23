@@ -56,7 +56,7 @@ local cad: {
 	path: ({ start: Point2, segments: { { to: Point2, center: Point2?, clockwise: boolean? } } }) -> Profile,
 	profile: ({ loops: { Profile } }) -> Profile,
 	extrude: (Profile, { height: number }) -> Solid,
-	revolve: (Profile, { angle: number? }) -> Solid,
+	revolve: (Profile, { angle: number?, segments: number? }) -> Solid,
 	sweep: (Profile, { path: { Point }, bend_radius: number? }) -> Solid,
 	loft: ({ { profile: Profile, z: number, x: number?, y: number? } }, { degree: number }?) -> Solid,
 	shell: (Solid, { thickness: number, open: Face? }) -> Solid,

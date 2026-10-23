@@ -305,14 +305,33 @@ pub fn compile_project_cached(
                         height_mm: dimension(&options, "height")?,
                     }
                 } else {
-                    options_fields(&options, &["angle"])?;
+                    options_fields(&options, &["angle", "segments"])?;
                     let angle_deg = options.get::<Option<f64>>("angle")?.unwrap_or(360.0);
                     if !angle_deg.is_finite() || !(0.1..=360.0).contains(&angle_deg) {
                         return Err(mlua::Error::RuntimeError(
                             "Revolve angle must be finite and between 0.1 and 360 degrees".into(),
                         ));
                     }
-                    ProfileSweep::Revolve { angle_deg }
+                    let segments = options.get::<Option<f64>>("segments")?;
+                    if let Some(segments) = segments {
+                        if !segments.is_finite()
+                            || !(3.0..=128.0).contains(&segments)
+                            || segments.fract() != 0.0
+                        {
+                            return Err(mlua::Error::runtime(
+                                "Revolve segments must be an integer within 3–128",
+                            ));
+                        }
+                        if angle_deg != 360.0 {
+                            return Err(mlua::Error::runtime(
+                                "Faceted revolve requires a full 360-degree turn",
+                            ));
+                        }
+                    }
+                    ProfileSweep::Revolve {
+                        angle_deg,
+                        segments: segments.map(|value| value as u32),
+                    }
                 };
                 let profile = profile.borrow::<Profile>()?.0;
                 if matches!(sweep, ProfileSweep::Revolve { .. }) {
@@ -1231,6 +1250,84 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::{Cache, Kernel, compile};
+    #[test]
+    fn faceted_revolves_close_poles_preserve_volume_and_cache_segment_counts() -> Result<(), String>
+    {
+        let source = "local p=cad.polygon({{x=0,y=0},{x=5,y=0},{x=5,y=10},{x=0,y=10}}) cad.show('prism',cad.revolve(p,{segments=8}),{shading={mode='flat'}})";
+        let kernel = Kernel::new()?;
+        let mut cache = Cache::new(&kernel);
+        let model = cache.compile(source)?;
+        let first = cache.prepare(&model)?;
+        let expected = 8.0 * std::f64::consts::FRAC_PI_4.sin() * 25.0 * 10.0 / 2.0;
+        assert!((first.bodies[0].volume()? - expected).abs() < 1e-6);
+        first.geometry[0].mesh.validate()?;
+        let mut body = first.bodies[0].try_clone()?;
+        assert!(!body.step_data("faceted")?.is_empty());
+        let meshes = model.meshes(&mut model.build(&kernel)?, true)?;
+        meshes[0].validate()?;
+        assert!(!crate::game_asset::glb(&model, &meshes)?.is_empty());
+        let repeated = cache.prepare(&model)?;
+        assert_eq!(repeated.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &first.geometry[0],
+            &repeated.geometry[0]
+        ));
+        let changed = cache.compile(&source.replace("segments=8", "segments=12"))?;
+        let second = cache.prepare(&changed)?;
+        assert_eq!(second.hits, 0);
+        assert!(!std::sync::Arc::ptr_eq(
+            &first.geometry[0],
+            &second.geometry[0]
+        ));
+        let sphere_volume = (0..8)
+            .map(|index| {
+                let start = std::f64::consts::PI * f64::from(index) / 8.0;
+                let end = std::f64::consts::PI * f64::from(index + 1) / 8.0;
+                let a = 5.0 * start.sin();
+                let b = 5.0 * end.sin();
+                let height = 5.0 * (start.cos() - end.cos());
+                16.0 * std::f64::consts::FRAC_PI_8.sin() / 6.0 * height * (a * a + a * b + b * b)
+            })
+            .sum::<f64>();
+        for (source, volume) in [
+            (
+                "local p=cad.polygon({{x=0,y=-5},{x=5,y=0},{x=0,y=5}}) cad.show('bicone',cad.revolve(p,{segments=16}))",
+                16.0 * std::f64::consts::FRAC_PI_8.sin() * 25.0 * 10.0 / 6.0,
+            ),
+            (
+                "local p=cad.polygon({{x=2,y=0},{x=5,y=0},{x=5,y=10},{x=2,y=10}}) cad.show('tube',cad.revolve(p,{segments=8}))",
+                expected * 21.0 / 25.0,
+            ),
+            (
+                "local points={} for i=0,8 do local a=i*math.pi/8 table.insert(points,{x=5*math.sin(a),y=-5*math.cos(a)}) end cad.show('head',cad.revolve(cad.polygon(points),{segments=16}))",
+                sphere_volume,
+            ),
+            (
+                "local p=cad.polygon({{x=0,y=0},{x=5,y=0},{x=5,y=10},{x=0,y=10}}) cad.show('many facets',cad.revolve(p,{segments=128}))",
+                128.0 * (std::f64::consts::TAU / 128.0).sin() * 25.0 * 10.0 / 2.0,
+            ),
+        ] {
+            let model = cache.compile(source)?;
+            let prepared = cache.prepare(&model)?;
+            prepared.geometry[0].mesh.validate()?;
+            assert!((prepared.bodies[0].volume()? - volume).abs() < 1e-6);
+            model.meshes(&mut model.build(&kernel)?, true)?[0].validate()?;
+        }
+        for options in [
+            "{segments=2}",
+            "{segments=129}",
+            "{segments=3.5}",
+            "{segments=0/0}",
+            "{segments=8,angle=180}",
+        ] {
+            assert!(compile(&source.replace("{segments=8}", options)).is_err());
+        }
+        assert!(
+            compile("cad.show('bad',cad.revolve(cad.circle({radius=5}),{segments=8}))").is_err()
+        );
+        Ok(())
+    }
+
     #[test]
     fn rounded_primitives_have_exact_volume_closed_meshes_and_cached_geometry() -> Result<(), String>
     {

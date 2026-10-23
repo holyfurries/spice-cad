@@ -13,10 +13,26 @@ fn main() {
 #include <SmApiCurves.h>
 #include <SmBSplineCurve.h>
 #include <SmAxis2Placement.h>
+#include <SmPoly.h>
 #include <cstddef>
 #include <memory>
 using SmFailureArray = SmTArray<SmTessellationFailure>;
 using SmCurveArray = SmTArray<SmCurve*>;
+inline long spice_faceted_body(const double* coordinates, size_t count, SmBrep*& result) {
+    if (count < 36 || count > 294912 || count % 9 != 0) { return SM_ERR_INVALID_INPUT; }
+    SmTriangleBag triangles;
+    for (size_t index = 0; index < count; index += 9) {
+        SmPoint3d points[3];
+        for (size_t corner = 0; corner < 3; ++corner) {
+            const auto offset = index + corner * 3;
+            points[corner] = SmPoint3d(coordinates[offset], coordinates[offset + 1], coordinates[offset + 2]);
+        }
+        SmTriangle* triangle = nullptr;
+        auto status = triangles.AddTriangle(points[0], points[1], points[2], triangle);
+        if (status != SM_SUCCESS) { return status; }
+    }
+    return SmBrep::CreateFromTriangleBag(*SmApiGetOrCreateContext(), triangles, result);
+}
 inline long spice_loft(const SmCurveArray& curves, size_t section_count, size_t edge_count, unsigned int degree, SmBrep*& result) {
     if (section_count < 2 || section_count > 16 || edge_count < 2 || edge_count > 256 || curves.GetSize() != section_count * edge_count || degree < 1 || degree > 3 || degree >= section_count) { return SM_ERR_INVALID_INPUT; }
     SmTArray<ULONG> counts;
